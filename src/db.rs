@@ -6,7 +6,6 @@ pub struct Database {
 }
 
 impl Database {
-    // Open (or create) the database file
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
         let db = Database { conn };
@@ -14,7 +13,6 @@ impl Database {
         Ok(db)
     }
 
-    // Create tables if they don't exist
     fn create_tables(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS crypto_prices (
@@ -53,6 +51,17 @@ impl Database {
                 timestamp       TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS stock_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol      TEXT NOT NULL,
+                price       REAL NOT NULL,
+                volume      REAL,
+                timestamp   TEXT NOT NULL,
+                UNIQUE(symbol, timestamp)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_stock_history
+                ON stock_history(symbol, timestamp);
             CREATE INDEX IF NOT EXISTS idx_crypto_coin
                 ON crypto_prices(coin_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_history_coin
@@ -63,7 +72,6 @@ impl Database {
         Ok(())
     }
 
-    // Store a live crypto snapshot
     pub fn insert_crypto(&self, coin: &CoinData, timestamp: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO crypto_prices
@@ -86,7 +94,6 @@ impl Database {
         Ok(())
     }
 
-    // Store historical price point (skips duplicates)
     pub fn insert_history(
         &self,
         coin_id: &str,
@@ -103,7 +110,6 @@ impl Database {
         Ok(())
     }
 
-    // Store a stock quote
     pub fn insert_stock(
         &self,
         symbol: &str,
@@ -127,7 +133,22 @@ impl Database {
         Ok(())
     }
 
-    // Count records (useful for checking what we have)
+    pub fn insert_stock_history(
+        &self,
+        symbol: &str,
+        price: f64,
+        volume: Option<f64>,
+        timestamp: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO stock_history
+                (symbol, price, volume, timestamp)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![symbol, price, volume, timestamp],
+        )?;
+        Ok(())
+    }
+
     pub fn count_crypto_history(&self, coin_id: &str) -> Result<i64> {
         self.conn.query_row(
             "SELECT COUNT(*) FROM crypto_history WHERE coin_id = ?1",
@@ -141,6 +162,80 @@ impl Database {
             "SELECT COUNT(*) FROM crypto_history",
             [],
             |row| row.get(0),
+        )
+    }
+
+    pub fn count_stock_history(&self, symbol: &str) -> Result<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM stock_history WHERE symbol = ?1",
+            params![symbol],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn get_coin_history(&self, coin_id: &str) -> Result<Vec<crate::analysis::PricePoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, price_usd, volume
+             FROM crypto_history
+             WHERE coin_id = ?1
+             ORDER BY timestamp ASC"
+        )?;
+
+        let points = stmt.query_map(params![coin_id], |row| {
+            Ok(crate::analysis::PricePoint {
+                timestamp: row.get(0)?,
+                price: row.get(1)?,
+                volume: row.get(2)?,
+            })
+        })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(points)
+    }
+
+    pub fn get_stock_history(&self, symbol: &str) -> Result<Vec<crate::analysis::PricePoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, price, volume
+             FROM stock_history
+             WHERE symbol = ?1
+             ORDER BY timestamp ASC"
+        )?;
+
+        let points = stmt.query_map(params![symbol], |row| {
+            Ok(crate::analysis::PricePoint {
+                timestamp: row.get(0)?,
+                price: row.get(1)?,
+                volume: row.get(2)?,
+            })
+        })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(points)
+    }
+
+    pub fn get_all_coin_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT coin_id FROM crypto_history ORDER BY coin_id"
+        )?;
+
+        let ids = stmt.query_map([], |row| {
+            row.get(0)
+        })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(ids)
+    }
+
+    pub fn get_price_range(&self, coin_id: &str) -> Result<(String, String)> {
+        self.conn.query_row(
+            "SELECT MIN(timestamp), MAX(timestamp)
+             FROM crypto_history
+             WHERE coin_id = ?1",
+            params![coin_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
     }
 }

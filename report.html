@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rust Invest - Market Analysis Report</title>
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #0f1923;
+        color: #e0e0e0;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    h1 { color: #00d4aa; text-align: center; }
+    h2 { color: #00d4aa; border-bottom: 1px solid #1e3a5f; padding-bottom: 8px; }
+    h3 { color: #4fc3f7; }
+    .timestamp { text-align: center; color: #888; margin-bottom: 30px; }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 15px 0;
+    }
+    th {
+        background: #1a2332;
+        color: #00d4aa;
+        padding: 10px;
+        text-align: right;
+        border-bottom: 2px solid #1e3a5f;
+    }
+    th:first-child { text-align: left; }
+    td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #1e3a5f;
+        text-align: right;
+    }
+    td:first-child { text-align: left; font-weight: bold; }
+    tr:hover { background: #1a2332; }
+    .positive { color: #00e676; }
+    .negative { color: #ff5252; }
+    .neutral { color: #ffd740; }
+    .card {
+        background: #1a2332;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+        border: 1px solid #1e3a5f;
+    }
+    .signal-bullish {
+        background: #1b3329;
+        color: #00e676;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .signal-bearish {
+        background: #3d1f1f;
+        color: #ff5252;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .signal-neutral {
+        background: #3d3520;
+        color: #ffd740;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin: 15px 0;
+    }
+    .metric-box {
+        background: #0f1923;
+        padding: 15px;
+        border-radius: 6px;
+        text-align: center;
+    }
+    .metric-box .value {
+        font-size: 24px;
+        font-weight: bold;
+        color: #4fc3f7;
+    }
+    .metric-box .label {
+        font-size: 12px;
+        color: #888;
+        margin-top: 5px;
+    }
+    .correlation-table td {
+        font-size: 14px;
+        padding: 6px 10px;
+    }
+</style>
+</head>
+<body>
+<h1>RUST INVEST — Market Analysis Report</h1>
+<p class='timestamp'>Generated: 2026-02-24 15:07 UTC</p>
+<h2>Portfolio Overview</h2>
+<table>
+<tr><th>Coin</th><th>Price</th><th>Mean (365d)</th><th>Min</th><th>Max</th><th>Volatility</th><th>Avg Daily Return</th><th>RSI</th><th>Trend</th></tr>
+<tr><td>binancecoin</td><td>$586.76</td><td>$789.10</td><td>$532.57</td><td>$1311.71</td><td>$172.73</td><td class='positive'>0.0279%</td><td class='neutral'>39.3</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>bitcoin</td><td>$63266.65</td><td>$98973.75</td><td>$62853.69</td><td>$124773.51</td><td>$14489.18</td><td class='negative'>-0.0717%</td><td class='neutral'>32.9</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>ethereum</td><td>$1827.08</td><td>$2997.06</td><td>$1471.36</td><td>$4829.23</td><td>$898.78</td><td class='negative'>-0.0050%</td><td class='neutral'>34.3</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>ripple</td><td>$1.33</td><td>$2.35</td><td>$1.22</td><td>$3.56</td><td>$0.47</td><td class='negative'>-0.0522%</td><td class='neutral'>42.6</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>tether</td><td>$1.00</td><td>$1.00</td><td>$1.00</td><td>$1.00</td><td>$0.00</td><td class='positive'>0.0000%</td><td class='neutral'>63.0</td><td><span class='signal-bullish'>BULLISH</span></td></tr>
+</table>
+<div class='card'>
+<h3>BINANCECOIN</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$586.76</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$789.10</div><div class='label'>365d Mean</div></div>
+<div class='metric-box'><div class='value'>$172.73</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>39.3</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$608.53</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$685.56</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -47.2301 | <strong>Signal:</strong> -53.5324 | <strong>Histogram:</strong> 6.3023 — <span class='positive'>BULLISH (MACD above signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $654.69 | Middle $619.89 | Lower $585.09 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>BITCOIN</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$63266.65</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$98973.75</div><div class='label'>365d Mean</div></div>
+<div class='metric-box'><div class='value'>$14489.18</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>32.9</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$66393.22</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$72410.48</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -3933.7439 | <strong>Signal:</strong> -4259.9762 | <strong>Histogram:</strong> 326.2323 — <span class='positive'>BULLISH (MACD above signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $72078.02 | Middle $67684.31 | Lower $63290.60 — <span class='positive'>BELOW lower band — oversold</span></p>
+</div>
+<div class='card'>
+<h3>ETHEREUM</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$1827.08</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$2997.06</div><div class='label'>365d Mean</div></div>
+<div class='metric-box'><div class='value'>$898.78</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>34.3</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$1925.44</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$2185.25</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -177.1862 | <strong>Signal:</strong> -197.5704 | <strong>Histogram:</strong> 20.3841 — <span class='positive'>BULLISH (MACD above signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $2151.19 | Middle $1982.18 | Lower $1813.17 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>RIPPLE</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$1.33</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$2.35</div><div class='label'>365d Mean</div></div>
+<div class='metric-box'><div class='value'>$0.47</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>42.6</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$1.39</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$1.51</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -0.0875 | <strong>Signal:</strong> -0.0971 | <strong>Histogram:</strong> 0.0096 — <span class='positive'>BULLISH (MACD above signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $1.54 | Middle $1.41 | Lower $1.28 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>TETHER</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$1.00</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$1.00</div><div class='label'>365d Mean</div></div>
+<div class='metric-box'><div class='value'>$0.00</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>63.0</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$1.00</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$1.00</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> 0.0002 | <strong>Signal:</strong> 0.0002 | <strong>Histogram:</strong> 0.0000 — <span class='positive'>BULLISH (MACD above signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $1.00 | Middle $1.00 | Lower $1.00 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<h2>Stock Analysis</h2>
+<table>
+<tr><th>Symbol</th><th>Price</th><th>Mean (1yr)</th><th>Min</th><th>Max</th><th>Volatility</th><th>Avg Daily Return</th><th>RSI</th><th>Trend</th></tr>
+<tr><td>SPY</td><td>$683.24</td><td>$632.52</td><td>$496.48</td><td>$695.49</td><td>$50.74</td><td class='positive'>0.0610%</td><td class='neutral'>44.8</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>QQQ</td><td>$603.93</td><td>$561.96</td><td>$416.06</td><td>$635.77</td><td>$56.28</td><td class='positive'>0.0703%</td><td class='neutral'>41.9</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>DIA</td><td>$490.34</td><td>$450.88</td><td>$376.48</td><td>$501.90</td><td>$29.50</td><td class='positive'>0.0537%</td><td class='neutral'>47.8</td><td><span class='signal-bullish'>BULLISH</span></td></tr>
+<tr><td>AAPL</td><td>$273.92</td><td>$236.14</td><td>$172.42</td><td>$286.19</td><td>$28.54</td><td class='positive'>0.0616%</td><td class='neutral'>53.6</td><td><span class='signal-bullish'>BULLISH</span></td></tr>
+<tr><td>MSFT</td><td>$385.65</td><td>$466.34</td><td>$354.56</td><td>$542.07</td><td>$50.29</td><td class='negative'>-0.0046%</td><td class='neutral'>33.9</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>GOOGL</td><td>$307.88</td><td>$229.52</td><td>$144.70</td><td>$343.69</td><td>$63.73</td><td class='positive'>0.2348%</td><td class='positive'>24.2</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>AMZN</td><td>$205.69</td><td>$217.49</td><td>$167.32</td><td>$254.00</td><td>$17.83</td><td class='positive'>0.0110%</td><td class='positive'>20.8</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>NVDA</td><td>$190.77</td><td>$161.19</td><td>$94.31</td><td>$207.04</td><td>$30.25</td><td class='positive'>0.1903%</td><td class='neutral'>61.2</td><td><span class='signal-bullish'>BULLISH</span></td></tr>
+<tr><td>META</td><td>$630.62</td><td>$668.24</td><td>$484.66</td><td>$790.00</td><td>$67.28</td><td class='positive'>0.0078%</td><td class='positive'>26.1</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+<tr><td>TSLA</td><td>$401.29</td><td>$362.97</td><td>$221.86</td><td>$489.88</td><td>$73.01</td><td class='positive'>0.1514%</td><td class='neutral'>38.4</td><td><span class='signal-bearish'>BEARISH</span></td></tr>
+</table>
+<div class='card'>
+<h3>SPY</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$683.24</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$632.52</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$50.74</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>44.8</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$684.35</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$688.77</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -1.1209 | <strong>Signal:</strong> -0.4607 | <strong>Histogram:</strong> -0.6601 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $699.42 | Middle $688.30 | Lower $677.18 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>QQQ</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$603.93</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$561.96</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$56.28</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>41.9</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$603.80</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$614.87</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -4.3021 | <strong>Signal:</strong> -3.7489 | <strong>Histogram:</strong> -0.5532 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $634.12 | Middle $611.85 | Lower $589.57 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>DIA</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$490.34</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$450.88</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$29.50</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>47.8</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$493.85</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$493.61</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> 0.7899 | <strong>Signal:</strong> 1.9154 | <strong>Histogram:</strong> -1.1254 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $503.30 | Middle $494.33 | Lower $485.35 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>AAPL</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$273.92</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$236.14</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$28.54</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>53.6</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$264.18</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$262.61</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> 0.8388 | <strong>Signal:</strong> 0.6228 | <strong>Histogram:</strong> 0.2160 — <span class='positive'>BULLISH (MACD above signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $281.87 | Middle $266.86 | Lower $251.86 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>MSFT</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$385.65</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$466.34</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$50.29</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>33.9</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$394.80</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$429.20</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -18.3525 | <strong>Signal:</strong> -17.8758 | <strong>Histogram:</strong> -0.4767 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $466.46 | Middle $413.31 | Lower $360.16 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>GOOGL</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$307.88</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$229.52</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$63.73</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>24.2</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$306.90</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$324.57</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -4.8522 | <strong>Signal:</strong> -3.1203 | <strong>Histogram:</strong> -1.7319 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $350.10 | Middle $321.42 | Lower $292.75 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>AMZN</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$205.69</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$217.49</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$17.83</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>20.8</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$204.38</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$224.79</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -8.1479 | <strong>Signal:</strong> -7.6005 | <strong>Histogram:</strong> -0.5474 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $253.33 | Middle $218.32 | Lower $183.31 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>NVDA</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$190.77</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$161.19</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$30.25</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>61.2</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$187.97</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$186.00</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> 1.2294 | <strong>Signal:</strong> 0.5789 | <strong>Histogram:</strong> 0.6505 — <span class='positive'>BULLISH (MACD above signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $197.83 | Middle $186.62 | Lower $175.42 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>META</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$630.62</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$668.24</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$67.28</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>26.1</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$641.51</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$655.93</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -5.5667 | <strong>Signal:</strong> -1.0156 | <strong>Histogram:</strong> -4.5512 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $723.99 | Middle $667.62 | Lower $611.24 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<div class='card'>
+<h3>TSLA</h3>
+<div class='metric-grid'>
+<div class='metric-box'><div class='value'>$401.29</div><div class='label'>Current Price</div></div>
+<div class='metric-box'><div class='value'>$362.97</div><div class='label'>1yr Mean</div></div>
+<div class='metric-box'><div class='value'>$73.01</div><div class='label'>Std Deviation</div></div>
+<div class='metric-box'><div class='value'>38.4</div><div class='label'>RSI (14)</div></div>
+<div class='metric-box'><div class='value'>$409.15</div><div class='label'>SMA 7-day</div></div>
+<div class='metric-box'><div class='value'>$423.84</div><div class='label'>SMA 30-day</div></div>
+</div>
+<p><strong>MACD:</strong> -8.3155 | <strong>Signal:</strong> -7.6367 | <strong>Histogram:</strong> -0.6788 — <span class='negative'>BEARISH (MACD below signal)</span></p>
+<p><strong>Bollinger Bands (20,2):</strong> Upper $436.59 | Middle $415.97 | Lower $395.35 — <span class='neutral'>Within bands — normal range</span></p>
+</div>
+<h2>Correlation Matrix (Daily Returns)</h2>
+<table class='correlation-table'>
+<tr><th></th><th>binancecoin</th><th>bitcoin</th><th>ethereum</th><th>ripple</th><th>tether</th></tr>
+<tr><td>binancecoin</td><td class=''>1.000</td><td class='negative'>0.723</td><td class='negative'>0.745</td><td class='neutral'>0.644</td><td class='positive'>0.126</td></tr>
+<tr><td>bitcoin</td><td class='negative'>0.723</td><td class=''>1.000</td><td class='negative'>0.844</td><td class='negative'>0.824</td><td class='neutral'>0.353</td></tr>
+<tr><td>ethereum</td><td class='negative'>0.745</td><td class='negative'>0.844</td><td class=''>1.000</td><td class='negative'>0.784</td><td class='positive'>0.259</td></tr>
+<tr><td>ripple</td><td class='neutral'>0.644</td><td class='negative'>0.824</td><td class='negative'>0.784</td><td class=''>1.000</td><td class='neutral'>0.322</td></tr>
+<tr><td>tether</td><td class='positive'>0.126</td><td class='neutral'>0.353</td><td class='positive'>0.259</td><td class='neutral'>0.322</td><td class=''>1.000</td></tr>
+</table>
+<p><em>High correlation (>0.7) = coins move together. Low correlation (<0.3) = independent movement.</em></p>
+<hr style='border-color: #1e3a5f; margin-top: 40px;'>
+<p style='text-align: center; color: #555;'>Rust Invest — Built in Rust | Data: CoinGecko & Alpha Vantage</p>
+</body></html>

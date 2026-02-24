@@ -2,6 +2,8 @@ mod models;
 mod crypto;
 mod stocks;
 mod db;
+mod analysis;
+mod report;
 
 use chrono::Utc;
 use tokio::time::{sleep, Duration};
@@ -9,7 +11,6 @@ use tokio::time::{sleep, Duration};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
-    let api_key = "GK86UK0Z0ECNUDBN";
 
     // ── Open database ──
     let database = db::Database::new("rust_invest.db")?;
@@ -46,18 +47,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             coin.current_price, change, arrow, high, low
         );
 
-        // Store in database
         database.insert_crypto(&coin, &now)?;
     }
 
     println!("\n  ✓ Stored {} crypto prices in database\n", coins.len());
 
     // ════════════════════════════════════════
-    // PART 2: Backfill historical crypto data
+    // PART 2: Backfill historical data
     // ════════════════════════════════════════
     println!("━━━ LOADING HISTORICAL DATA (365 days) ━━━\n");
 
-    // Top 5 coins by market cap
     let top_coins = &coins[..5];
 
     for coin in top_coins {
@@ -70,33 +69,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         println!("  Fetching {} history...", coin.name);
-
-        // CoinGecko rate limit: ~10 calls/min for free tier
         sleep(Duration::from_secs(12)).await;
 
         match crypto::fetch_history(&client, &coin.id, 365).await {
             Ok(chart) => {
                 let mut count = 0;
-
                 for (i, price_point) in chart.prices.iter().enumerate() {
                     let timestamp_ms = price_point[0] as i64;
                     let price = price_point[1];
-
-                    // Get matching volume if available
-                    let volume = chart.total_volumes
-                        .get(i)
-                        .map(|v| v[1]);
-
+                    let volume = chart.total_volumes.get(i).map(|v| v[1]);
                     let timestamp = chrono::DateTime::from_timestamp_millis(timestamp_ms)
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_default();
-
-                    database.insert_history(
-                        &coin.id, price, volume, &timestamp
-                    )?;
+                    database.insert_history(&coin.id, price, volume, &timestamp)?;
                     count += 1;
                 }
-
                 println!("    ✓ Stored {} data points for {}", count, coin.name);
             }
             Err(e) => {
@@ -109,9 +96,101 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n  Total historical records in database: {}\n", total);
 
     // ════════════════════════════════════════
-    // PART 3: Fetch and store stock quotes
+    // PART 3: Analyse historical data
     // ════════════════════════════════════════
-    println!("━━━ KEY STOCKS & INDICES ━━━\n");
+    println!("━━━ TECHNICAL ANALYSIS ━━━\n");
+
+    let coin_ids = database.get_all_coin_ids()?;
+
+    for coin_id in &coin_ids {
+        let points = database.get_coin_history(coin_id)?;
+
+        if points.len() < 30 {
+            println!("  {} — not enough data ({} points)\n", coin_id, points.len());
+            continue;
+        }
+
+        let (from, to) = database.get_price_range(coin_id)?;
+        println!("  Data range: {} to {}", &from[..10], &to[..10]);
+
+        let result = analysis::analyse_coin(coin_id, &points);
+        analysis::print_report(&result);
+
+        // Show recent trend
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let sma_7 = analysis::sma(&prices, 7);
+        let sma_30 = analysis::sma(&prices, 30);
+
+        if let (Some(&short), Some(&long)) = (sma_7.last(), sma_30.last()) {
+            let trend = if short > long {
+                "BULLISH (7-day SMA above 30-day SMA)"
+            } else {
+                "BEARISH (7-day SMA below 30-day SMA)"
+            };
+            println!("  Trend signal: {}\n", trend);
+        }
+    }
+
+    // ════════════════════════════════════════
+    // PART 4: Cross-coin comparison
+    // ════════════════════════════════════════
+    println!("━━━ CROSS-COIN COMPARISON ━━━\n");
+
+    println!(
+        "{:<12} {:>10} {:>10} {:>12} {:>10} {:>8}",
+        "Coin", "Price", "Volatility", "Avg Return", "RSI", "Signal"
+    );
+    println!("{}", "─".repeat(65));
+
+    for coin_id in &coin_ids {
+        let points = database.get_coin_history(coin_id)?;
+        if points.len() < 30 {
+            continue;
+        }
+
+        let result = analysis::analyse_coin(coin_id, &points);
+
+        let rsi_val = result.rsi_14.unwrap_or(0.0);
+        let signal = if rsi_val > 70.0 {
+            "OVER"
+        } else if rsi_val < 30.0 {
+            "UNDER"
+        } else {
+            "OK"
+        };
+
+        println!(
+            "{:<12} {:>10.2} {:>10.2} {:>11.4}% {:>10.2} {:>8}",
+            coin_id,
+            result.current_price,
+            result.std_dev,
+            result.daily_returns_mean,
+            rsi_val,
+            signal
+        );
+    }
+
+    // ════════════════════════════════════════
+    // PART 4b: Generate HTML report
+    // ════════════════════════════════════════
+    println!("\n━━━ GENERATING REPORT ━━━\n");
+
+    let mut report_data: Vec<(String, Vec<analysis::PricePoint>, analysis::AnalysisResult)> = Vec::new();
+
+    for coin_id in &coin_ids {
+        let points = database.get_coin_history(coin_id)?;
+        if points.len() < 30 {
+            continue;
+        }
+        let result = analysis::analyse_coin(coin_id, &points);
+        report_data.push((coin_id.clone(), points, result));
+    }
+
+  
+    // ════════════════════════════════════════
+    // PART 5: Stock quotes & history (Yahoo Finance)
+    // ════════════════════════════════════════
+    println!("\n━━━ KEY STOCKS & INDICES (Yahoo Finance) ━━━\n");
 
     println!(
         "{:<6} {:<16} {:>10} {:>10} {:>10} {:>10} {:>12}",
@@ -120,38 +199,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "─".repeat(80));
 
     for stock in stocks::STOCK_LIST {
-        sleep(Duration::from_secs(15)).await;
-
-        match stocks::fetch_quote(&client, stock.symbol, api_key).await {
+        match stocks::fetch_quote(&client, stock.symbol).await {
             Ok(q) => {
-                let price: f64 = q.price.parse().unwrap_or(0.0);
-                let change: f64 = q.change.parse().unwrap_or(0.0);
-                let high: f64 = q.high.parse().unwrap_or(0.0);
-                let low: f64 = q.low.parse().unwrap_or(0.0);
-                let arrow = if change >= 0.0 { "▲" } else { "▼" };
-
+                let arrow = if q.change >= 0.0 { "▲" } else { "▼" };
                 println!(
-                    "{:<6} {:<16} {:>10.2} {:>8.2} {} {:>10} {:>10.2} {:>10.2}",
-                    stock.symbol, stock.name, price, change, arrow,
-                    q.change_percent, high, low
+                    "{:<6} {:<16} {:>10.2} {:>8.2} {} {:>8.2}% {:>10.2} {:>10.2}",
+                    stock.symbol, stock.name, q.price, q.change, arrow,
+                    q.change_percent, q.high, q.low
                 );
 
                 database.insert_stock(
-                    stock.symbol, stock.name, price, change,
-                    &q.change_percent, high, low, &q.volume, &now
+                    stock.symbol, stock.name, q.price, q.change,
+                    &format!("{:.4}%", q.change_percent),
+                    q.high, q.low,
+                    &q.volume.to_string(), &now
                 )?;
             }
             Err(_) => {
                 println!(
-                    "{:<6} {:<16} -- API limit or error --",
+                    "{:<6} {:<16} -- error fetching --",
                     stock.symbol, stock.name
                 );
             }
         }
     }
 
+    // ── Load stock history into database ──
+    println!("\n━━━ LOADING STOCK HISTORY (1 year) ━━━\n");
+
+    for stock in stocks::STOCK_LIST {
+        let existing = database.count_stock_history(stock.symbol)?;
+        if existing > 0 {
+            println!("  {} — already have {} records, skipping",
+                     stock.symbol, existing);
+            continue;
+        }
+
+        println!("  Fetching {} history...", stock.symbol);
+
+        match stocks::fetch_history(&client, stock.symbol, "1y").await {
+            Ok(points) => {
+                let mut count = 0;
+                for (ts, price, volume) in &points {
+                    let timestamp = chrono::DateTime::from_timestamp(*ts, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default();
+
+                    database.insert_stock_history(
+                        stock.symbol, *price,
+                        volume.map(|v| v as f64),
+                        &timestamp,
+                    )?;
+                    count += 1;
+                }
+                println!("    ✓ Stored {} data points for {}", count, stock.symbol);
+            }
+            Err(e) => {
+                println!("    ✗ Failed to fetch {}: {}", stock.symbol, e);
+            }
+        }
+    }
+
+    // ── Analyse stocks ──
+    println!("\n━━━ STOCK ANALYSIS ━━━\n");
+
+    let mut stock_report_data: Vec<(String, Vec<analysis::PricePoint>, analysis::AnalysisResult)> = Vec::new();
+
+    for stock in stocks::STOCK_LIST {
+        let points = database.get_stock_history(stock.symbol)?;
+        if points.len() < 30 {
+            continue;
+        }
+        let result = analysis::analyse_coin(stock.symbol, &points);
+        analysis::print_report(&result);
+
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let sma_7 = analysis::sma(&prices, 7);
+        let sma_30 = analysis::sma(&prices, 30);
+
+        if let (Some(&short), Some(&long)) = (sma_7.last(), sma_30.last()) {
+            let trend = if short > long {
+                "BULLISH (7-day SMA above 30-day SMA)"
+            } else {
+                "BEARISH (7-day SMA below 30-day SMA)"
+            };
+            println!("  Trend signal: {}\n", trend);
+        }
+
+        stock_report_data.push((stock.symbol.to_string(), points, result));
+    }
+
+    // ── Generate combined report ──
+    println!("\n━━━ GENERATING REPORT ━━━\n");
+    report::generate_html_report(&report_data, &stock_report_data, "report.html")?;
+
     // ════════════════════════════════════════
-    // PART 4: Summary
+    // PART 6: Summary
     // ════════════════════════════════════════
     println!("\n━━━ SUMMARY ━━━\n");
 
@@ -176,8 +319,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Worst 24h crypto: {} ({:+.2}%)",
              worst.name, worst.price_change_percentage_24h.unwrap_or(0.0));
     println!("  Historical data:  {} total records", total);
+    println!("  Coins analysed:   {}", coin_ids.len());
+    println!("  Stocks analysed:  {}", stock_report_data.len());
     println!("\n  Database saved to: rust_invest.db");
-    println!("  Run again to add more snapshots!\n");
+    println!("  Report saved to:   report.html\n");
 
     Ok(())
 }
