@@ -5,6 +5,7 @@ mod db;
 mod analysis;
 mod report;
 mod charts;
+mod ml;
 
 use chrono::Utc;
 use tokio::time::{sleep, Duration};
@@ -292,7 +293,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Generate combined report ──
     println!("\n━━━ GENERATING REPORT ━━━\n");
-    report::generate_html_report(&report_data, &stock_report_data, "report.html")?;
+
+    // ════════════════════════════════════════
+    // PART 5b: Machine Learning
+    // ════════════════════════════════════════
+    println!("\n━━━ MACHINE LEARNING — Linear Regression ━━━");
+    println!("  Training on: 6 features × 365 days");
+    println!("  Features: RSI, MACD, Bollinger, SMA ratio, Volatility, Return");
+    println!("  Split: 80% train / 20% test (chronological)\n");
+
+    let mut ml_report_data: Vec<(ml::ModelMetrics, Vec<(String, f64)>)> = Vec::new();
+
+    // Crypto models
+    for coin_id in &coin_ids {
+        let points = database.get_coin_history(coin_id)?;
+        if points.len() < 60 { continue; }
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+
+        if let Some((metrics, model)) = ml::run_pipeline(coin_id, &prices, 0.8) {
+            let weights = model.get_weights();
+            ml_report_data.push((metrics, weights));
+        }
+    }
+
+    // Stock models
+    for stock in stocks::STOCK_LIST {
+        let points = database.get_stock_history(stock.symbol)?;
+        if points.len() < 60 { continue; }
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+
+        if let Some((metrics, model)) = ml::run_pipeline(stock.symbol, &prices, 0.8) {
+            let weights = model.get_weights();
+            ml_report_data.push((metrics, weights));
+        }
+    }
+
+    // Summary table
+    if !ml_report_data.is_empty() {
+        println!("━━━ ML RESULTS SUMMARY ━━━\n");
+        println!("{:<14} {:>8} {:>8} {:>12} {:>10}",
+                 "Symbol", "MSE", "MAE", "Direction %", "Verdict");
+        println!("{}", "─".repeat(56));
+
+        for (m, _) in &ml_report_data {
+            let verdict = if m.direction_accuracy > 55.0 { "PROMISING" }
+            else if m.direction_accuracy > 50.0 { "MARGINAL" }
+            else { "NO EDGE" };
+            println!("{:<14} {:>8.4} {:>7.4}% {:>11.1}% {:>10}",
+                     m.symbol, m.mse, m.mae, m.direction_accuracy, verdict);
+        }
+        println!();
+
+    }
+
+    report::generate_html_report(&report_data, &stock_report_data, &ml_report_data, "report.html")?;
+    println!("  ✓ Report saved to: report.html\n");
 
     // ════════════════════════════════════════
     // PART 6: Summary
@@ -324,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Stocks analysed:  {}", stock_report_data.len());
     println!("\n  Database saved to: rust_invest.db");
     println!("  Report saved to:   report.html\n");
+    println!("  ML models trained: {}", ml_report_data.len());
 
     Ok(())
 }
