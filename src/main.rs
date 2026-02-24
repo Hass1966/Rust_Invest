@@ -297,53 +297,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ════════════════════════════════════════
     // PART 5b: Machine Learning
     // ════════════════════════════════════════
-    println!("\n━━━ MACHINE LEARNING — Linear Regression ━━━");
-    println!("  Training on: 6 features × 365 days");
-    println!("  Features: RSI, MACD, Bollinger, SMA ratio, Volatility, Return");
+    println!("\n━━━ MACHINE LEARNING ━━━");
+    println!("  Models: Linear Regression + Logistic Regression");
+    println!("  Features: {} enhanced indicators (normalised)", ml::FEATURE_NAMES.len());
     println!("  Split: 80% train / 20% test (chronological)\n");
 
-    let mut ml_report_data: Vec<(ml::ModelMetrics, Vec<(String, f64)>)> = Vec::new();
+    let mut ml_report_data: Vec<ml::PipelineResult> = Vec::new();
 
-    // Crypto models
     for coin_id in &coin_ids {
         let points = database.get_coin_history(coin_id)?;
         if points.len() < 60 { continue; }
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
-
-        if let Some((metrics, model)) = ml::run_pipeline(coin_id, &prices, 0.8) {
-            let weights = model.get_weights();
-            ml_report_data.push((metrics, weights));
+        let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
+        if let Some(result) = ml::run_pipeline(coin_id, &prices, &volumes, 0.8) {
+            ml_report_data.push(result);
         }
     }
 
-    // Stock models
     for stock in stocks::STOCK_LIST {
         let points = database.get_stock_history(stock.symbol)?;
         if points.len() < 60 { continue; }
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
-
-        if let Some((metrics, model)) = ml::run_pipeline(stock.symbol, &prices, 0.8) {
-            let weights = model.get_weights();
-            ml_report_data.push((metrics, weights));
+        let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
+        if let Some(result) = ml::run_pipeline(stock.symbol, &prices, &volumes, 0.8) {
+            ml_report_data.push(result);
         }
     }
 
-    // Summary table
     if !ml_report_data.is_empty() {
         println!("━━━ ML RESULTS SUMMARY ━━━\n");
-        println!("{:<14} {:>8} {:>8} {:>12} {:>10}",
-                 "Symbol", "MSE", "MAE", "Direction %", "Verdict");
-        println!("{}", "─".repeat(56));
-
-        for (m, _) in &ml_report_data {
-            let verdict = if m.direction_accuracy > 55.0 { "PROMISING" }
-            else if m.direction_accuracy > 50.0 { "MARGINAL" }
+        println!("{:<14} {:>10} {:>10} {:>10} {:>10} {:>12}",
+                 "Symbol", "LinReg %", "LogReg %", "Best %", "Model", "Verdict");
+        println!("{}", "─".repeat(70));
+        for r in &ml_report_data {
+            let verdict = if r.best_direction_accuracy > 55.0 { "PROMISING" }
+            else if r.best_direction_accuracy > 50.0 { "MARGINAL" }
             else { "NO EDGE" };
-            println!("{:<14} {:>8.4} {:>7.4}% {:>11.1}% {:>10}",
-                     m.symbol, m.mse, m.mae, m.direction_accuracy, verdict);
+            let short_name = if r.best_model_name.contains("Logistic") { "LogReg" } else { "LinReg" };
+            println!("{:<14} {:>9.1}% {:>9.1}% {:>9.1}% {:>10} {:>12}",
+                     r.linear_metrics.symbol,
+                     r.linear_metrics.direction_accuracy,
+                     r.logistic_metrics.direction_accuracy,
+                     r.best_direction_accuracy,
+                     short_name, verdict);
         }
         println!();
-
     }
 
     report::generate_html_report(&report_data, &stock_report_data, &ml_report_data, "report.html")?;

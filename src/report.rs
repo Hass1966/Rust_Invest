@@ -6,7 +6,7 @@ use crate::ml;
 pub fn generate_html_report(
     coin_data: &[(String, Vec<PricePoint>, AnalysisResult)],
     stock_data: &[(String, Vec<PricePoint>, AnalysisResult)],
-    ml_results: &[(ml::ModelMetrics, Vec<(String, f64)>)],
+    ml_results: &[ml::PipelineResult],
     output_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut html = String::new();
@@ -19,11 +19,8 @@ pub fn generate_html_report(
 <style>
     body {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: #0f1923;
-        color: #e0e0e0;
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
+        background: #0f1923; color: #e0e0e0;
+        max-width: 1200px; margin: 0 auto; padding: 20px;
     }
     h1 { color: #00d4aa; text-align: center; }
     h2 { color: #00d4aa; border-bottom: 1px solid #1e3a5f; padding-bottom: 8px; }
@@ -72,6 +69,8 @@ pub fn generate_html_report(
     }
     .weight-positive { background: #00e676; }
     .weight-negative { background: #ff5252; }
+    .model-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 768px) { .model-compare { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -90,26 +89,25 @@ pub fn generate_html_report(
          <th>Min</th><th>Max</th><th>Volatility</th>\
          <th>Avg Daily Return</th><th>RSI</th><th>Trend</th></tr>\n"
     );
-
     for (coin_id, points, result) in coin_data {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let sma_7 = analysis::sma(&prices, 7);
         let sma_30 = analysis::sma(&prices, 30);
         let trend = match (sma_7.last(), sma_30.last()) {
-            (Some(short), Some(long)) if short > long => "<span class='signal-bullish'>BULLISH</span>",
+            (Some(s), Some(l)) if s > l => "<span class='signal-bullish'>BULLISH</span>",
             (Some(_), Some(_)) => "<span class='signal-bearish'>BEARISH</span>",
             _ => "<span class='signal-neutral'>N/A</span>",
         };
-        let return_class = if result.daily_returns_mean >= 0.0 { "positive" } else { "negative" };
-        let rsi_val = result.rsi_14.unwrap_or(0.0);
-        let rsi_class = if rsi_val > 70.0 { "negative" } else if rsi_val < 30.0 { "positive" } else { "neutral" };
+        let rc = if result.daily_returns_mean >= 0.0 { "positive" } else { "negative" };
+        let rv = result.rsi_14.unwrap_or(0.0);
+        let rclass = if rv > 70.0 { "negative" } else if rv < 30.0 { "positive" } else { "neutral" };
         html.push_str(&format!(
             "<tr><td>{}</td><td>${:.2}</td><td>${:.2}</td><td>${:.2}</td>\
              <td>${:.2}</td><td>${:.2}</td><td class='{}'>{:.4}%</td>\
              <td class='{}'>{:.1}</td><td>{}</td></tr>\n",
             coin_id, result.current_price, result.mean_price,
             result.min_price, result.max_price, result.std_dev,
-            return_class, result.daily_returns_mean, rsi_class, rsi_val, trend
+            rc, result.daily_returns_mean, rclass, rv, trend
         ));
     }
     html.push_str("</table>\n");
@@ -119,57 +117,45 @@ pub fn generate_html_report(
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         html.push_str(&format!("<div class='card'>\n<h3>{}</h3>\n", coin_id.to_uppercase()));
         html.push_str("<div class='metric-grid'>\n");
-        let metrics = vec![
+        for (label, value) in &[
             ("Current Price", format!("${:.2}", result.current_price)),
             ("365d Mean", format!("${:.2}", result.mean_price)),
             ("Std Deviation", format!("${:.2}", result.std_dev)),
             ("RSI (14)", format!("{:.1}", result.rsi_14.unwrap_or(0.0))),
             ("SMA 7-day", format!("${:.2}", result.sma_7.unwrap_or(0.0))),
             ("SMA 30-day", format!("${:.2}", result.sma_30.unwrap_or(0.0))),
-        ];
-        for (label, value) in &metrics {
+        ] {
             html.push_str(&format!(
                 "<div class='metric-box'><div class='value'>{}</div>\
-                 <div class='label'>{}</div></div>\n", value, label
-            ));
+                 <div class='label'>{}</div></div>\n", value, label));
         }
         html.push_str("</div>\n");
 
-        let sma_7 = analysis::sma(&prices, 7);
-        let sma_30 = analysis::sma(&prices, 30);
-        html.push_str(&charts::price_chart_svg(&prices, &sma_7, &sma_30,
+        let sma7 = analysis::sma(&prices, 7);
+        let sma30 = analysis::sma(&prices, 30);
+        html.push_str(&charts::price_chart_svg(&prices, &sma7, &sma30,
                                                &format!("{} — Price with Moving Averages", coin_id.to_uppercase())));
-        let bands_chart = analysis::bollinger_bands(&prices, 20, 2.0);
-        html.push_str(&charts::bollinger_chart_svg(&prices, &bands_chart,
+        let bc = analysis::bollinger_bands(&prices, 20, 2.0);
+        html.push_str(&charts::bollinger_chart_svg(&prices, &bc,
                                                    &format!("{} — Bollinger Bands (20, 2σ)", coin_id.to_uppercase())));
 
-        let (macd_line, signal_line, histogram) = analysis::macd(&prices);
-        if let (Some(&macd_val), Some(&signal_val), Some(&hist_val)) =
-            (macd_line.last(), signal_line.last(), histogram.last()) {
-            let macd_signal = if hist_val > 0.0 {
-                "<span class='positive'>BULLISH (MACD above signal)</span>"
-            } else {
-                "<span class='negative'>BEARISH (MACD below signal)</span>"
-            };
+        let (ml, sl, hist) = analysis::macd(&prices);
+        if let (Some(&mv), Some(&sv), Some(&hv)) = (ml.last(), sl.last(), hist.last()) {
+            let sig = if hv > 0.0 { "<span class='positive'>BULLISH (MACD above signal)</span>" }
+            else { "<span class='negative'>BEARISH (MACD below signal)</span>" };
             html.push_str(&format!(
                 "<p><strong>MACD:</strong> {:.4} | <strong>Signal:</strong> {:.4} | \
-                 <strong>Histogram:</strong> {:.4} — {}</p>\n",
-                macd_val, signal_val, hist_val, macd_signal));
+                 <strong>Histogram:</strong> {:.4} — {}</p>\n", mv, sv, hv, sig));
         }
 
         let bands = analysis::bollinger_bands(&prices, 20, 2.0);
-        if let Some(&(upper, middle, lower)) = bands.last() {
-            let bb_pos = if result.current_price > upper {
-                "<span class='negative'>ABOVE upper band — overbought</span>"
-            } else if result.current_price < lower {
-                "<span class='positive'>BELOW lower band — oversold</span>"
-            } else {
-                "<span class='neutral'>Within bands — normal range</span>"
-            };
+        if let Some(&(u, m, l)) = bands.last() {
+            let bp = if result.current_price > u { "<span class='negative'>ABOVE upper band — overbought</span>" }
+            else if result.current_price < l { "<span class='positive'>BELOW lower band — oversold</span>" }
+            else { "<span class='neutral'>Within bands — normal range</span>" };
             html.push_str(&format!(
-                "<p><strong>Bollinger Bands (20,2):</strong> \
-                 Upper ${:.2} | Middle ${:.2} | Lower ${:.2} — {}</p>\n",
-                upper, middle, lower, bb_pos));
+                "<p><strong>Bollinger Bands (20,2):</strong> Upper ${:.2} | Middle ${:.2} | Lower ${:.2} — {}</p>\n",
+                u, m, l, bp));
         }
         html.push_str("</div>\n");
     }
@@ -180,28 +166,26 @@ pub fn generate_html_report(
         html.push_str(
             "<tr><th>Symbol</th><th>Price</th><th>Mean (1yr)</th>\
              <th>Min</th><th>Max</th><th>Volatility</th>\
-             <th>Avg Daily Return</th><th>RSI</th><th>Trend</th></tr>\n"
-        );
+             <th>Avg Daily Return</th><th>RSI</th><th>Trend</th></tr>\n");
         for (symbol, points, result) in stock_data {
             let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
-            let sma_7 = analysis::sma(&prices, 7);
-            let sma_30 = analysis::sma(&prices, 30);
-            let trend = match (sma_7.last(), sma_30.last()) {
-                (Some(short), Some(long)) if short > long => "<span class='signal-bullish'>BULLISH</span>",
+            let sma7 = analysis::sma(&prices, 7);
+            let sma30 = analysis::sma(&prices, 30);
+            let trend = match (sma7.last(), sma30.last()) {
+                (Some(s), Some(l)) if s > l => "<span class='signal-bullish'>BULLISH</span>",
                 (Some(_), Some(_)) => "<span class='signal-bearish'>BEARISH</span>",
                 _ => "<span class='signal-neutral'>N/A</span>",
             };
-            let return_class = if result.daily_returns_mean >= 0.0 { "positive" } else { "negative" };
-            let rsi_val = result.rsi_14.unwrap_or(0.0);
-            let rsi_class = if rsi_val > 70.0 { "negative" } else if rsi_val < 30.0 { "positive" } else { "neutral" };
+            let rc = if result.daily_returns_mean >= 0.0 { "positive" } else { "negative" };
+            let rv = result.rsi_14.unwrap_or(0.0);
+            let rclass = if rv > 70.0 { "negative" } else if rv < 30.0 { "positive" } else { "neutral" };
             html.push_str(&format!(
                 "<tr><td>{}</td><td>${:.2}</td><td>${:.2}</td><td>${:.2}</td>\
                  <td>${:.2}</td><td>${:.2}</td><td class='{}'>{:.4}%</td>\
                  <td class='{}'>{:.1}</td><td>{}</td></tr>\n",
                 symbol, result.current_price, result.mean_price,
                 result.min_price, result.max_price, result.std_dev,
-                return_class, result.daily_returns_mean, rsi_class, rsi_val, trend
-            ));
+                rc, result.daily_returns_mean, rclass, rv, trend));
         }
         html.push_str("</table>\n");
 
@@ -209,57 +193,45 @@ pub fn generate_html_report(
             let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
             html.push_str(&format!("<div class='card'>\n<h3>{}</h3>\n", symbol));
             html.push_str("<div class='metric-grid'>\n");
-            let metrics = vec![
+            for (label, value) in &[
                 ("Current Price", format!("${:.2}", result.current_price)),
                 ("1yr Mean", format!("${:.2}", result.mean_price)),
                 ("Std Deviation", format!("${:.2}", result.std_dev)),
                 ("RSI (14)", format!("{:.1}", result.rsi_14.unwrap_or(0.0))),
                 ("SMA 7-day", format!("${:.2}", result.sma_7.unwrap_or(0.0))),
                 ("SMA 30-day", format!("${:.2}", result.sma_30.unwrap_or(0.0))),
-            ];
-            for (label, value) in &metrics {
+            ] {
                 html.push_str(&format!(
                     "<div class='metric-box'><div class='value'>{}</div>\
-                     <div class='label'>{}</div></div>\n", value, label
-                ));
+                     <div class='label'>{}</div></div>\n", value, label));
             }
             html.push_str("</div>\n");
 
-            let sma_7 = analysis::sma(&prices, 7);
-            let sma_30 = analysis::sma(&prices, 30);
-            html.push_str(&charts::price_chart_svg(&prices, &sma_7, &sma_30,
+            let sma7 = analysis::sma(&prices, 7);
+            let sma30 = analysis::sma(&prices, 30);
+            html.push_str(&charts::price_chart_svg(&prices, &sma7, &sma30,
                                                    &format!("{} — Price with Moving Averages", symbol)));
-            let bands_chart = analysis::bollinger_bands(&prices, 20, 2.0);
-            html.push_str(&charts::bollinger_chart_svg(&prices, &bands_chart,
+            let bc = analysis::bollinger_bands(&prices, 20, 2.0);
+            html.push_str(&charts::bollinger_chart_svg(&prices, &bc,
                                                        &format!("{} — Bollinger Bands (20, 2σ)", symbol)));
 
-            let (macd_line, signal_line, histogram) = analysis::macd(&prices);
-            if let (Some(&macd_val), Some(&signal_val), Some(&hist_val)) =
-                (macd_line.last(), signal_line.last(), histogram.last()) {
-                let macd_signal = if hist_val > 0.0 {
-                    "<span class='positive'>BULLISH (MACD above signal)</span>"
-                } else {
-                    "<span class='negative'>BEARISH (MACD below signal)</span>"
-                };
+            let (ml_line, sl, hist) = analysis::macd(&prices);
+            if let (Some(&mv), Some(&sv), Some(&hv)) = (ml_line.last(), sl.last(), hist.last()) {
+                let sig = if hv > 0.0 { "<span class='positive'>BULLISH (MACD above signal)</span>" }
+                else { "<span class='negative'>BEARISH (MACD below signal)</span>" };
                 html.push_str(&format!(
                     "<p><strong>MACD:</strong> {:.4} | <strong>Signal:</strong> {:.4} | \
-                     <strong>Histogram:</strong> {:.4} — {}</p>\n",
-                    macd_val, signal_val, hist_val, macd_signal));
+                     <strong>Histogram:</strong> {:.4} — {}</p>\n", mv, sv, hv, sig));
             }
 
             let bands = analysis::bollinger_bands(&prices, 20, 2.0);
-            if let Some(&(upper, middle, lower)) = bands.last() {
-                let bb_pos = if result.current_price > upper {
-                    "<span class='negative'>ABOVE upper band — overbought</span>"
-                } else if result.current_price < lower {
-                    "<span class='positive'>BELOW lower band — oversold</span>"
-                } else {
-                    "<span class='neutral'>Within bands — normal range</span>"
-                };
+            if let Some(&(u, m, l)) = bands.last() {
+                let bp = if result.current_price > u { "<span class='negative'>ABOVE upper band — overbought</span>" }
+                else if result.current_price < l { "<span class='positive'>BELOW lower band — oversold</span>" }
+                else { "<span class='neutral'>Within bands — normal range</span>" };
                 html.push_str(&format!(
-                    "<p><strong>Bollinger Bands (20,2):</strong> \
-                     Upper ${:.2} | Middle ${:.2} | Lower ${:.2} — {}</p>\n",
-                    upper, middle, lower, bb_pos));
+                    "<p><strong>Bollinger Bands (20,2):</strong> Upper ${:.2} | Middle ${:.2} | Lower ${:.2} — {}</p>\n",
+                    u, m, l, bp));
             }
             html.push_str("</div>\n");
         }
@@ -267,70 +239,74 @@ pub fn generate_html_report(
 
     // ── ML Results ──
     if !ml_results.is_empty() {
-        html.push_str("<h2>Machine Learning — Linear Regression</h2>\n");
-        html.push_str("<p>Predicting next-day returns using 6 technical features. \
-            Trained on 80% of data (chronological split), tested on most recent 20%.</p>\n");
+        html.push_str("<h2>Machine Learning Results</h2>\n");
+        html.push_str(&format!(
+            "<p>Two models trained per asset using {} features. \
+             80/20 chronological split. Features normalised to zero mean, unit variance.</p>\n",
+            ml::FEATURE_NAMES.len()));
 
+        // Summary table
         html.push_str("<table>\n");
         html.push_str(
-            "<tr><th>Symbol</th><th>MSE</th><th>MAE</th>\
-             <th>Direction Accuracy</th><th>Verdict</th></tr>\n"
-        );
-        for (metrics, _weights) in ml_results {
-            let (verdict_badge, verdict_text) = if metrics.direction_accuracy > 55.0 {
-                ("signal-bullish", "PROMISING")
-            } else if metrics.direction_accuracy > 50.0 {
-                ("signal-neutral", "MARGINAL")
-            } else {
-                ("signal-bearish", "NO EDGE")
-            };
-            let acc_class = if metrics.direction_accuracy > 55.0 { "positive" }
-            else if metrics.direction_accuracy > 50.0 { "neutral" }
+            "<tr><th>Symbol</th><th>Linear Reg %</th><th>Logistic Reg %</th>\
+             <th>Best Model</th><th>Best %</th><th>Verdict</th></tr>\n");
+
+        for r in ml_results {
+            let (badge, text) = if r.best_direction_accuracy > 55.0 { ("signal-bullish", "PROMISING") }
+            else if r.best_direction_accuracy > 50.0 { ("signal-neutral", "MARGINAL") }
+            else { ("signal-bearish", "NO EDGE") };
+
+            let lin_class = if r.linear_metrics.direction_accuracy > 55.0 { "positive" }
+            else if r.linear_metrics.direction_accuracy > 50.0 { "neutral" }
             else { "negative" };
+            let log_class = if r.logistic_metrics.direction_accuracy > 55.0 { "positive" }
+            else if r.logistic_metrics.direction_accuracy > 50.0 { "neutral" }
+            else { "negative" };
+            let best_class = if r.best_direction_accuracy > 55.0 { "positive" }
+            else if r.best_direction_accuracy > 50.0 { "neutral" }
+            else { "negative" };
+
             html.push_str(&format!(
-                "<tr><td>{}</td><td>{:.4}</td><td>{:.4}%</td>\
-                 <td class='{}'>{:.1}%</td>\
+                "<tr><td>{}</td><td class='{}'>{:.1}%</td><td class='{}'>{:.1}%</td>\
+                 <td>{}</td><td class='{}'>{:.1}%</td>\
                  <td><span class='{}'>{}</span></td></tr>\n",
-                metrics.symbol, metrics.mse, metrics.mae,
-                acc_class, metrics.direction_accuracy,
-                verdict_badge, verdict_text
+                r.linear_metrics.symbol,
+                lin_class, r.linear_metrics.direction_accuracy,
+                log_class, r.logistic_metrics.direction_accuracy,
+                r.best_model_name,
+                best_class, r.best_direction_accuracy,
+                badge, text
             ));
         }
         html.push_str("</table>\n");
 
-        // Feature importance for models above 50%
-        html.push_str("<h3>Feature Importance</h3>\n");
-        for (metrics, weights) in ml_results {
-            if metrics.direction_accuracy < 50.0 { continue; }
+        // Feature importance for promising models
+        html.push_str("<h3>Feature Importance — Models Above 50%</h3>\n");
 
-            html.push_str(&format!("<div class='card'>\n<h3>{} — {:.1}% Direction Accuracy</h3>\n",
-                                   metrics.symbol, metrics.direction_accuracy));
+        for r in ml_results {
+            if r.best_direction_accuracy < 50.0 { continue; }
 
-            let max_w = weights.iter().map(|(_, w)| w.abs()).reduce(f64::max).unwrap_or(1.0);
-            for (name, weight) in weights {
-                let bar_width = (weight.abs() / max_w * 200.0) as u32;
-                let (color_class, sign) = if *weight >= 0.0 {
-                    ("weight-positive", "+")
-                } else {
-                    ("weight-negative", "-")
-                };
-                html.push_str(&format!(
-                    "<p style='margin: 4px 0;'>\
-                     <span style='display:inline-block;width:120px;'>{}</span>\
-                     <span style='display:inline-block;width:70px;text-align:right;\
-                            font-family:monospace;'>{}{:.4}</span> \
-                     <span class='weight-bar {}' style='width:{}px;'></span></p>\n",
-                    name, sign, weight.abs(), color_class, bar_width
-                ));
-            }
+            html.push_str(&format!(
+                "<div class='card'>\n<h3>{} — {} ({:.1}%)</h3>\n<div class='model-compare'>\n",
+                r.linear_metrics.symbol, r.best_model_name, r.best_direction_accuracy));
+
+            // Linear weights
+            html.push_str("<div>\n<h3 style='font-size:14px;'>Linear Regression</h3>\n");
+            render_weights(&mut html, &r.linear_weights);
             html.push_str("</div>\n");
+
+            // Logistic weights
+            html.push_str("<div>\n<h3 style='font-size:14px;'>Logistic Regression</h3>\n");
+            render_weights(&mut html, &r.logistic_weights);
+            html.push_str("</div>\n");
+
+            html.push_str("</div>\n</div>\n");
         }
 
-        html.push_str("<p><em>Green = predicts UP, Red = predicts DOWN. \
-            Bar length shows relative importance. Features: RSI (momentum), \
-            MACD Histogram (trend acceleration), Bollinger Position (mean reversion), \
-            SMA Ratio (trend strength), Volatility (risk regime), \
-            Today's Return (short-term momentum).</em></p>\n");
+        html.push_str(&format!(
+            "<p><em>Features: {}. Green bars = predicts UP, Red = predicts DOWN. \
+             Bar length shows relative importance.</em></p>\n",
+            ml::FEATURE_NAMES.join(", ")));
     }
 
     // ── Correlation matrix ──
@@ -367,10 +343,25 @@ pub fn generate_html_report(
         "<hr style='border-color: #1e3a5f; margin-top: 40px;'>\n\
          <p style='text-align: center; color: #555;'>\
          Rust Invest — Built in Rust | Data: CoinGecko &amp; Yahoo Finance</p>\n\
-         </body></html>"
-    );
+         </body></html>");
 
     fs::write(output_path, &html)?;
     println!("  ✓ Report saved to: {}", output_path);
     Ok(())
+}
+
+fn render_weights(html: &mut String, weights: &[(String, f64)]) {
+    let max_w = weights.iter().map(|(_, w)| w.abs()).reduce(f64::max).unwrap_or(1.0);
+    for (name, weight) in weights {
+        let bar_width = (weight.abs() / max_w * 150.0) as u32;
+        let (color, sign) = if *weight >= 0.0 { ("weight-positive", "+") }
+        else { ("weight-negative", "-") };
+        html.push_str(&format!(
+            "<p style='margin:3px 0;font-size:13px;'>\
+             <span style='display:inline-block;width:100px;'>{}</span>\
+             <span style='display:inline-block;width:65px;text-align:right;\
+                    font-family:monospace;font-size:12px;'>{}{:.4}</span> \
+             <span class='weight-bar {}' style='width:{}px;'></span></p>\n",
+            name, sign, weight.abs(), color, bar_width));
+    }
 }

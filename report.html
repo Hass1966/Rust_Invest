@@ -6,11 +6,8 @@
 <style>
     body {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: #0f1923;
-        color: #e0e0e0;
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
+        background: #0f1923; color: #e0e0e0;
+        max-width: 1200px; margin: 0 auto; padding: 20px;
     }
     h1 { color: #00d4aa; text-align: center; }
     h2 { color: #00d4aa; border-bottom: 1px solid #1e3a5f; padding-bottom: 8px; }
@@ -59,11 +56,13 @@
     }
     .weight-positive { background: #00e676; }
     .weight-negative { background: #ff5252; }
+    .model-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 768px) { .model-compare { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <h1>RUST INVEST — Market Analysis Report</h1>
-<p class='timestamp'>Generated: 2026-02-24 16:56 UTC</p>
+<p class='timestamp'>Generated: 2026-02-24 17:24 UTC</p>
 <h2>Crypto Portfolio Overview</h2>
 <table>
 <tr><th>Coin</th><th>Price</th><th>Mean (365d)</th><th>Min</th><th>Max</th><th>Volatility</th><th>Avg Daily Return</th><th>RSI</th><th>Trend</th></tr>
@@ -792,109 +791,431 @@
 <p><strong>MACD:</strong> -8.3155 | <strong>Signal:</strong> -7.6367 | <strong>Histogram:</strong> -0.6788 — <span class='negative'>BEARISH (MACD below signal)</span></p>
 <p><strong>Bollinger Bands (20,2):</strong> Upper $436.59 | Middle $415.97 | Lower $395.35 — <span class='neutral'>Within bands — normal range</span></p>
 </div>
-<h2>Machine Learning — Linear Regression</h2>
-<p>Predicting next-day returns using 6 technical features. Trained on 80% of data (chronological split), tested on most recent 20%.</p>
+<h2>Machine Learning Results</h2>
+<p>Two models trained per asset using 10 features. 80/20 chronological split. Features normalised to zero mean, unit variance.</p>
 <table>
-<tr><th>Symbol</th><th>MSE</th><th>MAE</th><th>Direction Accuracy</th><th>Verdict</th></tr>
-<tr><td>binancecoin</td><td>8.8033</td><td>1.9121%</td><td class='negative'>49.3%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
-<tr><td>bitcoin</td><td>9.3497</td><td>1.8287%</td><td class='negative'>46.3%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
-<tr><td>ethereum</td><td>15.6417</td><td>2.5363%</td><td class='negative'>46.3%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
-<tr><td>ripple</td><td>22.1348</td><td>2.8331%</td><td class='negative'>43.3%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
-<tr><td>tether</td><td>0.0009</td><td>0.0206%</td><td class='neutral'>50.7%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
-<tr><td>SPY</td><td>0.4836</td><td>0.4885%</td><td class='neutral'>53.3%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
-<tr><td>QQQ</td><td>1.0115</td><td>0.7191%</td><td class='positive'>57.8%</td><td><span class='signal-bullish'>PROMISING</span></td></tr>
-<tr><td>DIA</td><td>0.5269</td><td>0.5357%</td><td class='positive'>57.8%</td><td><span class='signal-bullish'>PROMISING</span></td></tr>
-<tr><td>AAPL</td><td>2.9479</td><td>1.2901%</td><td class='positive'>57.8%</td><td><span class='signal-bullish'>PROMISING</span></td></tr>
-<tr><td>MSFT</td><td>4.9671</td><td>1.4100%</td><td class='negative'>42.2%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
-<tr><td>GOOGL</td><td>2.1284</td><td>1.1703%</td><td class='neutral'>51.1%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
-<tr><td>AMZN</td><td>4.0036</td><td>1.4882%</td><td class='neutral'>53.3%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
-<tr><td>NVDA</td><td>4.1234</td><td>1.5077%</td><td class='neutral'>51.1%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
-<tr><td>META</td><td>5.4754</td><td>1.5874%</td><td class='neutral'>53.3%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
-<tr><td>TSLA</td><td>5.9231</td><td>1.9675%</td><td class='negative'>48.9%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
+<tr><th>Symbol</th><th>Linear Reg %</th><th>Logistic Reg %</th><th>Best Model</th><th>Best %</th><th>Verdict</th></tr>
+<tr><td>binancecoin</td><td class='negative'>49.3%</td><td class='negative'>49.3%</td><td>Logistic Regression</td><td class='negative'>49.3%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
+<tr><td>bitcoin</td><td class='negative'>41.8%</td><td class='negative'>41.8%</td><td>Logistic Regression</td><td class='negative'>41.8%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
+<tr><td>ethereum</td><td class='negative'>47.8%</td><td class='neutral'>53.7%</td><td>Logistic Regression</td><td class='neutral'>53.7%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
+<tr><td>ripple</td><td class='negative'>38.8%</td><td class='neutral'>52.2%</td><td>Logistic Regression</td><td class='neutral'>52.2%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
+<tr><td>tether</td><td class='neutral'>52.2%</td><td class='negative'>49.3%</td><td>Linear Regression</td><td class='neutral'>52.2%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
+<tr><td>SPY</td><td class='positive'>63.6%</td><td class='neutral'>54.5%</td><td>Linear Regression</td><td class='positive'>63.6%</td><td><span class='signal-bullish'>PROMISING</span></td></tr>
+<tr><td>QQQ</td><td class='positive'>59.1%</td><td class='neutral'>54.5%</td><td>Linear Regression</td><td class='positive'>59.1%</td><td><span class='signal-bullish'>PROMISING</span></td></tr>
+<tr><td>DIA</td><td class='neutral'>52.3%</td><td class='positive'>56.8%</td><td>Logistic Regression</td><td class='positive'>56.8%</td><td><span class='signal-bullish'>PROMISING</span></td></tr>
+<tr><td>AAPL</td><td class='neutral'>54.5%</td><td class='neutral'>52.3%</td><td>Linear Regression</td><td class='neutral'>54.5%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
+<tr><td>MSFT</td><td class='negative'>43.2%</td><td class='negative'>50.0%</td><td>Logistic Regression</td><td class='negative'>50.0%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
+<tr><td>GOOGL</td><td class='negative'>50.0%</td><td class='neutral'>52.3%</td><td>Logistic Regression</td><td class='neutral'>52.3%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
+<tr><td>AMZN</td><td class='positive'>59.1%</td><td class='positive'>56.8%</td><td>Linear Regression</td><td class='positive'>59.1%</td><td><span class='signal-bullish'>PROMISING</span></td></tr>
+<tr><td>NVDA</td><td class='negative'>50.0%</td><td class='negative'>47.7%</td><td>Linear Regression</td><td class='negative'>50.0%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
+<tr><td>META</td><td class='negative'>40.9%</td><td class='negative'>50.0%</td><td>Logistic Regression</td><td class='negative'>50.0%</td><td><span class='signal-bearish'>NO EDGE</span></td></tr>
+<tr><td>TSLA</td><td class='neutral'>52.3%</td><td class='neutral'>52.3%</td><td>Logistic Regression</td><td class='neutral'>52.3%</td><td><span class='signal-neutral'>MARGINAL</span></td></tr>
 </table>
-<h3>Feature Importance</h3>
+<h3>Feature Importance — Models Above 50%</h3>
 <div class='card'>
-<h3>tether — 50.7% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0024</span> <span class='weight-bar weight-positive' style='width:24px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0000</span> <span class='weight-bar weight-negative' style='width:0px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0193</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0000</span> <span class='weight-bar weight-negative' style='width:0px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0000</span> <span class='weight-bar weight-positive' style='width:0px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0000</span> <span class='weight-bar weight-negative' style='width:0px;'></span></p>
+<h3>ethereum — Logistic Regression (53.7%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3809</span> <span class='weight-bar weight-positive' style='width:72px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1916</span> <span class='weight-bar weight-negative' style='width:36px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4679</span> <span class='weight-bar weight-negative' style='width:88px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2824</span> <span class='weight-bar weight-positive' style='width:53px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2058</span> <span class='weight-bar weight-negative' style='width:38px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0794</span> <span class='weight-bar weight-positive' style='width:15px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1911</span> <span class='weight-bar weight-positive' style='width:36px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4770</span> <span class='weight-bar weight-negative' style='width:90px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.7935</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1367</span> <span class='weight-bar weight-positive' style='width:25px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1483</span> <span class='weight-bar weight-positive' style='width:88px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0079</span> <span class='weight-bar weight-positive' style='width:4px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1421</span> <span class='weight-bar weight-negative' style='width:84px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0977</span> <span class='weight-bar weight-negative' style='width:58px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0774</span> <span class='weight-bar weight-positive' style='width:46px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0327</span> <span class='weight-bar weight-negative' style='width:19px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1478</span> <span class='weight-bar weight-positive' style='width:88px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2519</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0048</span> <span class='weight-bar weight-positive' style='width:2px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1079</span> <span class='weight-bar weight-positive' style='width:64px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>SPY — 53.3% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.2334</span> <span class='weight-bar weight-negative' style='width:57px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0179</span> <span class='weight-bar weight-negative' style='width:4px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.8092</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0744</span> <span class='weight-bar weight-negative' style='width:18px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0244</span> <span class='weight-bar weight-positive' style='width:6px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.1965</span> <span class='weight-bar weight-negative' style='width:48px;'></span></p>
+<h3>ripple — Logistic Regression (52.2%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2217</span> <span class='weight-bar weight-positive' style='width:49px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4913</span> <span class='weight-bar weight-negative' style='width:110px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3647</span> <span class='weight-bar weight-negative' style='width:81px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1308</span> <span class='weight-bar weight-positive' style='width:29px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3546</span> <span class='weight-bar weight-negative' style='width:79px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1563</span> <span class='weight-bar weight-negative' style='width:35px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0616</span> <span class='weight-bar weight-negative' style='width:13px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4518</span> <span class='weight-bar weight-negative' style='width:101px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1113</span> <span class='weight-bar weight-positive' style='width:24px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.6681</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0066</span> <span class='weight-bar weight-negative' style='width:4px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1302</span> <span class='weight-bar weight-negative' style='width:87px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1506</span> <span class='weight-bar weight-negative' style='width:101px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0466</span> <span class='weight-bar weight-negative' style='width:31px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0083</span> <span class='weight-bar weight-positive' style='width:5px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2105</span> <span class='weight-bar weight-negative' style='width:141px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0205</span> <span class='weight-bar weight-negative' style='width:13px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1448</span> <span class='weight-bar weight-negative' style='width:97px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1015</span> <span class='weight-bar weight-positive' style='width:68px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2236</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>QQQ — 57.8% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.2659</span> <span class='weight-bar weight-negative' style='width:66px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0165</span> <span class='weight-bar weight-negative' style='width:4px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.8009</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.1034</span> <span class='weight-bar weight-negative' style='width:25px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0400</span> <span class='weight-bar weight-positive' style='width:9px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.2201</span> <span class='weight-bar weight-negative' style='width:54px;'></span></p>
+<h3>tether — Linear Regression (52.2%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0011</span> <span class='weight-bar weight-positive' style='width:35px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0010</span> <span class='weight-bar weight-positive' style='width:31px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0008</span> <span class='weight-bar weight-positive' style='width:24px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0011</span> <span class='weight-bar weight-negative' style='width:35px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0025</span> <span class='weight-bar weight-negative' style='width:83px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0013</span> <span class='weight-bar weight-positive' style='width:41px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0046</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0005</span> <span class='weight-bar weight-negative' style='width:17px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0006</span> <span class='weight-bar weight-positive' style='width:21px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0038</span> <span class='weight-bar weight-negative' style='width:126px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2414</span> <span class='weight-bar weight-positive' style='width:122px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0309</span> <span class='weight-bar weight-negative' style='width:15px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0027</span> <span class='weight-bar weight-positive' style='width:1px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1524</span> <span class='weight-bar weight-negative' style='width:77px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2107</span> <span class='weight-bar weight-negative' style='width:106px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2263</span> <span class='weight-bar weight-positive' style='width:114px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2965</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2419</span> <span class='weight-bar weight-negative' style='width:122px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0934</span> <span class='weight-bar weight-positive' style='width:47px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1174</span> <span class='weight-bar weight-negative' style='width:59px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>DIA — 57.8% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.2275</span> <span class='weight-bar weight-negative' style='width:71px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0173</span> <span class='weight-bar weight-negative' style='width:5px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.6359</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0832</span> <span class='weight-bar weight-negative' style='width:26px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0096</span> <span class='weight-bar weight-positive' style='width:3px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0747</span> <span class='weight-bar weight-negative' style='width:23px;'></span></p>
+<h3>SPY — Linear Regression (63.6%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0841</span> <span class='weight-bar weight-negative' style='width:48px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0540</span> <span class='weight-bar weight-positive' style='width:30px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0744</span> <span class='weight-bar weight-positive' style='width:42px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0270</span> <span class='weight-bar weight-positive' style='width:15px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0111</span> <span class='weight-bar weight-negative' style='width:6px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1212</span> <span class='weight-bar weight-positive' style='width:69px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0408</span> <span class='weight-bar weight-negative' style='width:23px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1572</span> <span class='weight-bar weight-positive' style='width:89px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1134</span> <span class='weight-bar weight-positive' style='width:64px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2625</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2845</span> <span class='weight-bar weight-negative' style='width:74px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0591</span> <span class='weight-bar weight-negative' style='width:15px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2117</span> <span class='weight-bar weight-positive' style='width:55px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0969</span> <span class='weight-bar weight-positive' style='width:25px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1294</span> <span class='weight-bar weight-negative' style='width:33px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2246</span> <span class='weight-bar weight-positive' style='width:58px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2754</span> <span class='weight-bar weight-negative' style='width:71px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.5744</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3543</span> <span class='weight-bar weight-positive' style='width:92px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2765</span> <span class='weight-bar weight-negative' style='width:72px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>AAPL — 57.8% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.5945</span> <span class='weight-bar weight-negative' style='width:172px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.1193</span> <span class='weight-bar weight-negative' style='width:34px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.6890</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.4893</span> <span class='weight-bar weight-negative' style='width:142px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0913</span> <span class='weight-bar weight-positive' style='width:26px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.1390</span> <span class='weight-bar weight-negative' style='width:40px;'></span></p>
+<h3>QQQ — Linear Regression (59.1%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1727</span> <span class='weight-bar weight-negative' style='width:82px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0850</span> <span class='weight-bar weight-positive' style='width:40px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1295</span> <span class='weight-bar weight-positive' style='width:61px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0757</span> <span class='weight-bar weight-positive' style='width:35px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0037</span> <span class='weight-bar weight-positive' style='width:1px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1340</span> <span class='weight-bar weight-positive' style='width:63px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0261</span> <span class='weight-bar weight-negative' style='width:12px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2040</span> <span class='weight-bar weight-positive' style='width:97px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2084</span> <span class='weight-bar weight-positive' style='width:99px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3154</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3682</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1613</span> <span class='weight-bar weight-positive' style='width:65px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0107</span> <span class='weight-bar weight-negative' style='width:4px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1170</span> <span class='weight-bar weight-negative' style='width:47px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0520</span> <span class='weight-bar weight-positive' style='width:21px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1037</span> <span class='weight-bar weight-negative' style='width:42px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2092</span> <span class='weight-bar weight-negative' style='width:85px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2672</span> <span class='weight-bar weight-positive' style='width:108px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3292</span> <span class='weight-bar weight-positive' style='width:134px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1917</span> <span class='weight-bar weight-positive' style='width:78px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>GOOGL — 51.1% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.2148</span> <span class='weight-bar weight-negative' style='width:79px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0439</span> <span class='weight-bar weight-negative' style='width:16px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.5405</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.3026</span> <span class='weight-bar weight-negative' style='width:111px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0295</span> <span class='weight-bar weight-positive' style='width:10px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0922</span> <span class='weight-bar weight-negative' style='width:34px;'></span></p>
+<h3>DIA — Logistic Regression (56.8%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0254</span> <span class='weight-bar weight-negative' style='width:16px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0261</span> <span class='weight-bar weight-positive' style='width:16px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1233</span> <span class='weight-bar weight-positive' style='width:78px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0391</span> <span class='weight-bar weight-negative' style='width:24px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2054</span> <span class='weight-bar weight-negative' style='width:130px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1168</span> <span class='weight-bar weight-negative' style='width:73px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0087</span> <span class='weight-bar weight-negative' style='width:5px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0895</span> <span class='weight-bar weight-positive' style='width:56px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0017</span> <span class='weight-bar weight-negative' style='width:1px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2370</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0761</span> <span class='weight-bar weight-negative' style='width:27px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1640</span> <span class='weight-bar weight-negative' style='width:59px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0836</span> <span class='weight-bar weight-positive' style='width:30px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1849</span> <span class='weight-bar weight-negative' style='width:67px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2165</span> <span class='weight-bar weight-negative' style='width:79px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0812</span> <span class='weight-bar weight-negative' style='width:29px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2326</span> <span class='weight-bar weight-negative' style='width:85px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.4104</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1363</span> <span class='weight-bar weight-negative' style='width:49px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2783</span> <span class='weight-bar weight-negative' style='width:101px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>AMZN — 53.3% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.1287</span> <span class='weight-bar weight-negative' style='width:27px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0302</span> <span class='weight-bar weight-negative' style='width:6px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.9378</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.2238</span> <span class='weight-bar weight-negative' style='width:47px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0387</span> <span class='weight-bar weight-negative' style='width:8px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.1167</span> <span class='weight-bar weight-negative' style='width:24px;'></span></p>
+<h3>AAPL — Linear Regression (54.5%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1407</span> <span class='weight-bar weight-negative' style='width:49px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1667</span> <span class='weight-bar weight-positive' style='width:58px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4277</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3536</span> <span class='weight-bar weight-positive' style='width:124px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1482</span> <span class='weight-bar weight-negative' style='width:51px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2474</span> <span class='weight-bar weight-positive' style='width:86px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1458</span> <span class='weight-bar weight-positive' style='width:51px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0716</span> <span class='weight-bar weight-positive' style='width:25px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0188</span> <span class='weight-bar weight-positive' style='width:6px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4016</span> <span class='weight-bar weight-negative' style='width:140px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0816</span> <span class='weight-bar weight-positive' style='width:20px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2551</span> <span class='weight-bar weight-positive' style='width:64px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3863</span> <span class='weight-bar weight-negative' style='width:98px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2524</span> <span class='weight-bar weight-positive' style='width:64px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4179</span> <span class='weight-bar weight-negative' style='width:106px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2439</span> <span class='weight-bar weight-positive' style='width:62px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0888</span> <span class='weight-bar weight-positive' style='width:22px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1098</span> <span class='weight-bar weight-positive' style='width:27px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0726</span> <span class='weight-bar weight-positive' style='width:18px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.5889</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>NVDA — 51.1% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.1231</span> <span class='weight-bar weight-positive' style='width:44px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0686</span> <span class='weight-bar weight-negative' style='width:24px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.5596</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0696</span> <span class='weight-bar weight-negative' style='width:24px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0055</span> <span class='weight-bar weight-negative' style='width:1px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.4199</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<h3>MSFT — Logistic Regression (50.0%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2207</span> <span class='weight-bar weight-positive' style='width:142px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1542</span> <span class='weight-bar weight-negative' style='width:99px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0715</span> <span class='weight-bar weight-positive' style='width:46px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0748</span> <span class='weight-bar weight-negative' style='width:48px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0775</span> <span class='weight-bar weight-negative' style='width:49px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1044</span> <span class='weight-bar weight-positive' style='width:67px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0686</span> <span class='weight-bar weight-positive' style='width:44px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1703</span> <span class='weight-bar weight-positive' style='width:109px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1422</span> <span class='weight-bar weight-positive' style='width:91px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2330</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0089</span> <span class='weight-bar weight-positive' style='width:3px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1175</span> <span class='weight-bar weight-positive' style='width:49px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0229</span> <span class='weight-bar weight-positive' style='width:9px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3549</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2295</span> <span class='weight-bar weight-positive' style='width:96px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1348</span> <span class='weight-bar weight-negative' style='width:56px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1323</span> <span class='weight-bar weight-negative' style='width:55px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2398</span> <span class='weight-bar weight-positive' style='width:101px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0138</span> <span class='weight-bar weight-positive' style='width:5px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0283</span> <span class='weight-bar weight-positive' style='width:11px;'></span></p>
+</div>
+</div>
 </div>
 <div class='card'>
-<h3>META — 53.3% Direction Accuracy</h3>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>RSI</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.4547</span> <span class='weight-bar weight-positive' style='width:119px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>MACD Hist</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>+0.0340</span> <span class='weight-bar weight-positive' style='width:8px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>BB Position</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.7610</span> <span class='weight-bar weight-negative' style='width:200px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>SMA Ratio</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0448</span> <span class='weight-bar weight-negative' style='width:11px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Volatility</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.0773</span> <span class='weight-bar weight-negative' style='width:20px;'></span></p>
-<p style='margin: 4px 0;'><span style='display:inline-block;width:120px;'>Today Return</span><span style='display:inline-block;width:70px;text-align:right;font-family:monospace;'>-0.2707</span> <span class='weight-bar weight-negative' style='width:71px;'></span></p>
+<h3>GOOGL — Logistic Regression (52.3%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3463</span> <span class='weight-bar weight-positive' style='width:127px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1417</span> <span class='weight-bar weight-negative' style='width:52px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3784</span> <span class='weight-bar weight-negative' style='width:139px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3622</span> <span class='weight-bar weight-positive' style='width:133px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3722</span> <span class='weight-bar weight-negative' style='width:136px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3103</span> <span class='weight-bar weight-positive' style='width:114px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0937</span> <span class='weight-bar weight-negative' style='width:34px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0998</span> <span class='weight-bar weight-positive' style='width:36px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2206</span> <span class='weight-bar weight-positive' style='width:81px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4083</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
 </div>
-<p><em>Green = predicts UP, Red = predicts DOWN. Bar length shows relative importance. Features: RSI (momentum), MACD Histogram (trend acceleration), Bollinger Position (mean reversion), SMA Ratio (trend strength), Volatility (risk regime), Today's Return (short-term momentum).</em></p>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2189</span> <span class='weight-bar weight-positive' style='width:70px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0401</span> <span class='weight-bar weight-positive' style='width:12px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0145</span> <span class='weight-bar weight-negative' style='width:4px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0796</span> <span class='weight-bar weight-positive' style='width:25px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3789</span> <span class='weight-bar weight-negative' style='width:122px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0307</span> <span class='weight-bar weight-negative' style='width:9px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1199</span> <span class='weight-bar weight-positive' style='width:38px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0627</span> <span class='weight-bar weight-positive' style='width:20px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0521</span> <span class='weight-bar weight-positive' style='width:16px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4656</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+</div>
+</div>
+<div class='card'>
+<h3>AMZN — Linear Regression (59.1%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0915</span> <span class='weight-bar weight-positive' style='width:40px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0909</span> <span class='weight-bar weight-negative' style='width:40px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3014</span> <span class='weight-bar weight-positive' style='width:133px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2654</span> <span class='weight-bar weight-negative' style='width:117px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2850</span> <span class='weight-bar weight-negative' style='width:126px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1946</span> <span class='weight-bar weight-negative' style='width:86px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2433</span> <span class='weight-bar weight-positive' style='width:107px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0678</span> <span class='weight-bar weight-positive' style='width:30px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0785</span> <span class='weight-bar weight-negative' style='width:34px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.3384</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4079</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1139</span> <span class='weight-bar weight-negative' style='width:41px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0023</span> <span class='weight-bar weight-negative' style='width:0px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1111</span> <span class='weight-bar weight-positive' style='width:40px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0804</span> <span class='weight-bar weight-positive' style='width:29px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2291</span> <span class='weight-bar weight-negative' style='width:84px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0987</span> <span class='weight-bar weight-positive' style='width:36px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1078</span> <span class='weight-bar weight-positive' style='width:39px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2038</span> <span class='weight-bar weight-negative' style='width:74px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0752</span> <span class='weight-bar weight-negative' style='width:27px;'></span></p>
+</div>
+</div>
+</div>
+<div class='card'>
+<h3>NVDA — Linear Regression (50.0%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2895</span> <span class='weight-bar weight-positive' style='width:76px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0007</span> <span class='weight-bar weight-negative' style='width:0px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0027</span> <span class='weight-bar weight-positive' style='width:0px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0402</span> <span class='weight-bar weight-positive' style='width:10px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1060</span> <span class='weight-bar weight-negative' style='width:28px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0730</span> <span class='weight-bar weight-positive' style='width:19px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1295</span> <span class='weight-bar weight-negative' style='width:34px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3737</span> <span class='weight-bar weight-positive' style='width:99px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0979</span> <span class='weight-bar weight-positive' style='width:25px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.5659</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2103</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0402</span> <span class='weight-bar weight-positive' style='width:28px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1937</span> <span class='weight-bar weight-negative' style='width:138px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1354</span> <span class='weight-bar weight-positive' style='width:96px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0036</span> <span class='weight-bar weight-negative' style='width:2px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1602</span> <span class='weight-bar weight-positive' style='width:114px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1205</span> <span class='weight-bar weight-negative' style='width:85px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1252</span> <span class='weight-bar weight-negative' style='width:89px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1433</span> <span class='weight-bar weight-positive' style='width:102px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1784</span> <span class='weight-bar weight-negative' style='width:127px;'></span></p>
+</div>
+</div>
+</div>
+<div class='card'>
+<h3>META — Logistic Regression (50.0%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0663</span> <span class='weight-bar weight-positive' style='width:17px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0731</span> <span class='weight-bar weight-positive' style='width:19px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.5634</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.5281</span> <span class='weight-bar weight-negative' style='width:140px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0086</span> <span class='weight-bar weight-positive' style='width:2px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1990</span> <span class='weight-bar weight-negative' style='width:52px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0084</span> <span class='weight-bar weight-negative' style='width:2px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3625</span> <span class='weight-bar weight-positive' style='width:96px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1877</span> <span class='weight-bar weight-negative' style='width:49px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.4414</span> <span class='weight-bar weight-negative' style='width:117px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0716</span> <span class='weight-bar weight-negative' style='width:37px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2573</span> <span class='weight-bar weight-positive' style='width:133px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.2892</span> <span class='weight-bar weight-positive' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.2378</span> <span class='weight-bar weight-negative' style='width:123px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0557</span> <span class='weight-bar weight-positive' style='width:28px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1816</span> <span class='weight-bar weight-negative' style='width:94px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1018</span> <span class='weight-bar weight-negative' style='width:52px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1512</span> <span class='weight-bar weight-positive' style='width:78px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1533</span> <span class='weight-bar weight-negative' style='width:79px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.1671</span> <span class='weight-bar weight-negative' style='width:86px;'></span></p>
+</div>
+</div>
+</div>
+<div class='card'>
+<h3>TSLA — Logistic Regression (52.3%)</h3>
+<div class='model-compare'>
+<div>
+<h3 style='font-size:14px;'>Linear Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3078</span> <span class='weight-bar weight-positive' style='width:31px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.3111</span> <span class='weight-bar weight-positive' style='width:32px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.6976</span> <span class='weight-bar weight-positive' style='width:72px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-1.4462</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0973</span> <span class='weight-bar weight-negative' style='width:10px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0016</span> <span class='weight-bar weight-negative' style='width:0px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1988</span> <span class='weight-bar weight-positive' style='width:20px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0091</span> <span class='weight-bar weight-negative' style='width:0px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.7621</span> <span class='weight-bar weight-positive' style='width:79px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0276</span> <span class='weight-bar weight-positive' style='width:2px;'></span></p>
+</div>
+<div>
+<h3 style='font-size:14px;'>Logistic Regression</h3>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0412</span> <span class='weight-bar weight-positive' style='width:10px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>RSI Δ3d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0366</span> <span class='weight-bar weight-positive' style='width:9px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>MACD Hist</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1678</span> <span class='weight-bar weight-positive' style='width:43px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>BB Position</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.5787</span> <span class='weight-bar weight-negative' style='width:150px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>SMA Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0305</span> <span class='weight-bar weight-positive' style='width:7px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volatility</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0218</span> <span class='weight-bar weight-negative' style='width:5px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Today Return</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>-0.0219</span> <span class='weight-bar weight-negative' style='width:5px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Return 3d Avg</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.1622</span> <span class='weight-bar weight-positive' style='width:42px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Volume Ratio</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.4024</span> <span class='weight-bar weight-positive' style='width:104px;'></span></p>
+<p style='margin:3px 0;font-size:13px;'><span style='display:inline-block;width:100px;'>Momentum 5d</span><span style='display:inline-block;width:65px;text-align:right;font-family:monospace;font-size:12px;'>+0.0591</span> <span class='weight-bar weight-positive' style='width:15px;'></span></p>
+</div>
+</div>
+</div>
+<p><em>Features: RSI, RSI Δ3d, MACD Hist, BB Position, SMA Ratio, Volatility, Today Return, Return 3d Avg, Volume Ratio, Momentum 5d. Green bars = predicts UP, Red = predicts DOWN. Bar length shows relative importance.</em></p>
 <h2>Correlation Matrix (Daily Returns)</h2>
 <table class='correlation-table'>
 <tr><th></th><th>binancecoin</th><th>bitcoin</th><th>ethereum</th><th>ripple</th><th>tether</th></tr>
