@@ -4,6 +4,7 @@ mod stocks;
 mod db;
 mod analysis;
 mod report;
+mod charts;
 
 use chrono::Utc;
 use tokio::time::{sleep, Duration};
@@ -186,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         report_data.push((coin_id.clone(), points, result));
     }
 
-  
+
     // ════════════════════════════════════════
     // PART 5: Stock quotes & history (Yahoo Finance)
     // ════════════════════════════════════════
