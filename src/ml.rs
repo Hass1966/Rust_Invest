@@ -240,9 +240,15 @@ impl LinearRegression {
     }
 
     pub fn get_weights(&self) -> Vec<(String, f64)> {
-        FEATURE_NAMES.iter()
-            .zip(self.weights.iter())
-            .map(|(name, weight)| (name.to_string(), *weight))
+        self.weights.iter().enumerate()
+            .map(|(i, weight)| {
+                let name = if i < FEATURE_NAMES.len() {
+                    FEATURE_NAMES[i].to_string()
+                } else {
+                    format!("Feature_{}", i)
+                };
+                (name, *weight)
+            })
             .collect()
     }
 
@@ -347,9 +353,15 @@ impl LogisticRegression {
     }
 
     pub fn get_weights(&self) -> Vec<(String, f64)> {
-        FEATURE_NAMES.iter()
-            .zip(self.weights.iter())
-            .map(|(name, weight)| (name.to_string(), *weight))
+        self.weights.iter().enumerate()
+            .map(|(i, weight)| {
+                let name = if i < FEATURE_NAMES.len() {
+                    FEATURE_NAMES[i].to_string()
+                } else {
+                    format!("Feature_{}", i)
+                };
+                (name, *weight)
+            })
             .collect()
     }
 

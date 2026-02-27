@@ -1,1 +1,7 @@
 /target
+rust_invest.db
+report.html
+models/
+.DS_Store
+identifier.sqlite
+target/

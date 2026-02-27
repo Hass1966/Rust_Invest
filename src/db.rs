@@ -67,7 +67,18 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_history_coin
                 ON crypto_history(coin_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_stock_symbol
-                ON stock_quotes(symbol, timestamp);"
+                ON stock_quotes(symbol, timestamp);
+
+            CREATE TABLE IF NOT EXISTS market_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol      TEXT NOT NULL,
+                price       REAL NOT NULL,
+                volume      REAL,
+                timestamp   TEXT NOT NULL,
+                UNIQUE(symbol, timestamp)
+            );
+            CREATE INDEX IF NOT EXISTS idx_market_history
+                ON market_history(symbol, timestamp);"
         )?;
         Ok(())
     }
@@ -237,5 +248,65 @@ impl Database {
             params![coin_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
+    }
+
+    // ── Market indicator history (VIX, treasuries, sector ETFs) ──
+
+    pub fn insert_market_history(
+        &self,
+        symbol: &str,
+        price: f64,
+        volume: Option<f64>,
+        timestamp: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO market_history
+                (symbol, price, volume, timestamp)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![symbol, price, volume, timestamp],
+        )?;
+        Ok(())
+    }
+
+    pub fn count_market_history(&self, symbol: &str) -> Result<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM market_history WHERE symbol = ?1",
+            params![symbol],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn get_market_history(&self, symbol: &str) -> Result<Vec<(String, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, price
+             FROM market_history
+             WHERE symbol = ?1
+             ORDER BY timestamp ASC"
+        )?;
+
+        let points = stmt.query_map(params![symbol], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(points)
+    }
+
+    /// Get market history as just price vector (for feature building)
+    pub fn get_market_prices(&self, symbol: &str) -> Result<Vec<f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT price FROM market_history
+             WHERE symbol = ?1
+             ORDER BY timestamp ASC"
+        )?;
+
+        let prices = stmt.query_map(params![symbol], |row| {
+            row.get::<_, f64>(0)
+        })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(prices)
     }
 }

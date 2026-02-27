@@ -1,0 +1,26 @@
+# Add these dependencies to your existing Cargo.toml [dependencies] section:
+#
+# candle-core = "0.9"
+# candle-nn = "0.9"
+# safetensors = "0.4"
+#
+# Your existing dependencies remain unchanged. Full example below:
+
+[package]
+name = "rust_invest"
+version = "0.4.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.11", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+rand = "0.8"
+
+# NEW: Candle ML framework for LSTM
+candle-core = "0.9"
+candle-nn = "0.9"
+safetensors = "0.4"

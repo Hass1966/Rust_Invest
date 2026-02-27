@@ -2,11 +2,15 @@ use std::fs;
 use crate::analysis::{self, PricePoint, AnalysisResult};
 use crate::charts;
 use crate::ml;
+use crate::gbt;
+use crate::ensemble;
 
 pub fn generate_html_report(
     coin_data: &[(String, Vec<PricePoint>, AnalysisResult)],
     stock_data: &[(String, Vec<PricePoint>, AnalysisResult)],
     ml_results: &[ml::PipelineResult],
+    gbt_results: &[gbt::ExtendedPipelineResult],
+    signals: &[ensemble::TradingSignal],
     output_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut html = String::new();
@@ -81,6 +85,13 @@ pub fn generate_html_report(
         "<p class='timestamp'>Generated: {}</p>\n",
         chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")
     ));
+
+    // ══════════════════════════════════════════════════
+    // TRADING SIGNALS — at the top (most important info)
+    // ══════════════════════════════════════════════════
+    if !signals.is_empty() {
+        html.push_str(&ensemble::signals_html(signals));
+    }
 
     // ── Crypto Overview table ──
     html.push_str("<h2>Crypto Portfolio Overview</h2>\n<table>\n");
@@ -164,7 +175,7 @@ pub fn generate_html_report(
     if !stock_data.is_empty() {
         html.push_str("<h2>Stock Analysis</h2>\n<table>\n");
         html.push_str(
-            "<tr><th>Symbol</th><th>Price</th><th>Mean (1yr)</th>\
+            "<tr><th>Symbol</th><th>Price</th><th>Mean</th>\
              <th>Min</th><th>Max</th><th>Volatility</th>\
              <th>Avg Daily Return</th><th>RSI</th><th>Trend</th></tr>\n");
         for (symbol, points, result) in stock_data {
@@ -195,7 +206,7 @@ pub fn generate_html_report(
             html.push_str("<div class='metric-grid'>\n");
             for (label, value) in &[
                 ("Current Price", format!("${:.2}", result.current_price)),
-                ("1yr Mean", format!("${:.2}", result.mean_price)),
+                ("Mean", format!("${:.2}", result.mean_price)),
                 ("Std Deviation", format!("${:.2}", result.std_dev)),
                 ("RSI (14)", format!("{:.1}", result.rsi_14.unwrap_or(0.0))),
                 ("SMA 7-day", format!("${:.2}", result.sma_7.unwrap_or(0.0))),
@@ -237,7 +248,7 @@ pub fn generate_html_report(
         }
     }
 
-    // ── ML Results ──
+    // ── ML Results (original 2-model) ──
     if !ml_results.is_empty() {
         html.push_str("<h2>Machine Learning Results</h2>\n");
         html.push_str(&format!(
@@ -245,7 +256,6 @@ pub fn generate_html_report(
              80/20 chronological split. Features normalised to zero mean, unit variance.</p>\n",
             ml::FEATURE_NAMES.len()));
 
-        // Summary table
         html.push_str("<table>\n");
         html.push_str(
             "<tr><th>Symbol</th><th>Linear Reg %</th><th>Logistic Reg %</th>\
@@ -280,33 +290,30 @@ pub fn generate_html_report(
         }
         html.push_str("</table>\n");
 
-        // Feature importance for promising models
         html.push_str("<h3>Feature Importance — Models Above 50%</h3>\n");
-
         for r in ml_results {
             if r.best_direction_accuracy < 50.0 { continue; }
-
             html.push_str(&format!(
                 "<div class='card'>\n<h3>{} — {} ({:.1}%)</h3>\n<div class='model-compare'>\n",
                 r.linear_metrics.symbol, r.best_model_name, r.best_direction_accuracy));
-
-            // Linear weights
             html.push_str("<div>\n<h3 style='font-size:14px;'>Linear Regression</h3>\n");
             render_weights(&mut html, &r.linear_weights);
             html.push_str("</div>\n");
-
-            // Logistic weights
             html.push_str("<div>\n<h3 style='font-size:14px;'>Logistic Regression</h3>\n");
             render_weights(&mut html, &r.logistic_weights);
             html.push_str("</div>\n");
-
             html.push_str("</div>\n</div>\n");
         }
 
         html.push_str(&format!(
-            "<p><em>Features: {}. Green bars = predicts UP, Red = predicts DOWN. \
-             Bar length shows relative importance.</em></p>\n",
+            "<p><em>Features: {}. Green bars = predicts UP, Red = predicts DOWN.</em></p>\n",
             ml::FEATURE_NAMES.join(", ")));
+    }
+
+    // ── GBT Results ──
+    if !gbt_results.is_empty() {
+        html.push_str("<h2>Gradient Boosted Trees</h2>\n");
+        html.push_str(&gbt::gbt_report_section(gbt_results, &render_weights));
     }
 
     // ── Correlation matrix ──
@@ -342,7 +349,7 @@ pub fn generate_html_report(
     html.push_str(
         "<hr style='border-color: #1e3a5f; margin-top: 40px;'>\n\
          <p style='text-align: center; color: #555;'>\
-         Rust Invest — Built in Rust | Data: CoinGecko &amp; Yahoo Finance</p>\n\
+         Rust Invest — Built in Rust | Data: CoinGecko &amp; Yahoo Finance | Not financial advice</p>\n\
          </body></html>");
 
     fs::write(output_path, &html)?;
@@ -350,7 +357,8 @@ pub fn generate_html_report(
     Ok(())
 }
 
-fn render_weights(html: &mut String, weights: &[(String, f64)]) {
+/// Render weight bars — used by ML and GBT sections
+pub fn render_weights(html: &mut String, weights: &[(String, f64)]) {
     let max_w = weights.iter().map(|(_, w)| w.abs()).reduce(f64::max).unwrap_or(1.0);
     for (name, weight) in weights {
         let bar_width = (weight.abs() / max_w * 150.0) as u32;
