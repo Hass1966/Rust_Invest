@@ -11,6 +11,8 @@ mod ensemble;
 mod features;
 mod lstm;
 mod model_store;
+mod backtester;
+mod portfolio;
 
 use chrono::Utc;
 use tokio::time::{sleep, Duration};
@@ -346,6 +348,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Rich features: {} per sample", features::feature_names().len());
     println!("  Models: LinReg + LogReg + GBT + LSTM (candle-nn)");
     println!("  Evaluation: Walk-forward with rolling retraining");
+
+    // Show model cache status
+    let n_features = features::feature_names().len();
+    let all_symbols: Vec<&str> = stocks::STOCK_LIST.iter().map(|s| s.symbol).collect();
+    model_store::print_cache_status(&all_symbols, n_features);
+
     let cached = model_store::list_cached_models();
     if !cached.is_empty() {
         println!("  Cached models: {} files in models/", cached.len());
@@ -434,7 +442,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        // Walk-forward on rich features
+        // Check if we have valid cached models
+        let n_feat = samples[0].features.len();
+        let use_cache = model_store::has_valid_models(stock.symbol, n_feat);
+
+        if use_cache {
+            println!("  {} — using cached models (valid, < 7 days old)", stock.symbol);
+        }
+
+        // Walk-forward on rich features (trains fresh models)
         let train_window = (samples.len() as f64 * 0.6) as usize;
         let test_window = 30.min(samples.len() / 10);
         let step = test_window;
@@ -442,6 +458,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(wf) = ensemble::walk_forward_samples(
             stock.symbol, &samples, train_window, test_window, step,
         ) {
+            // Save final-fold models to disk for next run
+            // (The last fold's trained models are the most recent)
+            let last_train_end = {
+                let mut s = 0;
+                let mut last = 0;
+                while s + train_window + test_window <= samples.len() {
+                    last = s + train_window;
+                    s += step;
+                }
+                last
+            };
+
+            // Normalise the last fold's training data to get norm params
+            let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
+            let (means, stds) = ml::normalise(&mut last_fold);
+
+            // Train final models on the last fold for saving
+            let mut lin = ml::LinearRegression::new(n_feat);
+            lin.train(&last_fold, 0.005, 3000);
+            let _ = model_store::save_weights(
+                stock.symbol, "linreg", &lin.weights, lin.bias,
+                n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds,
+            );
+
+            let mut log = ml::LogisticRegression::new(n_feat);
+            log.train(&last_fold, 0.01, 3000);
+            let _ = model_store::save_weights(
+                stock.symbol, "logreg", &log.weights, log.bias,
+                n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds,
+            );
+
+            // Train and save GBT
+            let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
+            let y_train: Vec<f64> = last_fold.iter()
+                .map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+            let val_start = (x_train.len() as f64 * 0.85) as usize;
+            let (x_t, x_v) = x_train.split_at(val_start);
+            let (y_t, y_v) = y_train.split_at(val_start);
+
+            let gbt_config = gbt::GBTConfig {
+                n_trees: 80,
+                learning_rate: 0.08,
+                tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 },
+                subsample_ratio: 0.8,
+                early_stopping_rounds: Some(8),
+            };
+            let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
+            let _ = model_store::save_gbt(
+                stock.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds,
+            );
+
             let result = analysis::analyse_coin(stock.symbol, &points);
             let sma_7 = analysis::sma(&prices, 7);
             let sma_30 = analysis::sma(&prices, 30);
@@ -502,6 +569,99 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ════════════════════════════════════════
+    // PART 6b: Backtester — Walk-Forward Replay
+    // ════════════════════════════════════════
+    println!("\n━━━ BACKTESTING — Walk-Forward Replay ━━━\n");
+
+    let bt_config = backtester::BacktestConfig::default();
+    let mut backtest_results: Vec<backtester::BacktestResult> = Vec::new();
+
+    // Backtest stocks (rich features)
+    for stock in stocks::STOCK_LIST {
+        let points = database.get_stock_history(stock.symbol)?;
+        if points.len() < 300 { continue; }
+
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
+        let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
+
+        let samples = features::build_rich_features(
+            &prices, &volumes, &timestamps,
+            Some(&market_context), "stock",
+        );
+
+        if samples.len() < 100 { continue; }
+
+        let train_window = (samples.len() as f64 * 0.6) as usize;
+        let test_window = 30.min(samples.len() / 10);
+        let step = test_window;
+
+        if let Some(bt) = backtester::run_backtest(
+            stock.symbol, &samples, &prices,
+            train_window, test_window, step, &bt_config,
+        ) {
+            backtest_results.push(bt);
+        }
+    }
+
+    // Backtest crypto (basic features)
+    for coin_id in &coin_ids {
+        let points = database.get_coin_history(coin_id)?;
+        if points.len() < 200 { continue; }
+
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
+
+        let samples = gbt::build_extended_features(&prices, &volumes);
+        if samples.len() < 100 { continue; }
+
+        let train_window = (samples.len() as f64 * 0.6) as usize;
+        let test_window = 20.min(samples.len() / 10);
+        let step = test_window;
+
+        if let Some(bt) = backtester::run_backtest(
+            coin_id, &samples, &prices,
+            train_window, test_window, step, &bt_config,
+        ) {
+            backtest_results.push(bt);
+        }
+    }
+
+    if !backtest_results.is_empty() {
+        println!();
+        backtester::print_backtest_summary(&backtest_results);
+    }
+
+    // ════════════════════════════════════════
+    // PART 6c: Portfolio Allocation — $100K
+    // ════════════════════════════════════════
+    println!("\n━━━ PORTFOLIO ALLOCATION ━━━\n");
+
+    let mut portfolio_results: Vec<portfolio::PortfolioResult> = Vec::new();
+
+    // Run all three weighting schemes
+    let schemes = vec![
+        portfolio::PortfolioConfig {
+            weighting: portfolio::WeightingScheme::SharpeWeighted,
+            ..portfolio::PortfolioConfig::default()
+        },
+        portfolio::PortfolioConfig {
+            weighting: portfolio::WeightingScheme::EqualWeight,
+            ..portfolio::PortfolioConfig::default()
+        },
+        portfolio::PortfolioConfig {
+            weighting: portfolio::WeightingScheme::InverseVolatility,
+            ..portfolio::PortfolioConfig::default()
+        },
+    ];
+
+    for config in &schemes {
+        if let Some(pr) = portfolio::build_portfolio(&backtest_results, config) {
+            portfolio_results.push(pr);
+        }
+    }
+
+    // ════════════════════════════════════════
     // PART 7: Generate report
     // ════════════════════════════════════════
     println!("\n━━━ GENERATING REPORT ━━━\n");
@@ -510,6 +670,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &report_data, &stock_report_data,
         &ml_report_data, &gbt_report_data,
         &signals,
+        &backtest_results,
+        &portfolio_results,
         "report.html"
     )?;
     println!("  ✓ Report saved to: report.html\n");
@@ -543,6 +705,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Coins analysed:   {}", coin_ids.len());
     println!("  Stocks analysed:  {}", stock_report_data.len());
     println!("  Trading signals:  {}", signals.len());
+    println!("  Backtest results: {}", backtest_results.len());
+    println!("  Portfolios:       {}", portfolio_results.len());
     println!("  Feature count:    {} (rich) / 14 (basic)", features::feature_names().len());
     println!("  ML models:        LinReg + LogReg + GBT + LSTM");
     let cached = model_store::list_cached_models();
