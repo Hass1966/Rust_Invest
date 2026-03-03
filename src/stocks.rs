@@ -18,6 +18,15 @@ pub const STOCK_LIST: &[StockInfo] = &[
     StockInfo { symbol: "TSLA", name: "Tesla" },
 ];
 
+/// FX currency pairs — fetched from Yahoo Finance (ticker format: EURUSD=X)
+pub const FX_LIST: &[StockInfo] = &[
+    StockInfo { symbol: "EURUSD=X", name: "EUR/USD" },
+    StockInfo { symbol: "GBPUSD=X", name: "GBP/USD" },
+    StockInfo { symbol: "JPY=X",    name: "USD/JPY" },
+    StockInfo { symbol: "AUDUSD=X", name: "AUD/USD" },
+    StockInfo { symbol: "CHF=X",    name: "USD/CHF" },
+];
+
 // ── Yahoo Finance response types ──
 
 #[derive(Debug, Deserialize)]

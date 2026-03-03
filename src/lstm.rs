@@ -18,7 +18,33 @@ use candle_nn::rnn::{LSTM, LSTMConfig, LSTMState, RNN};
 use candle_nn::linear;
 use crate::ml::Sample;
 
-const DEVICE: Device = Device::Cpu;
+/// Select the best available device: Metal GPU if on Apple Silicon, else CPU.
+/// Called once at startup, cached for all LSTM operations.
+fn select_device() -> Device {
+    // Try Metal GPU first (Apple Silicon M1/M2/M3/M4)
+    #[cfg(feature = "metal")]
+    {
+        match Device::new_metal(0) {
+            Ok(device) => {
+                println!("    [LSTM] Using Metal GPU acceleration");
+                return device;
+            }
+            Err(e) => {
+                println!("    [LSTM] Metal GPU unavailable ({}), falling back to CPU", e);
+            }
+        }
+    }
+    println!("    [LSTM] Using CPU");
+    Device::Cpu
+}
+
+/// Lazy-initialised device — Metal GPU if available, else CPU.
+/// Using std::sync::OnceLock so we only probe Metal once.
+fn get_device() -> &'static Device {
+    use std::sync::OnceLock;
+    static DEVICE: OnceLock<Device> = OnceLock::new();
+    DEVICE.get_or_init(select_device)
+}
 
 /// LSTM configuration
 #[derive(Clone, Debug)]
@@ -56,7 +82,7 @@ impl LSTMModel {
     /// Create a new untrained LSTM
     pub fn new(config: LSTMModelConfig) -> Result<Self, candle_core::Error> {
         let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &DEVICE);
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, get_device());
 
         let lstm_config = LSTMConfig::default();
         let lstm = candle_nn::rnn::lstm(
@@ -130,12 +156,12 @@ impl LSTMModel {
                 let input = Tensor::from_vec(
                     input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
                     (batch_size, seq_len, n_features),
-                    &DEVICE,
+                    get_device(),
                 )?;
                 let labels = Tensor::from_vec(
                     labels_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
                     (batch_size, 1),
-                    &DEVICE,
+                    get_device(),
                 )?;
 
                 // Forward pass: process each timestep through LSTM
@@ -203,8 +229,8 @@ impl LSTMModel {
 
             // For the first step, create zero state
             if t == 0 {
-                let h0 = Tensor::zeros((batch_size, self.config.hidden_size), DType::F32, &DEVICE)?;
-                let c0 = Tensor::zeros((batch_size, self.config.hidden_size), DType::F32, &DEVICE)?;
+                let h0 = Tensor::zeros((batch_size, self.config.hidden_size), DType::F32, get_device())?;
+                let c0 = Tensor::zeros((batch_size, self.config.hidden_size), DType::F32, get_device())?;
                 let state = LSTMState::new(h0, c0);
                 let new_state = self.lstm.step(&step, &state)?;
                 final_h = Some(new_state);
@@ -242,12 +268,12 @@ impl LSTMModel {
         let input = Tensor::from_vec(
             input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
             (batch_size, seq_len, n_features),
-            &DEVICE,
+            get_device(),
         )?;
         let labels = Tensor::from_vec(
             labels_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
             (batch_size, 1),
-            &DEVICE,
+            get_device(),
         )?;
 
         let logits = self.forward_batch(&input)?;
@@ -273,7 +299,7 @@ impl LSTMModel {
         let input = Tensor::from_vec(
             input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
             (batch_size, seq_len, n_features),
-            &DEVICE,
+            get_device(),
         )?;
 
         let logits = self.forward_batch(&input)?;
@@ -303,7 +329,7 @@ impl LSTMModel {
         let input = Tensor::from_vec(
             input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
             (1, seq_len, n_features),
-            &DEVICE,
+            get_device(),
         )?;
 
         let logits = self.forward_batch(&input)?;

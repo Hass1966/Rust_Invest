@@ -20,6 +20,7 @@
 use crate::analysis;
 use crate::ml::{self, Sample, ModelMetrics, FEATURE_NAMES};
 use std::fmt;
+use rayon::prelude::*;
 
 // ════════════════════════════════════════
 // SECTION 1: Decision Tree Node
@@ -154,24 +155,23 @@ pub fn build_tree(
 
     let n_features = x[0].len();
 
-    let mut best_gain = 0.0_f64;
-    let mut best_feature = 0;
-    let mut best_threshold = 0.0;
-    let mut best_left: Vec<usize> = Vec::new();
-    let mut best_right: Vec<usize> = Vec::new();
-
     // Pre-compute totals for O(n) split evaluation
     let total_sum: f64 = indices.iter().map(|&i| y[i]).sum();
     let total_sq_sum: f64 = indices.iter().map(|&i| y[i] * y[i]).sum();
 
-    for feat in 0..n_features {
-        // Sort indices by feature value
+    // ── Parallel feature scan using rayon ──
+    // Each feature is evaluated independently, so we scan all 83 in parallel.
+    // Each thread returns its best (gain, feature_idx, threshold, left, right).
+    let best_split = (0..n_features).into_par_iter().filter_map(|feat| {
         let mut sorted: Vec<usize> = indices.to_vec();
         sorted.sort_by(|&a, &b| {
             x[a][feat].partial_cmp(&x[b][feat]).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Scan: maintain running left-partition sums
+        let mut local_best_gain = 0.0_f64;
+        let mut local_best_threshold = 0.0_f64;
+        let mut local_best_split_idx = 0_usize;
+
         let mut left_sum = 0.0_f64;
         let mut left_sq_sum = 0.0_f64;
         let mut left_count = 0_usize;
@@ -189,13 +189,11 @@ pub fn build_tree(
                 continue;
             }
 
-            // Skip duplicate feature values
             let next_idx = sorted[i + 1];
             if (x[idx][feat] - x[next_idx][feat]).abs() < 1e-12 {
                 continue;
             }
 
-            // Variance reduction = parent_loss - left_loss - right_loss
             let right_sum = total_sum - left_sum;
             let right_sq_sum = total_sq_sum - left_sq_sum;
 
@@ -205,19 +203,27 @@ pub fn build_tree(
 
             let gain = parent_loss - left_loss - right_loss;
 
-            if gain > best_gain {
-                best_gain = gain;
-                best_feature = feat;
-                best_threshold = (x[idx][feat] + x[next_idx][feat]) / 2.0;
-                best_left = sorted[..=i].to_vec();
-                best_right = sorted[i + 1..].to_vec();
+            if gain > local_best_gain {
+                local_best_gain = gain;
+                local_best_threshold = (x[idx][feat] + x[next_idx][feat]) / 2.0;
+                local_best_split_idx = i;
             }
         }
-    }
 
-    if best_gain <= 0.0 || best_left.is_empty() || best_right.is_empty() {
-        return Node::Leaf { value: mean_y, n_samples: n };
-    }
+        if local_best_gain > 0.0 {
+            // Rebuild the left/right partition from the sorted order
+            let left_indices: Vec<usize> = sorted[..=local_best_split_idx].to_vec();
+            let right_indices: Vec<usize> = sorted[local_best_split_idx + 1..].to_vec();
+            Some((local_best_gain, feat, local_best_threshold, left_indices, right_indices))
+        } else {
+            None
+        }
+    }).max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let (best_gain, best_feature, best_threshold, best_left, best_right) = match best_split {
+        Some((g, f, t, l, r)) if !l.is_empty() && !r.is_empty() => (g, f, t, l, r),
+        _ => return Node::Leaf { value: mean_y, n_samples: n },
+    };
 
     let left_node = build_tree(x, y, &best_left, config, depth + 1);
     let right_node = build_tree(x, y, &best_right, config, depth + 1);

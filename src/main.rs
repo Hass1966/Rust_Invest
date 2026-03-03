@@ -1,19 +1,4 @@
-mod models;
-mod crypto;
-mod stocks;
-mod db;
-mod analysis;
-mod report;
-mod charts;
-mod ml;
-mod gbt;
-mod ensemble;
-mod features;
-mod lstm;
-mod model_store;
-mod backtester;
-mod portfolio;
-
+use rust_invest::*;
 use chrono::Utc;
 use tokio::time::{sleep, Duration};
 use std::collections::HashMap;
@@ -67,9 +52,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ════════════════════════════════════════
     println!("━━━ LOADING HISTORICAL DATA (365 days) ━━━\n");
 
-    let top_coins = &coins[..5];
+    // Filter out stablecoins (tether/USDT) — no directional movement to predict
+    let top_coins: Vec<&models::CoinData> = coins.iter()
+        .filter(|c| c.id != "tether" && c.symbol.to_lowercase() != "usdt")
+        .take(5)
+        .collect();
 
-    for coin in top_coins {
+    for coin in &top_coins {
         let existing = database.count_crypto_history(&coin.id)?;
 
         if existing > 0 {
@@ -110,7 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ════════════════════════════════════════
     println!("━━━ TECHNICAL ANALYSIS ━━━\n");
 
-    let coin_ids = database.get_all_coin_ids()?;
+    let coin_ids: Vec<String> = database.get_all_coin_ids()?
+        .into_iter()
+        .filter(|id| id != "tether")
+        .collect();
 
     for coin_id in &coin_ids {
         let points = database.get_coin_history(coin_id)?;
@@ -253,6 +245,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ════════════════════════════════════════
+    // PART 5a-fx: FX Currency Pairs (Yahoo Finance)
+    // ════════════════════════════════════════
+    println!("\n━━━ FX CURRENCY PAIRS (Yahoo Finance) ━━━\n");
+
+    println!(
+        "{:<12} {:<12} {:>10}",
+        "Symbol", "Pair", "Rate"
+    );
+    println!("{}", "─".repeat(36));
+
+    for fx in stocks::FX_LIST {
+        match stocks::fetch_quote(&client, fx.symbol).await {
+            Ok(q) => {
+                println!("{:<12} {:<12} {:>10.4}", fx.symbol, fx.name, q.price);
+            }
+            Err(_) => {
+                println!("{:<12} {:<12} -- error --", fx.symbol, fx.name);
+            }
+        }
+    }
+
+    // ── Load FX history (5 years) ──
+    println!("\n━━━ LOADING FX HISTORY (5 years) ━━━\n");
+
+    for fx in stocks::FX_LIST {
+        let existing = database.count_fx_history(fx.symbol)?;
+
+        if existing > 1000 {
+            println!("  {} — already have {} records, skipping",
+                     fx.symbol, existing);
+            continue;
+        }
+
+        println!("  Fetching {} 5-year history...", fx.symbol);
+
+        match stocks::fetch_history(&client, fx.symbol, "5y").await {
+            Ok(points) => {
+                let mut count = 0;
+                for (ts, price, volume) in &points {
+                    let timestamp = chrono::DateTime::from_timestamp(*ts, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default();
+
+                    database.insert_fx_history(
+                        fx.symbol, *price,
+                        volume.map(|v| v as f64),
+                        &timestamp,
+                    )?;
+                    count += 1;
+                }
+                println!("    ✓ Stored {} data points for {}", count, fx.symbol);
+            }
+            Err(e) => {
+                println!("    ✗ Failed to fetch {}: {}", fx.symbol, e);
+            }
+        }
+    }
+
+    // ════════════════════════════════════════
     // PART 5b: Fetch MARKET INDICATORS (VIX, treasuries, sectors, gold, dollar)
     // ════════════════════════════════════════
     println!("\n━━━ LOADING MARKET INDICATORS (5 years) ━━━\n");
@@ -340,6 +391,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stock_report_data.push((stock.symbol.to_string(), points, result));
     }
 
+    // ── Analyse FX ──
+    println!("\n━━━ FX ANALYSIS ━━━\n");
+
+    let mut fx_report_data: Vec<(String, Vec<analysis::PricePoint>, analysis::AnalysisResult)> = Vec::new();
+
+    for fx in stocks::FX_LIST {
+        let points = database.get_fx_history(fx.symbol)?;
+        if points.len() < 30 { continue; }
+        let result = analysis::analyse_coin(fx.symbol, &points);
+        analysis::print_report(&result);
+
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let sma_7 = analysis::sma(&prices, 7);
+        let sma_30 = analysis::sma(&prices, 30);
+
+        if let (Some(&short), Some(&long)) = (sma_7.last(), sma_30.last()) {
+            let trend = if short > long {
+                "BULLISH (7-day SMA above 30-day SMA)"
+            } else {
+                "BEARISH (7-day SMA below 30-day SMA)"
+            };
+            println!("  Trend signal: {}\n", trend);
+        }
+
+        fx_report_data.push((fx.symbol.to_string(), points, result));
+    }
+
     // ════════════════════════════════════════
     // PART 5c: Machine Learning (original pipelines for backward compat)
     // ════════════════════════════════════════
@@ -351,7 +429,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show model cache status
     let n_features = features::feature_names().len();
-    let all_symbols: Vec<&str> = stocks::STOCK_LIST.iter().map(|s| s.symbol).collect();
+    let mut all_symbols: Vec<&str> = stocks::STOCK_LIST.iter().map(|s| s.symbol).collect();
+    all_symbols.extend(stocks::FX_LIST.iter().map(|s| s.symbol));
     model_store::print_cache_status(&all_symbols, n_features);
 
     let cached = model_store::list_cached_models();
@@ -421,6 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              features::feature_names().len());
 
     let mut signals: Vec<ensemble::TradingSignal> = Vec::new();
+    let mut all_diagnostics: Vec<diagnostics::SymbolDiagnostics> = Vec::new();
 
     // Stocks — use market context
     for stock in stocks::STOCK_LIST {
@@ -458,6 +538,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(wf) = ensemble::walk_forward_samples(
             stock.symbol, &samples, train_window, test_window, step,
         ) {
+            // ── Run diagnostics (per-fold metrics, confusion matrices, bias, importance) ──
+            if let Some(diag) = diagnostics::run_diagnostics(
+                stock.symbol, &samples, train_window, test_window, step,
+            ) {
+                diagnostics::print_diagnostics(&diag);
+                all_diagnostics.push(diag);
+            }
             // Save final-fold models to disk for next run
             // (The last fold's trained models are the most recent)
             let last_train_end = {
@@ -527,7 +614,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Crypto — no market context (only 1 year data, can't build 260-day lookback)
+    // FX — use rich features with market context (same as stocks, macro-driven)
+    for fx in stocks::FX_LIST {
+        let points = database.get_fx_history(fx.symbol)?;
+        if points.len() < 300 { continue; }
+
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
+        let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
+
+        let samples = features::build_rich_features(
+            &prices, &volumes, &timestamps,
+            Some(&market_context), "fx",
+        );
+
+        if samples.len() < 100 {
+            println!("  {} — only {} rich samples, skipping ensemble", fx.symbol, samples.len());
+            continue;
+        }
+
+        let train_window = (samples.len() as f64 * 0.6) as usize;
+        let test_window = 30.min(samples.len() / 10);
+        let step = test_window;
+
+        if let Some(wf) = ensemble::walk_forward_samples(
+            fx.symbol, &samples, train_window, test_window, step,
+        ) {
+            if let Some(diag) = diagnostics::run_diagnostics(
+                fx.symbol, &samples, train_window, test_window, step,
+            ) {
+                diagnostics::print_diagnostics(&diag);
+                all_diagnostics.push(diag);
+            }
+
+            let result = analysis::analyse_coin(fx.symbol, &points);
+            let sma_7 = analysis::sma(&prices, 7);
+            let sma_30 = analysis::sma(&prices, 30);
+            let trend = match (sma_7.last(), sma_30.last()) {
+                (Some(s), Some(l)) if s > l => "BULLISH",
+                _ => "BEARISH",
+            };
+
+            let signal = ensemble::ensemble_signal(
+                &wf,
+                result.current_price,
+                result.rsi_14.unwrap_or(50.0),
+                trend,
+            );
+            signals.push(signal);
+        }
+    }
+
+    // Crypto — enrich with crypto-specific features (Fear & Greed, funding rates, etc.)
+    // Collect prices/returns/dates for all crypto assets for cross-crypto features
+    let mut crypto_prices_map: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut crypto_returns_map: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut crypto_dates_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    for coin_id in &coin_ids {
+        let points = database.get_coin_history(coin_id)?;
+        if points.len() < 60 { continue; }
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let returns: Vec<f64> = prices.windows(2).map(|w| (w[1] - w[0]) / w[0]).collect();
+        let dates: Vec<String> = points.iter().map(|p| p.timestamp[..10].to_string()).collect();
+        crypto_prices_map.insert(coin_id.clone(), prices);
+        crypto_returns_map.insert(coin_id.clone(), returns);
+        crypto_dates_map.insert(coin_id.clone(), dates);
+    }
+
+    println!("\n━━━ CRYPTO-SPECIFIC FEATURE ENGINEERING ━━━\n");
+    let crypto_syms: Vec<&str> = coin_ids.iter().map(|s| s.as_str()).collect();
+    let crypto_enrichment = crypto_features::enrich_crypto_features(
+        &crypto_syms, &crypto_prices_map, &crypto_returns_map, &crypto_dates_map,
+    );
+
     for coin_id in &coin_ids {
         let points = database.get_coin_history(coin_id)?;
         if points.len() < 200 { continue; }
@@ -535,14 +695,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
 
-        // Use basic features for crypto (not enough history for rich)
-        let train_window = (prices.len() as f64 * 0.6) as usize;
-        let test_window = 20.min(prices.len() / 10);
+        // Build base technical features (14 features)
+        let base_samples = gbt::build_extended_features(&prices, &volumes);
+        if base_samples.is_empty() { continue; }
+
+        // Append 16 crypto-specific features to each sample
+        let enriched_samples: Vec<ml::Sample> = if let Some(crypto_rows) = crypto_enrichment.get(coin_id.as_str()) {
+            let base_start = 33_usize; // ml::build_features offset
+            base_samples.iter().enumerate().map(|(i, sample)| {
+                let mut features = sample.features.clone();
+                let date_idx = base_start + i;
+                if date_idx < crypto_rows.len() {
+                    let row = &crypto_rows[date_idx];
+                    for (_name, val) in row.to_feature_vec() {
+                        features.push(val);
+                    }
+                } else {
+                    // Pad with zeros if no matching crypto row
+                    for _ in 0..crypto_features::CryptoFeatureRow::feature_count() {
+                        features.push(0.0);
+                    }
+                }
+                ml::Sample { features, label: sample.label }
+            }).collect()
+        } else {
+            // No crypto enrichment available — pad with zeros
+            base_samples.iter().map(|sample| {
+                let mut features = sample.features.clone();
+                for _ in 0..crypto_features::CryptoFeatureRow::feature_count() {
+                    features.push(0.0);
+                }
+                ml::Sample { features, label: sample.label }
+            }).collect()
+        };
+
+        let n_feat = enriched_samples[0].features.len();
+        println!("  {} — {} samples × {} features (14 tech + 16 crypto-specific)",
+                 coin_id, enriched_samples.len(), n_feat);
+
+        let train_window = (enriched_samples.len() as f64 * 0.6) as usize;
+        let test_window = 20.min(enriched_samples.len() / 10);
         let step = test_window;
 
-        if let Some(wf) = ensemble::walk_forward(
-            coin_id, &prices, &volumes, None,
-            train_window, test_window, step,
+        // Run diagnostics on enriched samples
+        if enriched_samples.len() >= train_window + test_window + 10 {
+            if let Some(diag) = diagnostics::run_diagnostics(
+                coin_id, &enriched_samples, train_window, test_window, step,
+            ) {
+                diagnostics::print_diagnostics(&diag);
+                all_diagnostics.push(diag);
+            }
+        }
+
+        // Use walk_forward_samples (same as stocks) with enriched features
+        if let Some(wf) = ensemble::walk_forward_samples(
+            coin_id, &enriched_samples, train_window, test_window, step,
         ) {
             let result = analysis::analyse_coin(coin_id, &points);
             let sma_7 = analysis::sma(&prices, 7);
@@ -604,7 +811,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Backtest crypto (basic features)
+    // Backtest FX (rich features, same as stocks)
+    for fx in stocks::FX_LIST {
+        let points = database.get_fx_history(fx.symbol)?;
+        if points.len() < 300 { continue; }
+
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
+        let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
+
+        let samples = features::build_rich_features(
+            &prices, &volumes, &timestamps,
+            Some(&market_context), "fx",
+        );
+
+        if samples.len() < 100 { continue; }
+
+        let train_window = (samples.len() as f64 * 0.6) as usize;
+        let test_window = 30.min(samples.len() / 10);
+        let step = test_window;
+
+        if let Some(bt) = backtester::run_backtest(
+            fx.symbol, &samples, &prices,
+            train_window, test_window, step, &bt_config,
+        ) {
+            backtest_results.push(bt);
+        }
+    }
+
+    // Backtest crypto (enriched features: 14 tech + 16 crypto-specific)
     for coin_id in &coin_ids {
         let points = database.get_coin_history(coin_id)?;
         if points.len() < 200 { continue; }
@@ -612,15 +847,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
 
-        let samples = gbt::build_extended_features(&prices, &volumes);
-        if samples.len() < 100 { continue; }
+        let base_samples = gbt::build_extended_features(&prices, &volumes);
+        if base_samples.is_empty() { continue; }
 
-        let train_window = (samples.len() as f64 * 0.6) as usize;
-        let test_window = 20.min(samples.len() / 10);
+        // Append crypto-specific features (same enrichment as ensemble above)
+        let enriched_samples: Vec<ml::Sample> = if let Some(crypto_rows) = crypto_enrichment.get(coin_id.as_str()) {
+            let base_start = 33_usize;
+            base_samples.iter().enumerate().map(|(i, sample)| {
+                let mut features = sample.features.clone();
+                let date_idx = base_start + i;
+                if date_idx < crypto_rows.len() {
+                    let row = &crypto_rows[date_idx];
+                    for (_name, val) in row.to_feature_vec() {
+                        features.push(val);
+                    }
+                } else {
+                    for _ in 0..crypto_features::CryptoFeatureRow::feature_count() {
+                        features.push(0.0);
+                    }
+                }
+                ml::Sample { features, label: sample.label }
+            }).collect()
+        } else {
+            base_samples.iter().map(|sample| {
+                let mut features = sample.features.clone();
+                for _ in 0..crypto_features::CryptoFeatureRow::feature_count() {
+                    features.push(0.0);
+                }
+                ml::Sample { features, label: sample.label }
+            }).collect()
+        };
+
+        if enriched_samples.len() < 100 { continue; }
+
+        let train_window = (enriched_samples.len() as f64 * 0.6) as usize;
+        let test_window = 20.min(enriched_samples.len() / 10);
         let step = test_window;
 
         if let Some(bt) = backtester::run_backtest(
-            coin_id, &samples, &prices,
+            coin_id, &enriched_samples, &prices,
             train_window, test_window, step, &bt_config,
         ) {
             backtest_results.push(bt);
@@ -667,11 +932,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n━━━ GENERATING REPORT ━━━\n");
 
     report::generate_html_report(
-        &report_data, &stock_report_data,
+        &report_data, &stock_report_data, &fx_report_data,
         &ml_report_data, &gbt_report_data,
         &signals,
         &backtest_results,
         &portfolio_results,
+        &all_diagnostics,
         "report.html"
     )?;
     println!("  ✓ Report saved to: report.html\n");
@@ -704,6 +970,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Historical data:  {} total records", total);
     println!("  Coins analysed:   {}", coin_ids.len());
     println!("  Stocks analysed:  {}", stock_report_data.len());
+    println!("  FX pairs:         {}", fx_report_data.len());
     println!("  Trading signals:  {}", signals.len());
     println!("  Backtest results: {}", backtest_results.len());
     println!("  Portfolios:       {}", portfolio_results.len());

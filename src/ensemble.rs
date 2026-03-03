@@ -150,7 +150,14 @@ pub fn walk_forward_samples(
             last_gbt_prob = gbt.predict_proba(&last_sample.features).clamp(0.15, 0.85);
         }
 
-        let feat_names = crate::features::feature_names();
+        let feat_names: Vec<String> = {
+            let rich = crate::features::feature_names();
+            if n_features == rich.len() {
+                rich
+            } else {
+                (0..n_features).map(|i| format!("Feature_{}", i)).collect()
+            }
+        };
         let feat_refs: Vec<&str> = feat_names.iter().map(|s| s.as_str()).collect();
         last_gbt_importance = gbt.feature_importance(&feat_refs);
 

@@ -11,17 +11,20 @@ use crate::charts;
 use crate::ml;
 use crate::gbt;
 use crate::ensemble;
+use crate::diagnostics;
 use crate::backtester;
 use crate::portfolio;
 
 pub fn generate_html_report(
     coin_data: &[(String, Vec<PricePoint>, AnalysisResult)],
     stock_data: &[(String, Vec<PricePoint>, AnalysisResult)],
-    ml_results: &[ml::PipelineResult],
+    fx_data: &[(String, Vec<PricePoint>, AnalysisResult)],
+    _ml_results: &[ml::PipelineResult],
     gbt_results: &[gbt::ExtendedPipelineResult],
     signals: &[ensemble::TradingSignal],
     backtest_results: &[backtester::BacktestResult],
     portfolio_results: &[portfolio::PortfolioResult],
+    diagnostics_data: &[diagnostics::SymbolDiagnostics],
     output_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut html = String::new();
@@ -60,6 +63,11 @@ pub fn generate_html_report(
         html.push_str("</section>\n");
     }
 
+    // ── DIAGNOSTICS ──
+    if !diagnostics_data.is_empty() {
+        html.push_str(&diagnostics::diagnostics_html(diagnostics_data));
+    }
+
     // ── CRYPTO ANALYSIS ──
     if !coin_data.is_empty() {
         html.push_str("<section id='crypto'>\n");
@@ -94,6 +102,23 @@ pub fn generate_html_report(
         html.push_str("</section>\n");
     }
 
+    // ── FX ANALYSIS ──
+    if !fx_data.is_empty() {
+        html.push_str("<section id='fx'>\n");
+        html.push_str("<h2 class='section-title'><span>//</span> FX Currency Pairs</h2>\n");
+        for (name, points, result) in fx_data {
+            let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+            let bands = analysis::bollinger_bands(&prices, 20, 2.0);
+            let chart = charts::bollinger_chart_svg(&prices, &bands, name);
+            html.push_str(&format!(
+                "<div class='card'><h3>{}</h3><p>Rate: {:.4} | RSI: {:.1} | Vol: {:.4}</p>{}</div>\n",
+                name, result.current_price,
+                result.rsi_14.unwrap_or(0.0), result.std_dev, chart
+            ));
+        }
+        html.push_str("</section>\n");
+    }
+
     // ── ML RESULTS ──
     if !gbt_results.is_empty() {
         html.push_str("<section id='ml'>\n");
@@ -118,7 +143,7 @@ pub fn generate_html_report(
     }
 
     // ── CORRELATION MATRIX ──
-    html.push_str(&correlation_section(stock_data, coin_data));
+    html.push_str(&correlation_section(stock_data, coin_data, fx_data));
 
     // ── GLOSSARY ──
     html.push_str(&report_glossary());
@@ -332,7 +357,9 @@ fn report_nav() -> String {
          <a href='#overview'>Overview</a>\
          <a href='#backtest'>Backtest</a>\
          <a href='#portfolio'>Portfolio</a>\
+         <a href='#fx'>FX</a>\
          <a href='#signals'>Signals</a>\
+         <a href='#diagnostics'>Diagnostics</a>\
          <a href='#glossary'>Glossary</a>\
          </div></nav>\n"
     )
@@ -342,7 +369,7 @@ fn report_hero() -> String {
     format!(
         "<section id='top' style='text-align:center;padding:80px 0 32px;'>\n\
          <h1>Rust<span>_</span>Invest</h1>\n\
-         <p class='subtitle'>AI-Powered Trading Intelligence — 4 Model Ensemble × 15 Assets</p>\n\
+         <p class='subtitle'>AI-Powered Trading Intelligence — 4 Model Ensemble × 20 Assets (Stocks + FX + Crypto)</p>\n\
          <p class='meta'>Walk-Forward Backtest Report &bull; Generated {}</p>\n\
          </section>\n",
         Utc::now().format("%Y-%m-%d %H:%M UTC")
@@ -387,9 +414,11 @@ fn report_kpis(results: &[backtester::BacktestResult]) -> String {
 fn correlation_section(
     stock_data: &[(String, Vec<PricePoint>, AnalysisResult)],
     coin_data: &[(String, Vec<PricePoint>, AnalysisResult)],
+    fx_data: &[(String, Vec<PricePoint>, AnalysisResult)],
 ) -> String {
     let all_data: Vec<(&str, &[PricePoint])> = stock_data.iter()
         .map(|(n, p, _)| (n.as_str(), p.as_slice()))
+        .chain(fx_data.iter().map(|(n, p, _)| (n.as_str(), p.as_slice())))
         .chain(coin_data.iter().map(|(n, p, _)| (n.as_str(), p.as_slice())))
         .collect();
 

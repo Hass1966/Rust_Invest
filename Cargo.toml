@@ -1,15 +1,42 @@
 [package]
-name = "Rust_Invest"
+name = "rust_invest"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "rust_invest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rust_invest"
+path = "src/main.rs"
+
+[[bin]]
+name = "train"
+path = "src/bin/train.rs"
+
+[[bin]]
+name = "signal"
+path = "src/bin/signal.rs"
+
 [dependencies]
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
-candle-core = "0.9"
-candle-nn = "0.9"
+
+# Candle ML framework — with Metal GPU acceleration for Apple Silicon
+# The "metal" feature routes tensor ops (matmul, LSTM forward/backward)
+# through Apple's Metal GPU shaders instead of CPU.
+# The "accelerate" feature uses Apple's Accelerate framework (vecLib/BLAS)
+# for optimised CPU linear algebra when tensors are on CPU.
+candle-core = { version = "0.9", features = ["metal", "accelerate"] }
+candle-nn = { version = "0.9" }
 safetensors = "0.4"
+
+# Rayon — data-parallel iterator library for CPU-bound work.
+# Used to parallelise GBT tree building (feature-scan loop) and
+# diagnostic walk-forward folds across CPU cores.
+rayon = "1.10"

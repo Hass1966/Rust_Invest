@@ -78,7 +78,18 @@ impl Database {
                 UNIQUE(symbol, timestamp)
             );
             CREATE INDEX IF NOT EXISTS idx_market_history
-                ON market_history(symbol, timestamp);"
+                ON market_history(symbol, timestamp);
+
+            CREATE TABLE IF NOT EXISTS fx_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol      TEXT NOT NULL,
+                price       REAL NOT NULL,
+                volume      REAL,
+                timestamp   TEXT NOT NULL,
+                UNIQUE(symbol, timestamp)
+            );
+            CREATE INDEX IF NOT EXISTS idx_fx_history
+                ON fx_history(symbol, timestamp);"
         )?;
         Ok(())
     }
@@ -308,5 +319,52 @@ impl Database {
             .collect();
 
         Ok(prices)
+    }
+
+    // ── FX currency pair history ──
+
+    pub fn insert_fx_history(
+        &self,
+        symbol: &str,
+        price: f64,
+        volume: Option<f64>,
+        timestamp: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO fx_history
+                (symbol, price, volume, timestamp)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![symbol, price, volume, timestamp],
+        )?;
+        Ok(())
+    }
+
+    pub fn count_fx_history(&self, symbol: &str) -> Result<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM fx_history WHERE symbol = ?1",
+            params![symbol],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn get_fx_history(&self, symbol: &str) -> Result<Vec<crate::analysis::PricePoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, price, volume
+             FROM fx_history
+             WHERE symbol = ?1
+             ORDER BY timestamp ASC"
+        )?;
+
+        let points = stmt.query_map(params![symbol], |row| {
+            Ok(crate::analysis::PricePoint {
+                timestamp: row.get(0)?,
+                price: row.get(1)?,
+                volume: row.get(2)?,
+            })
+        })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(points)
     }
 }
