@@ -2,6 +2,7 @@
 name = "rust_invest"
 version = "0.1.0"
 edition = "2021"
+default-run = "rust_invest"
 
 [lib]
 name = "rust_invest"
