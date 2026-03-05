@@ -427,6 +427,113 @@ pub fn list_cached_models() -> Vec<String> {
     models
 }
 
+// ════════════════════════════════════════
+// Model Manifest — top-level summary of all models
+// ════════════════════════════════════════
+
+const MANIFEST_PATH: &str = "models/manifest.json";
+
+/// Summary entry for one asset in the manifest
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ManifestAssetEntry {
+    pub linreg_accuracy: Option<f64>,
+    pub logreg_accuracy: Option<f64>,
+    pub gbt_accuracy: Option<f64>,
+    pub ensemble_accuracy: Option<f64>,
+    pub last_trained: Option<String>,
+    pub weights_present: bool,
+}
+
+/// Top-level model manifest
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ModelManifest {
+    pub version: u32,
+    pub generated_at: String,
+    pub assets: std::collections::HashMap<String, ManifestAssetEntry>,
+}
+
+/// Generate model manifest by scanning the models/ directory
+pub fn generate_manifest(symbols: &[&str]) -> ModelManifest {
+    ensure_model_dir();
+    let mut assets = std::collections::HashMap::new();
+
+    for symbol in symbols {
+        let linreg_path = model_path(symbol, "linreg");
+        let logreg_path = model_path(symbol, "logreg");
+        let gbt_path_str = model_path(symbol, "gbt");
+
+        let mut linreg_acc = None;
+        let mut logreg_acc = None;
+        let mut gbt_acc = None;
+        let mut last_trained = None;
+        let mut weights_present = false;
+
+        if let Ok(contents) = fs::read_to_string(&linreg_path) {
+            if let Ok(saved) = serde_json::from_str::<SavedWeights>(&contents) {
+                linreg_acc = Some(saved.meta.walk_forward_accuracy);
+                last_trained = Some(saved.meta.trained_at.clone());
+                weights_present = true;
+            }
+        }
+        if let Ok(contents) = fs::read_to_string(&logreg_path) {
+            if let Ok(saved) = serde_json::from_str::<SavedWeights>(&contents) {
+                logreg_acc = Some(saved.meta.walk_forward_accuracy);
+                if last_trained.is_none() {
+                    last_trained = Some(saved.meta.trained_at.clone());
+                }
+                weights_present = true;
+            }
+        }
+        if let Ok(contents) = fs::read_to_string(&gbt_path_str) {
+            if let Ok(saved) = serde_json::from_str::<SavedGBT>(&contents) {
+                gbt_acc = Some(saved.meta.walk_forward_accuracy);
+                if last_trained.is_none() || saved.meta.trained_at > *last_trained.as_ref().unwrap() {
+                    last_trained = Some(saved.meta.trained_at.clone());
+                }
+                weights_present = true;
+            }
+        }
+
+        let ensemble_accuracy = match (linreg_acc, logreg_acc, gbt_acc) {
+            (Some(a), Some(b), Some(c)) => Some((a + b + c) / 3.0),
+            _ => None,
+        };
+
+        if weights_present {
+            assets.insert(symbol.to_string(), ManifestAssetEntry {
+                linreg_accuracy: linreg_acc,
+                logreg_accuracy: logreg_acc,
+                gbt_accuracy: gbt_acc,
+                ensemble_accuracy,
+                last_trained,
+                weights_present,
+            });
+        }
+    }
+
+    let manifest = ModelManifest {
+        version: MODEL_VERSION,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        assets,
+    };
+
+    // Write to disk
+    if let Ok(json) = serde_json::to_string_pretty(&manifest) {
+        let _ = fs::write(MANIFEST_PATH, json);
+        println!("  [Manifest] Generated {} with {} assets", MANIFEST_PATH, manifest.assets.len());
+    }
+
+    manifest
+}
+
+/// Load manifest from disk
+pub fn load_manifest() -> Result<ModelManifest, String> {
+    let contents = fs::read_to_string(MANIFEST_PATH)
+        .map_err(|e| format!("Failed to read manifest: {}", e))?;
+    serde_json::from_str(&contents)
+        .map_err(|e| format!("Failed to parse manifest: {}", e))
+}
+
 /// Clear all cached models (force retrain)
 pub fn clear_cache() -> usize {
     let mut count = 0;

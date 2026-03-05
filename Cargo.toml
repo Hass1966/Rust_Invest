@@ -20,6 +20,10 @@ path = "src/bin/train.rs"
 name = "signal"
 path = "src/bin/signal.rs"
 
+[[bin]]
+name = "serve"
+path = "src/bin/serve.rs"
+
 [dependencies]
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 tokio = { version = "1", features = ["full"] }
@@ -41,3 +45,7 @@ safetensors = "0.4"
 # Used to parallelise GBT tree building (feature-scan loop) and
 # diagnostic walk-forward folds across CPU cores.
 rayon = "1.10"
+
+# Axum web framework for the serve binary (API server)
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }

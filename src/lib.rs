@@ -19,3 +19,5 @@ pub mod model_store;
 pub mod backtester;
 pub mod portfolio;
 pub mod crypto_features;
+pub mod config;
+pub mod enriched_signals;

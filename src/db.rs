@@ -89,7 +89,28 @@ impl Database {
                 UNIQUE(symbol, timestamp)
             );
             CREATE INDEX IF NOT EXISTS idx_fx_history
-                ON fx_history(symbol, timestamp);"
+                ON fx_history(symbol, timestamp);
+
+            CREATE TABLE IF NOT EXISTS signal_snapshots (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                asset           TEXT NOT NULL,
+                asset_class     TEXT NOT NULL,
+                signal          TEXT NOT NULL,
+                confidence      REAL,
+                probability_up  REAL,
+                model_agreement TEXT,
+                rsi             REAL,
+                trend           TEXT,
+                price           REAL,
+                model_version   INTEGER NOT NULL,
+                quality         TEXT,
+                reason          TEXT,
+                suggested_action TEXT,
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_snapshots_asset_time
+                ON signal_snapshots(asset, timestamp);"
         )?;
         Ok(())
     }
@@ -367,4 +388,88 @@ impl Database {
 
         Ok(points)
     }
+
+    // ── Signal snapshots ──
+
+    pub fn insert_signal_snapshot(
+        &self,
+        signal: &crate::enriched_signals::EnrichedSignal,
+        model_version: u32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO signal_snapshots
+                (timestamp, asset, asset_class, signal, confidence,
+                 probability_up, model_agreement, rsi, trend, price,
+                 model_version, quality, reason, suggested_action)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                signal.timestamp,
+                signal.asset,
+                signal.asset_class,
+                signal.signal,
+                signal.technical.confidence,
+                signal.technical.probability_up,
+                signal.technical.model_agreement,
+                signal.technical.rsi,
+                signal.technical.trend,
+                signal.price,
+                model_version,
+                signal.technical.quality,
+                signal.reason,
+                signal.suggested_action,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_signal_history(&self, asset: &str, limit: usize) -> Result<Vec<SignalSnapshotRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, asset, asset_class, signal, confidence,
+                    probability_up, model_agreement, rsi, trend, price,
+                    quality, reason, suggested_action
+             FROM signal_snapshots
+             WHERE asset = ?1
+             ORDER BY timestamp DESC
+             LIMIT ?2"
+        )?;
+
+        let rows = stmt.query_map(params![asset, limit as i64], |row| {
+            Ok(SignalSnapshotRow {
+                timestamp: row.get(0)?,
+                asset: row.get(1)?,
+                asset_class: row.get(2)?,
+                signal: row.get(3)?,
+                confidence: row.get(4)?,
+                probability_up: row.get(5)?,
+                model_agreement: row.get(6)?,
+                rsi: row.get(7)?,
+                trend: row.get(8)?,
+                price: row.get(9)?,
+                quality: row.get(10)?,
+                reason: row.get(11)?,
+                suggested_action: row.get(12)?,
+            })
+        })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(rows)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SignalSnapshotRow {
+    pub timestamp: String,
+    pub asset: String,
+    pub asset_class: String,
+    pub signal: String,
+    pub confidence: Option<f64>,
+    pub probability_up: Option<f64>,
+    pub model_agreement: Option<String>,
+    pub rsi: Option<f64>,
+    pub trend: Option<String>,
+    pub price: Option<f64>,
+    pub quality: Option<String>,
+    pub reason: Option<String>,
+    pub suggested_action: Option<String>,
 }
