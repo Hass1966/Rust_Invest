@@ -110,7 +110,59 @@ impl Database {
                 created_at      TEXT DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_snapshots_asset_time
-                ON signal_snapshots(asset, timestamp);"
+                ON signal_snapshots(asset, timestamp);
+
+            CREATE TABLE IF NOT EXISTS backtest_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_version INTEGER NOT NULL,
+                asset TEXT NOT NULL,
+                asset_class TEXT NOT NULL,
+                total_return REAL,
+                buy_hold_return REAL,
+                excess_return REAL,
+                annualised_return REAL,
+                sharpe_ratio REAL,
+                max_drawdown REAL,
+                volatility REAL,
+                win_rate REAL,
+                profit_factor REAL,
+                expectancy REAL,
+                days_in_market INTEGER,
+                total_days INTEGER,
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(model_version, asset)
+            );
+
+            CREATE TABLE IF NOT EXISTS portfolio_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_version INTEGER NOT NULL,
+                strategy TEXT NOT NULL,
+                starting_capital REAL NOT NULL,
+                final_value REAL,
+                total_return REAL,
+                annualised_return REAL,
+                benchmark_return REAL,
+                excess_return REAL,
+                sharpe_ratio REAL,
+                max_drawdown REAL,
+                volatility REAL,
+                n_assets INTEGER,
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(model_version, strategy)
+            );
+
+            CREATE TABLE IF NOT EXISTS portfolio_allocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_version INTEGER NOT NULL,
+                strategy TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                weight REAL,
+                allocated_amount REAL,
+                asset_return REAL,
+                contribution REAL,
+                sharpe REAL,
+                UNIQUE(model_version, strategy, asset)
+            );"
         )?;
         Ok(())
     }
@@ -455,6 +507,202 @@ impl Database {
 
         Ok(rows)
     }
+
+    // ── Backtest & portfolio persistence ──
+
+    pub fn insert_backtest_result(
+        &self,
+        model_version: u32,
+        asset: &str,
+        asset_class: &str,
+        r: &crate::backtester::BacktestResult,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO backtest_results
+                (model_version, asset, asset_class, total_return, buy_hold_return,
+                 excess_return, annualised_return, sharpe_ratio, max_drawdown,
+                 volatility, win_rate, profit_factor, expectancy,
+                 days_in_market, total_days)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                model_version, asset, asset_class,
+                r.total_return_pct, r.benchmark_return_pct,
+                r.excess_return_pct, r.annualised_return_pct,
+                r.sharpe_ratio, r.max_drawdown_pct, r.volatility_pct,
+                r.win_rate, r.profit_factor, r.expectancy,
+                r.days_in_market as i64, r.total_days as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_portfolio_result(
+        &self,
+        model_version: u32,
+        strategy: &str,
+        starting_capital: f64,
+        r: &crate::portfolio::PortfolioResult,
+    ) -> Result<()> {
+        let final_value = starting_capital * (1.0 + r.total_return_pct / 100.0);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO portfolio_results
+                (model_version, strategy, starting_capital, final_value,
+                 total_return, annualised_return, benchmark_return, excess_return,
+                 sharpe_ratio, max_drawdown, volatility, n_assets)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                model_version, strategy, starting_capital, final_value,
+                r.total_return_pct, r.annualised_return_pct,
+                r.benchmark_return_pct, r.excess_return_pct,
+                r.sharpe_ratio, r.max_drawdown_pct, r.volatility_pct,
+                r.n_assets as i64,
+            ],
+        )?;
+
+        // Insert allocations
+        for a in &r.allocations {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO portfolio_allocations
+                    (model_version, strategy, asset, weight, allocated_amount,
+                     asset_return, contribution, sharpe)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    model_version, strategy, a.symbol,
+                    a.weight, a.capital, a.asset_return, a.contribution, a.sharpe,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_backtest_results(&self, model_version: u32) -> Result<Vec<BacktestRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT asset, asset_class, total_return, buy_hold_return, excess_return,
+                    annualised_return, sharpe_ratio, max_drawdown, volatility,
+                    win_rate, profit_factor, expectancy, days_in_market, total_days
+             FROM backtest_results
+             WHERE model_version = ?1
+             ORDER BY asset"
+        )?;
+        let rows = stmt.query_map(params![model_version], |row| {
+            Ok(BacktestRow {
+                asset: row.get(0)?,
+                asset_class: row.get(1)?,
+                total_return: row.get(2)?,
+                buy_hold_return: row.get(3)?,
+                excess_return: row.get(4)?,
+                annualised_return: row.get(5)?,
+                sharpe_ratio: row.get(6)?,
+                max_drawdown: row.get(7)?,
+                volatility: row.get(8)?,
+                win_rate: row.get(9)?,
+                profit_factor: row.get(10)?,
+                expectancy: row.get(11)?,
+                days_in_market: row.get(12)?,
+                total_days: row.get(13)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn get_portfolio_results(&self, model_version: u32) -> Result<Vec<PortfolioRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT strategy, starting_capital, final_value, total_return,
+                    annualised_return, benchmark_return, excess_return,
+                    sharpe_ratio, max_drawdown, volatility, n_assets
+             FROM portfolio_results
+             WHERE model_version = ?1
+             ORDER BY strategy"
+        )?;
+        let rows = stmt.query_map(params![model_version], |row| {
+            Ok(PortfolioRow {
+                strategy: row.get(0)?,
+                starting_capital: row.get(1)?,
+                final_value: row.get(2)?,
+                total_return: row.get(3)?,
+                annualised_return: row.get(4)?,
+                benchmark_return: row.get(5)?,
+                excess_return: row.get(6)?,
+                sharpe_ratio: row.get(7)?,
+                max_drawdown: row.get(8)?,
+                volatility: row.get(9)?,
+                n_assets: row.get(10)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn get_portfolio_allocations(&self, model_version: u32, strategy: &str) -> Result<Vec<AllocationRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT asset, weight, allocated_amount, asset_return, contribution, sharpe
+             FROM portfolio_allocations
+             WHERE model_version = ?1 AND strategy = ?2
+             ORDER BY contribution DESC"
+        )?;
+        let rows = stmt.query_map(params![model_version, strategy], |row| {
+            Ok(AllocationRow {
+                asset: row.get(0)?,
+                weight: row.get(1)?,
+                allocated_amount: row.get(2)?,
+                asset_return: row.get(3)?,
+                contribution: row.get(4)?,
+                sharpe: row.get(5)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn has_backtest_data(&self, model_version: u32) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM backtest_results WHERE model_version = ?1",
+            params![model_version],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BacktestRow {
+    pub asset: String,
+    pub asset_class: String,
+    pub total_return: f64,
+    pub buy_hold_return: f64,
+    pub excess_return: f64,
+    pub annualised_return: f64,
+    pub sharpe_ratio: f64,
+    pub max_drawdown: f64,
+    pub volatility: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub expectancy: f64,
+    pub days_in_market: i64,
+    pub total_days: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PortfolioRow {
+    pub strategy: String,
+    pub starting_capital: f64,
+    pub final_value: f64,
+    pub total_return: f64,
+    pub annualised_return: f64,
+    pub benchmark_return: f64,
+    pub excess_return: f64,
+    pub sharpe_ratio: f64,
+    pub max_drawdown: f64,
+    pub volatility: f64,
+    pub n_assets: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AllocationRow {
+    pub asset: String,
+    pub weight: f64,
+    pub allocated_amount: f64,
+    pub asset_return: f64,
+    pub contribution: f64,
+    pub sharpe: f64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

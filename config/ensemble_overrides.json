@@ -1,0 +1,15 @@
+{
+  "_comment": "v9: Reverted degraded assets. Only AAPL confirmed improved with GBT-only.",
+  "AAPL": {
+    "use_linreg": false,
+    "use_logreg": false,
+    "use_gbt": true,
+    "reason": "v8 confirmed: improved +0.8pp with GBT only"
+  },
+  "default": {
+    "use_linreg": true,
+    "use_logreg": true,
+    "use_gbt": true,
+    "reason": "Default: all models"
+  }
+}

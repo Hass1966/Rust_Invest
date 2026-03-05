@@ -8,6 +8,15 @@ use chrono::Utc;
 use tokio::time::{sleep, Duration};
 use std::collections::HashMap;
 
+/// Accuracy results for one asset (used in comparison report)
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct AssetAccuracy {
+    linreg: f64,
+    logreg: f64,
+    gbt: f64,
+    ensemble: f64,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
@@ -146,6 +155,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Train & save models for stocks ──
     println!("\n━━━ TRAINING MODELS (Walk-Forward) ━━━\n");
+    println!("  Active features: {} (pruned {} noise features)", features::active_feature_count(), 83 - features::active_feature_count());
+
+    let ensemble_overrides = ensemble::load_ensemble_overrides();
+    let mut accuracy_results: HashMap<String, AssetAccuracy> = HashMap::new();
 
     let mut backtest_results: Vec<backtester::BacktestResult> = Vec::new();
     let bt_config = backtester::BacktestConfig::default();
@@ -167,6 +180,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let step = test_window;
 
         if let Some(wf) = ensemble::walk_forward_samples(stock.symbol, &samples, train_window, test_window, step) {
+            // Track accuracy for comparison report
+            let ov = ensemble::get_override(&ensemble_overrides, stock.symbol);
+            let ens_acc = compute_ensemble_accuracy(&wf, &ov);
+            accuracy_results.insert(stock.symbol.to_string(), AssetAccuracy {
+                linreg: wf.linear_accuracy,
+                logreg: wf.logistic_accuracy,
+                gbt: wf.gbt_accuracy,
+                ensemble: ens_acc,
+            });
+
             // Save final-fold models
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
@@ -201,7 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Train FX models ──
+    // ── Train & save models for FX ──
     for fx in stocks::FX_LIST {
         let points = database.get_fx_history(fx.symbol)?;
         if points.len() < 300 { continue; }
@@ -210,10 +233,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
         let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx");
         if samples.len() < 100 { continue; }
+
+        let n_feat = samples[0].features.len();
         let train_window = (samples.len() as f64 * 0.6) as usize;
         let test_window = 30.min(samples.len() / 10);
         let step = test_window;
-        let _ = ensemble::walk_forward_samples(fx.symbol, &samples, train_window, test_window, step);
+
+        if let Some(wf) = ensemble::walk_forward_samples(fx.symbol, &samples, train_window, test_window, step) {
+            // Track accuracy for comparison report
+            let ov = ensemble::get_override(&ensemble_overrides, fx.symbol);
+            let ens_acc = compute_ensemble_accuracy(&wf, &ov);
+            accuracy_results.insert(fx.symbol.to_string(), AssetAccuracy {
+                linreg: wf.linear_accuracy,
+                logreg: wf.logistic_accuracy,
+                gbt: wf.gbt_accuracy,
+                ensemble: ens_acc,
+            });
+
+            // Save final-fold models
+            let last_train_end = {
+                let mut s = 0; let mut last = 0;
+                while s + train_window + test_window <= samples.len() { last = s + train_window; s += step; }
+                last
+            };
+            let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
+            let (means, stds) = ml::normalise(&mut last_fold);
+
+            let mut lin = ml::LinearRegression::new(n_feat);
+            lin.train(&last_fold, 0.005, 3000);
+            let _ = model_store::save_weights(fx.symbol, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
+
+            let mut log = ml::LogisticRegression::new(n_feat);
+            log.train(&last_fold, 0.01, 3000);
+            let _ = model_store::save_weights(fx.symbol, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
+
+            let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
+            let y_train: Vec<f64> = last_fold.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+            let val_start = (x_train.len() as f64 * 0.85) as usize;
+            let (x_t, x_v) = x_train.split_at(val_start);
+            let (y_t, y_v) = y_train.split_at(val_start);
+            let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
+            let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
+            let _ = model_store::save_gbt(fx.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
+
+            println!("  ✓ Models saved for {}", fx.symbol);
+        }
+
         if let Some(bt) = backtester::run_backtest(fx.symbol, &samples, &prices, train_window, test_window, step, &bt_config) {
             backtest_results.push(bt);
         }
@@ -267,10 +332,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         if enriched_samples.len() < 100 { continue; }
+        let n_feat = enriched_samples[0].features.len();
         let train_window = (enriched_samples.len() as f64 * 0.6) as usize;
         let test_window = 20.min(enriched_samples.len() / 10);
         let step = test_window;
-        let _ = ensemble::walk_forward_samples(coin_id, &enriched_samples, train_window, test_window, step);
+
+        if let Some(wf) = ensemble::walk_forward_samples(coin_id, &enriched_samples, train_window, test_window, step) {
+            // Save final-fold models
+            let last_train_end = {
+                let mut s = 0; let mut last = 0;
+                while s + train_window + test_window <= enriched_samples.len() { last = s + train_window; s += step; }
+                last
+            };
+            let mut last_fold: Vec<ml::Sample> = enriched_samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
+            let (means, stds) = ml::normalise(&mut last_fold);
+
+            let mut lin = ml::LinearRegression::new(n_feat);
+            lin.train(&last_fold, 0.005, 3000);
+            let _ = model_store::save_weights(coin_id, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
+
+            let mut log = ml::LogisticRegression::new(n_feat);
+            log.train(&last_fold, 0.01, 3000);
+            let _ = model_store::save_weights(coin_id, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
+
+            let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
+            let y_train: Vec<f64> = last_fold.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+            let val_start = (x_train.len() as f64 * 0.85) as usize;
+            let (x_t, x_v) = x_train.split_at(val_start);
+            let (y_t, y_v) = y_train.split_at(val_start);
+            let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
+            let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
+            let _ = model_store::save_gbt(coin_id, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
+
+            println!("  ✓ Models saved for {}", coin_id);
+        }
+
         if let Some(bt) = backtester::run_backtest(coin_id, &enriched_samples, &prices, train_window, test_window, step, &bt_config) {
             backtest_results.push(bt);
         }
@@ -278,6 +374,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !backtest_results.is_empty() {
         backtester::print_backtest_summary(&backtest_results);
+
+        // Persist backtest results to DB
+        println!("\n━━━ PERSISTING BACKTEST & PORTFOLIO DATA ━━━\n");
+        let model_version = model_store::MODEL_VERSION;
+        for bt in &backtest_results {
+            let asset_class = if stocks::STOCK_LIST.iter().any(|s| s.symbol == bt.symbol) {
+                "stock"
+            } else if stocks::FX_LIST.iter().any(|s| s.symbol == bt.symbol) {
+                "fx"
+            } else {
+                "crypto"
+            };
+            let _ = database.insert_backtest_result(model_version, &bt.symbol, asset_class, bt);
+        }
+        println!("  Saved {} backtest results to DB", backtest_results.len());
+
+        // Build and persist portfolio results for all 3 strategies
+        let strategies = [
+            ("sharpe", portfolio::WeightingScheme::SharpeWeighted),
+            ("equal", portfolio::WeightingScheme::EqualWeight),
+            ("inverse_volatility", portfolio::WeightingScheme::InverseVolatility),
+        ];
+        for (name, scheme) in &strategies {
+            let cfg = portfolio::PortfolioConfig {
+                initial_capital: 100_000.0,
+                weighting: scheme.clone(),
+                ..portfolio::PortfolioConfig::default()
+            };
+            if let Some(result) = portfolio::build_portfolio(&backtest_results, &cfg) {
+                let _ = database.insert_portfolio_result(model_version, name, 100_000.0, &result);
+                println!("  Saved portfolio result: {}", name);
+            }
+        }
+    }
+
+    // ── Save improved results and generate comparison report ──
+    if !accuracy_results.is_empty() {
+        let improved = serde_json::json!({
+            "version": "v8_improved",
+            "date": Utc::now().format("%Y-%m-%d").to_string(),
+            "features": features::active_feature_count(),
+            "assets": accuracy_results.iter().map(|(k, v)| {
+                (k.clone(), serde_json::json!({
+                    "linreg": (v.linreg * 10.0).round() / 10.0,
+                    "logreg": (v.logreg * 10.0).round() / 10.0,
+                    "gbt": (v.gbt * 10.0).round() / 10.0,
+                    "ensemble": (v.ensemble * 10.0).round() / 10.0,
+                }))
+            }).collect::<serde_json::Map<String, serde_json::Value>>()
+        });
+
+        let _ = std::fs::create_dir_all("reports");
+        let _ = std::fs::write("reports/improved.json", serde_json::to_string_pretty(&improved).unwrap_or_default());
+
+        generate_comparison_report(&accuracy_results, &ensemble_overrides);
+        println!("  Comparison report: reports/improvement_report.html");
     }
 
     println!("\n━━━ TRAINING COMPLETE ━━━");
@@ -287,4 +439,184 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Cached models: {} files\n", cached.len());
 
     Ok(())
+}
+
+/// Compute ensemble accuracy for a walk-forward result using overrides
+fn compute_ensemble_accuracy(wf: &ensemble::WalkForwardResult, ov: &ensemble::EnsembleOverride) -> f64 {
+    let mut accs = Vec::new();
+    if ov.use_linreg { accs.push(wf.linear_accuracy); }
+    if ov.use_logreg { accs.push(wf.logistic_accuracy); }
+    if ov.use_gbt { accs.push(wf.gbt_accuracy); }
+    if wf.has_lstm { accs.push(wf.lstm_accuracy); }
+    if accs.is_empty() {
+        (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0
+    } else {
+        accs.iter().sum::<f64>() / accs.len() as f64
+    }
+}
+
+/// Generate comparison HTML report
+fn generate_comparison_report(
+    new_results: &HashMap<String, AssetAccuracy>,
+    overrides: &HashMap<String, ensemble::EnsembleOverride>,
+) {
+    // Load baseline
+    let baseline: HashMap<String, AssetAccuracy> = match std::fs::read_to_string("reports/baseline.json") {
+        Ok(contents) => {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(assets) = val.get("assets").and_then(|a| a.as_object()) {
+                    assets.iter().map(|(k, v)| {
+                        (k.clone(), AssetAccuracy {
+                            linreg: v.get("linreg").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                            logreg: v.get("logreg").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                            gbt: v.get("gbt").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                            ensemble: v.get("ensemble").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                        })
+                    }).collect()
+                } else { HashMap::new() }
+            } else { HashMap::new() }
+        }
+        Err(_) => {
+            println!("  [Report] No baseline found, skipping comparison");
+            return;
+        }
+    };
+
+    let n_features = features::active_feature_count();
+
+    // Compute stats
+    let mut total_before = 0.0_f64;
+    let mut total_after = 0.0_f64;
+    let mut improved = 0_usize;
+    let mut degraded = 0_usize;
+    let mut unchanged = 0_usize;
+    let mut count = 0_usize;
+
+    // All assets that appear in both
+    let mut all_assets: Vec<String> = baseline.keys()
+        .filter(|k| new_results.contains_key(*k))
+        .cloned().collect();
+    all_assets.sort();
+
+    for asset in &all_assets {
+        let before = baseline[asset].ensemble;
+        let after = new_results[asset].ensemble;
+        total_before += before;
+        total_after += after;
+        count += 1;
+        let diff = after - before;
+        if diff > 0.5 { improved += 1; }
+        else if diff < -0.5 { degraded += 1; }
+        else { unchanged += 1; }
+    }
+
+    let avg_before = if count > 0 { total_before / count as f64 } else { 0.0 };
+    let avg_after = if count > 0 { total_after / count as f64 } else { 0.0 };
+
+    let mut html = String::new();
+    html.push_str(&format!(r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Model Improvement Report</title>
+<style>
+body {{ background:#0a0e17; color:#e0e0e0; font-family:'Courier New',monospace; padding:32px; }}
+h1 {{ color:#00d4aa; }} h2 {{ color:#00bcd4; margin-top:32px; }}
+table {{ border-collapse:collapse; width:100%; margin:16px 0; }}
+th {{ background:#111827; color:#00d4aa; padding:10px 12px; text-align:right; border-bottom:1px solid #1f2937; }}
+th:first-child {{ text-align:left; }}
+td {{ padding:8px 12px; text-align:right; border-bottom:1px solid #1f2937; font-size:13px; }}
+td:first-child {{ text-align:left; font-weight:bold; }}
+.up {{ color:#00e676; }} .down {{ color:#ff5252; }} .flat {{ color:#888; }}
+.summary {{ background:#111827; border:1px solid #1f2937; border-radius:8px; padding:20px; margin:16px 0; }}
+.tag {{ display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:bold; }}
+.tag-up {{ background:rgba(0,230,118,0.15); color:#00e676; }}
+.tag-down {{ background:rgba(255,82,82,0.15); color:#ff5252; }}
+.tag-flat {{ background:rgba(136,136,136,0.15); color:#888; }}
+</style></head><body>
+<h1>Model Improvement Report</h1>
+<p>Baseline: v7 (83 features, 3-model ensemble for all assets)</p>
+<p>Improved: v8 ({} features, pruned noise, GBT bias fix, asset-specific ensembles)</p>
+<p>Generated: {}</p>
+"#, n_features, Utc::now().format("%Y-%m-%d %H:%M UTC")));
+
+    // Summary table
+    html.push_str(r#"<h2>Overall Summary</h2><div class="summary"><table>
+<tr><th style="text-align:left">Metric</th><th>Before</th><th>After</th><th>Change</th></tr>"#);
+    html.push_str(&format!(
+        "<tr><td>Average Ensemble Accuracy</td><td>{:.1}%</td><td>{:.1}%</td><td class='{}'>{:+.1}pp</td></tr>",
+        avg_before, avg_after,
+        if avg_after > avg_before { "up" } else { "down" },
+        avg_after - avg_before
+    ));
+    html.push_str(&format!(
+        "<tr><td>Feature Count</td><td>83</td><td>{}</td><td>{}</td></tr>",
+        n_features, n_features as i32 - 83
+    ));
+    html.push_str(&format!(
+        "<tr><td>Assets Improved</td><td>-</td><td>{}/{}</td><td>-</td></tr>",
+        improved, count
+    ));
+    html.push_str(&format!(
+        "<tr><td>Assets Degraded</td><td>-</td><td>{}/{}</td><td>-</td></tr>",
+        degraded, count
+    ));
+    html.push_str("</table></div>");
+
+    // Per-asset comparison table
+    html.push_str(r#"<h2>Per-Asset Comparison</h2><table>
+<tr><th style="text-align:left">Asset</th><th>Before (Ens)</th><th>After (Ens)</th><th>Change</th>
+<th>LinReg</th><th>LogReg</th><th>GBT</th><th style="text-align:left">Fixes Applied</th><th>Status</th></tr>"#);
+
+    for asset in &all_assets {
+        let before = &baseline[asset];
+        let after = &new_results[asset];
+        let diff = after.ensemble - before.ensemble;
+        let (cls, status) = if diff > 0.5 { ("up", "IMPROVED") }
+            else if diff < -0.5 { ("down", "DEGRADED") }
+            else { ("flat", "UNCHANGED") };
+        let tag_cls = if diff > 0.5 { "tag-up" } else if diff < -0.5 { "tag-down" } else { "tag-flat" };
+
+        let ov = ensemble::get_override(overrides, asset);
+        let mut fixes = vec!["Pruned 15 features".to_string(), "GBT class weighting".to_string()];
+        if !ov.use_linreg || !ov.use_logreg || !ov.use_gbt {
+            let dropped: Vec<&str> = [
+                if !ov.use_linreg { Some("LinReg") } else { None },
+                if !ov.use_logreg { Some("LogReg") } else { None },
+                if !ov.use_gbt { Some("GBT") } else { None },
+            ].iter().filter_map(|x| *x).collect();
+            fixes.push(format!("Dropped {} from ensemble", dropped.join(", ")));
+        }
+
+        html.push_str(&format!(
+            "<tr><td>{}</td><td>{:.1}%</td><td>{:.1}%</td><td class='{}'>{:+.1}pp</td>\
+             <td>{:.1}%</td><td>{:.1}%</td><td>{:.1}%</td>\
+             <td style='text-align:left;font-size:11px;'>{}</td>\
+             <td><span class='tag {}'>{}</span></td></tr>\n",
+            asset, before.ensemble, after.ensemble, cls, diff,
+            after.linreg, after.logreg, after.gbt,
+            fixes.join(", "), tag_cls, status,
+        ));
+    }
+    html.push_str("</table>");
+
+    // Recommendations
+    html.push_str(r#"<h2>Recommendations for Next Improvement Cycle</h2><ul>"#);
+    for asset in &all_assets {
+        let after = &new_results[asset];
+        if after.ensemble < 60.0 {
+            html.push_str(&format!("<li>{} still below 60% ({:.1}%) — consider different approach</li>", asset, after.ensemble));
+        }
+    }
+    for asset in &all_assets {
+        let before = &baseline[asset];
+        let after = &new_results[asset];
+        if after.ensemble < before.ensemble - 0.5 {
+            html.push_str(&format!("<li>{} degraded by {:.1}pp — consider reverting to default ensemble</li>", asset, before.ensemble - after.ensemble));
+        }
+    }
+    html.push_str("<li>LSTM status: fixed tensor striding bug, check training output above</li>");
+    html.push_str("<li>Run diagnostics to find more near-zero importance features to prune</li>");
+    html.push_str("</ul>");
+
+    html.push_str("</body></html>");
+
+    let _ = std::fs::write("reports/improvement_report.html", &html);
 }

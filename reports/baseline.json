@@ -1,0 +1,22 @@
+{
+  "version": "v7_baseline",
+  "date": "2026-03-05",
+  "features": 83,
+  "assets": {
+    "SPY": {"linreg": 59.2, "logreg": 60.3, "gbt": 57.7, "ensemble": 58.7},
+    "QQQ": {"linreg": 61.3, "logreg": 62.1, "gbt": 62.1, "ensemble": 60.8},
+    "DIA": {"linreg": 58.7, "logreg": 60.5, "gbt": 62.8, "ensemble": 61.0},
+    "AAPL": {"linreg": 59.7, "logreg": 59.7, "gbt": 62.8, "ensemble": 58.2},
+    "MSFT": {"linreg": 57.9, "logreg": 59.0, "gbt": 57.2, "ensemble": 58.5},
+    "GOOGL": {"linreg": 60.8, "logreg": 57.7, "gbt": 60.3, "ensemble": 59.0},
+    "AMZN": {"linreg": 62.3, "logreg": 57.2, "gbt": 57.4, "ensemble": 60.3},
+    "NVDA": {"linreg": 61.5, "logreg": 60.3, "gbt": 57.4, "ensemble": 60.8},
+    "META": {"linreg": 57.2, "logreg": 59.2, "gbt": 57.2, "ensemble": 58.2},
+    "TSLA": {"linreg": 63.1, "logreg": 61.8, "gbt": 62.3, "ensemble": 63.1},
+    "EURUSD=X": {"linreg": 61.5, "logreg": 59.7, "gbt": 60.5, "ensemble": 61.8},
+    "GBPUSD=X": {"linreg": 61.0, "logreg": 60.8, "gbt": 64.1, "ensemble": 62.6},
+    "JPY=X": {"linreg": 62.8, "logreg": 61.5, "gbt": 62.8, "ensemble": 62.1},
+    "AUDUSD=X": {"linreg": 61.8, "logreg": 61.0, "gbt": 63.3, "ensemble": 61.0},
+    "CHF=X": {"linreg": 61.3, "logreg": 58.7, "gbt": 60.3, "ensemble": 60.0}
+  }
+}

@@ -23,7 +23,7 @@ use std::path::Path;
 use crate::gbt;
 
 const MODEL_DIR: &str = "models";
-const MODEL_VERSION: u32 = 3; // Bump when feature set or model architecture changes
+pub const MODEL_VERSION: u32 = 4; // v4: feature pruning (83→68), GBT class weighting, ensemble overrides
 const RETRAIN_DAYS: i64 = 7;  // Retrain after 7 days
 
 /// Metadata for a saved model

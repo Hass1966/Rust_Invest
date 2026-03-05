@@ -13,6 +13,60 @@
 use crate::ml::{self, Sample};
 use crate::gbt::{self, GBTConfig, TreeConfig, GradientBoostedClassifier};
 use crate::lstm::{self, LSTMModelConfig, LSTMWalkForwardResult};
+use serde::Deserialize;
+use std::collections::HashMap;
+
+// ════════════════════════════════════════
+// Ensemble Overrides — per-asset model selection
+// ════════════════════════════════════════
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct EnsembleOverride {
+    pub use_linreg: bool,
+    pub use_logreg: bool,
+    pub use_gbt: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+impl Default for EnsembleOverride {
+    fn default() -> Self {
+        Self { use_linreg: true, use_logreg: true, use_gbt: true, reason: String::new() }
+    }
+}
+
+/// Load ensemble overrides from config/ensemble_overrides.json
+pub fn load_ensemble_overrides() -> HashMap<String, EnsembleOverride> {
+    let path = "config/ensemble_overrides.json";
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            match serde_json::from_str::<HashMap<String, EnsembleOverride>>(&contents) {
+                Ok(mut map) => {
+                    // Remove comment key
+                    map.remove("_comment");
+                    println!("  [Ensemble] Loaded {} overrides from {}", map.len(), path);
+                    map
+                }
+                Err(e) => {
+                    println!("  [Ensemble] Failed to parse {}: {}", path, e);
+                    HashMap::new()
+                }
+            }
+        }
+        Err(_) => {
+            println!("  [Ensemble] No overrides file found, using defaults");
+            HashMap::new()
+        }
+    }
+}
+
+/// Get the override for a specific symbol (falls back to "default" then all-enabled)
+pub fn get_override(overrides: &HashMap<String, EnsembleOverride>, symbol: &str) -> EnsembleOverride {
+    overrides.get(symbol)
+        .or_else(|| overrides.get("default"))
+        .cloned()
+        .unwrap_or_default()
+}
 
 // ════════════════════════════════════════
 // Walk-Forward on pre-built samples (RICH FEATURES)
@@ -433,6 +487,16 @@ pub fn ensemble_signal(
     rsi: f64,
     sma_trend: &str,
 ) -> TradingSignal {
+    ensemble_signal_with_override(wf, current_price, rsi, sma_trend, &EnsembleOverride::default())
+}
+
+pub fn ensemble_signal_with_override(
+    wf: &WalkForwardResult,
+    current_price: f64,
+    rsi: f64,
+    sma_trend: &str,
+    ov: &EnsembleOverride,
+) -> TradingSignal {
     let best_overall = wf.linear_accuracy
         .max(wf.logistic_accuracy)
         .max(wf.gbt_accuracy)
@@ -454,10 +518,10 @@ pub fn ensemble_signal(
         ("NO EDGE".to_string(), false)
     };
 
-    // Accuracy-squared weighting (better models get quadratically more weight)
-    let lin_weight = (wf.linear_recent / 100.0).powi(2);
-    let log_weight = (wf.logistic_recent / 100.0).powi(2);
-    let gbt_weight = (wf.gbt_recent / 100.0).powi(2);
+    // Accuracy-squared weighting, masked by ensemble override
+    let lin_weight = if ov.use_linreg { (wf.linear_recent / 100.0).powi(2) } else { 0.0 };
+    let log_weight = if ov.use_logreg { (wf.logistic_recent / 100.0).powi(2) } else { 0.0 };
+    let gbt_weight = if ov.use_gbt { (wf.gbt_recent / 100.0).powi(2) } else { 0.0 };
     let lstm_weight = if wf.has_lstm { (wf.lstm_recent / 100.0).powi(2) } else { 0.0 };
 
     let total_weight = lin_weight + log_weight + gbt_weight + lstm_weight;
@@ -480,19 +544,14 @@ pub fn ensemble_signal(
         + gw * wf.final_gbt_prob
         + lstmw * wf.final_lstm_prob;
 
-    // Count agreement
-    let lin_up = wf.final_linear_prob > 0.5;
-    let log_up = wf.final_logistic_prob > 0.5;
-    let gbt_up = wf.final_gbt_prob > 0.5;
-    let lstm_up = wf.final_lstm_prob > 0.5;
-
-    let (ups, n_models) = if wf.has_lstm {
-        let u = [lin_up, log_up, gbt_up, lstm_up].iter().filter(|&&x| x).count();
-        (u, 4)
-    } else {
-        let u = [lin_up, log_up, gbt_up].iter().filter(|&&x| x).count();
-        (u, 3)
-    };
+    // Count agreement (only from enabled models)
+    let mut ups = 0_usize;
+    let mut n_models = 0_usize;
+    if ov.use_linreg { n_models += 1; if wf.final_linear_prob > 0.5 { ups += 1; } }
+    if ov.use_logreg { n_models += 1; if wf.final_logistic_prob > 0.5 { ups += 1; } }
+    if ov.use_gbt { n_models += 1; if wf.final_gbt_prob > 0.5 { ups += 1; } }
+    if wf.has_lstm { n_models += 1; if wf.final_lstm_prob > 0.5 { ups += 1; } }
+    if n_models == 0 { n_models = 1; } // safety
     let models_agree = ups.max(n_models - ups);
 
     let signal = if !can_signal {

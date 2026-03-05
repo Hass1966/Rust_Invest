@@ -1,0 +1,89 @@
+import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
+import { useState } from 'react'
+import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X } from 'lucide-react'
+import Overview from './pages/Overview'
+import Stocks from './pages/Stocks'
+import FX from './pages/FX'
+import Portfolio from './pages/Portfolio'
+import Diagnostics from './pages/Diagnostics'
+import ChatPanel from './components/ChatPanel'
+
+const tabs = [
+  { path: '/', label: 'Overview', icon: BarChart3 },
+  { path: '/stocks', label: 'Stocks', icon: TrendingUp },
+  { path: '/fx', label: 'FX', icon: DollarSign },
+  { path: '/portfolio', label: 'Portfolio', icon: Briefcase },
+  { path: '/diagnostics', label: 'Diagnostics', icon: Cpu },
+]
+
+export default function App() {
+  const [chatOpen, setChatOpen] = useState(false)
+  const location = useLocation()
+
+  const currentTab = tabs.find(t =>
+    t.path === '/' ? location.pathname === '/' : location.pathname.startsWith(t.path)
+  )?.label.toLowerCase() || 'overview'
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      {/* Header */}
+      <header className="border-b border-[#1f2937] bg-[#111827] px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded bg-cyan-500/20 flex items-center justify-center">
+            <TrendingUp className="w-5 h-5 text-cyan-400" />
+          </div>
+          <h1 className="text-lg font-semibold text-white">Rust Invest</h1>
+        </div>
+
+        <nav className="flex gap-1">
+          {tabs.map(({ path, label, icon: Icon }) => (
+            <NavLink
+              key={path}
+              to={path}
+              end={path === '/'}
+              className={({ isActive }) =>
+                `flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                  isActive
+                    ? 'bg-cyan-500/15 text-cyan-400'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+                }`
+              }
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <button
+          onClick={() => setChatOpen(!chatOpen)}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+            chatOpen ? 'bg-cyan-500/15 text-cyan-400' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+          }`}
+        >
+          {chatOpen ? <X className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
+          Chat
+        </button>
+      </header>
+
+      {/* Content */}
+      <div className="flex flex-1 overflow-hidden">
+        <main className={`flex-1 overflow-y-auto p-6 transition-all ${chatOpen ? 'mr-96' : ''}`}>
+          <Routes>
+            <Route path="/" element={<Overview />} />
+            <Route path="/stocks" element={<Stocks />} />
+            <Route path="/fx" element={<FX />} />
+            <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/diagnostics" element={<Diagnostics />} />
+          </Routes>
+        </main>
+
+        {chatOpen && (
+          <aside className="w-96 fixed right-0 top-[57px] bottom-0 border-l border-[#1f2937] bg-[#111827]">
+            <ChatPanel tabContext={currentTab} />
+          </aside>
+        )}
+      </div>
+    </div>
+  )
+}

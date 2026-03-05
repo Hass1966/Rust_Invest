@@ -1,7 +1,10 @@
 /target
+target/
 rust_invest.db
 report.html
 models/
 .DS_Store
 identifier.sqlite
-target/
+.env
+frontend/node_modules/
+frontend/dist/

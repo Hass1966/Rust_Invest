@@ -1,6 +1,11 @@
 /// serve — Web API server for Rust Invest
 /// ========================================
-/// Starts an Axum web server on port 8080 serving enriched trading signals.
+/// Loads pre-trained model weights, runs inference on current market data,
+/// and serves enriched trading signals via an Axum web server on port 8080.
+///
+/// NO training. NO walk-forward. NO backtesting.
+/// Just: load weights → compute features → predict → serve.
+///
 /// Usage: cargo run --release --bin serve
 
 use rust_invest::*;
@@ -25,6 +30,8 @@ struct AppState {
     signals: Arc<RwLock<HashMap<String, enriched_signals::EnrichedSignal>>>,
     asset_config: Arc<RwLock<config::AssetConfig>>,
     db_path: String,
+    llm_provider: Option<llm::LlmProvider>,
+    http_client: reqwest::Client,
 }
 
 // ════════════════════════════════════════
@@ -37,6 +44,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("║         RUST INVEST — SERVE MODE (Web API Server)              ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
 
+    // Check that we have trained models
+    let cached = model_store::list_cached_models();
+    if cached.is_empty() {
+        eprintln!("  No cached models found in models/");
+        eprintln!("  Run `cargo run --release --bin train` first to train models.");
+        return Err("No trained models available".into());
+    }
+    println!("  Found {} cached model files", cached.len());
+
     // Load asset config
     let asset_config = config::AssetConfig::load()
         .unwrap_or_else(|e| {
@@ -47,17 +63,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Loaded asset config: {} stocks, {} FX, {} crypto",
         asset_config.stocks.len(), asset_config.fx.len(), asset_config.crypto.len());
 
+    // Load LLM provider
+    let llm_provider = llm::load_provider();
+    match &llm_provider {
+        Some(llm::LlmProvider::Ollama { base_url, model }) =>
+            println!("  LLM: Ollama ({}) at {}", model, base_url),
+        Some(llm::LlmProvider::Anthropic { model, .. }) =>
+            println!("  LLM: Anthropic ({})", model),
+        None =>
+            println!("  LLM: Not configured (set LLM_PROVIDER in .env)"),
+    }
+
     let state = AppState {
         signals: Arc::new(RwLock::new(HashMap::new())),
         asset_config: Arc::new(RwLock::new(asset_config)),
         db_path: "rust_invest.db".to_string(),
+        llm_provider,
+        http_client: reqwest::Client::new(),
     };
 
-    // Generate signals on startup
-    println!("\n━━━ GENERATING INITIAL SIGNALS ━━━\n");
+    // Generate signals on startup (inference only — loads saved weights)
+    println!("\n━━━ GENERATING INITIAL SIGNALS (inference only) ━━━\n");
     if let Err(e) = refresh_signals(&state).await {
         eprintln!("  Warning: Initial signal generation failed: {}", e);
-        eprintln!("  Server will start with empty signals. Ensure database has data.");
+        eprintln!("  Server will start with empty signals. Ensure models are trained and database has data.");
     }
 
     {
@@ -100,6 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/signals/current/crypto", get(get_crypto_signals))
         .route("/api/v1/signals/history/{asset}", get(get_signal_history))
         .route("/api/v1/portfolio/simulate", get(simulate_portfolio))
+        .route("/api/v1/chat", post(chat_handler))
         .layer(cors)
         .with_state(state);
 
@@ -115,7 +145,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    GET  /api/v1/signals/current/fx");
     println!("    GET  /api/v1/signals/current/crypto");
     println!("    GET  /api/v1/signals/history/:asset");
-    println!("    GET  /api/v1/portfolio/simulate\n");
+    println!("    GET  /api/v1/portfolio/simulate");
+    println!("    POST /api/v1/chat\n");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -231,41 +262,164 @@ struct PortfolioParams {
 
 async fn simulate_portfolio(
     State(state): State<AppState>,
-    Query(params): Query<PortfolioParams>,
+    Query(_params): Query<PortfolioParams>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let capital = params.capital.unwrap_or(100_000.0);
-    let strategy = params.strategy.unwrap_or_else(|| "sharpe".to_string());
+    let database = db::Database::new(&state.db_path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let model_version = model_store::MODEL_VERSION;
+
+    let has_data = database.has_backtest_data(model_version)
+        .unwrap_or(false);
+
+    if !has_data {
+        return Ok(Json(serde_json::json!({
+            "starting_capital": 100000,
+            "has_data": false,
+            "note": "Portfolio simulation requires a completed training run. Backtest data will appear after the next training cycle."
+        })));
+    }
+
+    // Build strategies map
+    let portfolio_rows = database.get_portfolio_results(model_version)
+        .unwrap_or_default();
+    let backtest_rows = database.get_backtest_results(model_version)
+        .unwrap_or_default();
+
+    // Get current signals for each asset
     let sigs = state.signals.read().await;
-    let signal_count = sigs.len();
-    let buy_count = sigs.values().filter(|s| s.signal == "BUY").count();
-    let sell_count = sigs.values().filter(|s| s.signal == "SELL").count();
-    let hold_count = signal_count - buy_count - sell_count;
+
+    let mut strategies = serde_json::Map::new();
+    for pr in &portfolio_rows {
+        let allocs = database.get_portfolio_allocations(model_version, &pr.strategy)
+            .unwrap_or_default();
+        let alloc_json: Vec<serde_json::Value> = allocs.iter().map(|a| {
+            let signal = sigs.get(&a.asset).map(|s| s.signal.as_str()).unwrap_or("N/A");
+            let asset_class = backtest_rows.iter()
+                .find(|b| b.asset == a.asset)
+                .map(|b| b.asset_class.as_str())
+                .unwrap_or("unknown");
+            serde_json::json!({
+                "asset": a.asset,
+                "asset_class": asset_class,
+                "weight": (a.weight * 1000.0).round() / 10.0,
+                "allocated": (a.allocated_amount * 100.0).round() / 100.0,
+                "return": (a.asset_return * 100.0).round() / 100.0,
+                "contribution": (a.contribution * 100.0).round() / 100.0,
+                "sharpe": (a.sharpe * 100.0).round() / 100.0,
+                "signal": signal,
+            })
+        }).collect();
+
+        strategies.insert(pr.strategy.clone(), serde_json::json!({
+            "final_value": (pr.final_value * 100.0).round() / 100.0,
+            "total_return": (pr.total_return * 100.0).round() / 100.0,
+            "annualised_return": (pr.annualised_return * 100.0).round() / 100.0,
+            "benchmark_return": (pr.benchmark_return * 100.0).round() / 100.0,
+            "excess_return": (pr.excess_return * 100.0).round() / 100.0,
+            "sharpe_ratio": (pr.sharpe_ratio * 100.0).round() / 100.0,
+            "max_drawdown": (pr.max_drawdown * 100.0).round() / 100.0,
+            "volatility": (pr.volatility * 100.0).round() / 100.0,
+            "n_assets": pr.n_assets,
+            "allocations": alloc_json,
+        }));
+    }
+
+    // Build per-asset backtest array
+    let per_asset: Vec<serde_json::Value> = backtest_rows.iter().map(|b| {
+        let verdict = if b.sharpe_ratio > 1.0 && b.excess_return > 0.0 {
+            "EDGE"
+        } else if b.sharpe_ratio > 0.5 {
+            "MARGINAL"
+        } else {
+            "NO EDGE"
+        };
+        serde_json::json!({
+            "asset": b.asset,
+            "asset_class": b.asset_class,
+            "total_return": (b.total_return * 100.0).round() / 100.0,
+            "buy_hold_return": (b.buy_hold_return * 100.0).round() / 100.0,
+            "excess_return": (b.excess_return * 100.0).round() / 100.0,
+            "annualised_return": (b.annualised_return * 100.0).round() / 100.0,
+            "sharpe_ratio": (b.sharpe_ratio * 100.0).round() / 100.0,
+            "max_drawdown": (b.max_drawdown * 100.0).round() / 100.0,
+            "win_rate": (b.win_rate * 100.0).round() / 100.0,
+            "profit_factor": (b.profit_factor * 100.0).round() / 100.0,
+            "expectancy": (b.expectancy * 1000.0).round() / 1000.0,
+            "days_in_market": b.days_in_market,
+            "total_days": b.total_days,
+            "verdict": verdict,
+        })
+    }).collect();
 
     Ok(Json(serde_json::json!({
-        "capital": capital,
-        "strategy": strategy,
-        "start_date": params.start_date,
-        "signal_summary": {
-            "total": signal_count,
-            "buy": buy_count,
-            "sell": sell_count,
-            "hold": hold_count,
-        },
-        "note": "Full portfolio simulation requires historical backtest data. Use cargo run --bin train for full backtest."
+        "starting_capital": 100000,
+        "has_data": true,
+        "strategies": strategies,
+        "per_asset_backtest": per_asset,
     })))
 }
 
 // ════════════════════════════════════════
-// Signal Generation Pipeline
+// Chat Handler
 // ════════════════════════════════════════
 
-/// Refresh all signals (runs the ML pipeline on stored data)
+#[derive(serde::Deserialize)]
+struct ChatRequest {
+    message: String,
+    tab_context: Option<String>,
+}
+
+async fn chat_handler(
+    State(state): State<AppState>,
+    Json(req): Json<ChatRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let provider = match &state.llm_provider {
+        Some(p) => p,
+        None => {
+            return Ok(Json(serde_json::json!({
+                "response": "LLM not configured. Install Ollama or set LLM_PROVIDER in .env"
+            })));
+        }
+    };
+
+    let tab_context = req.tab_context.unwrap_or_else(|| "overview".to_string());
+
+    // Build system prompt with current signal data as context
+    let signals_context = {
+        let sigs = state.signals.read().await;
+        let relevant: Vec<_> = match tab_context.as_str() {
+            "stocks" => sigs.values().filter(|s| s.asset_class == "stock").cloned().collect(),
+            "fx" => sigs.values().filter(|s| s.asset_class == "fx").cloned().collect(),
+            _ => sigs.values().cloned().collect(),
+        };
+        serde_json::to_string_pretty(&relevant).unwrap_or_else(|_| "[]".to_string())
+    };
+
+    let system_prompt = format!(
+        "You are the AI analyst for Rust_Invest, an AI investment copilot.\n\
+        Your role is decision support — helping users understand risk and make informed decisions.\n\
+        You are NOT a prediction engine. You explain what the models show, assess risk, and guide decisions.\n\
+        Never give financial advice. Always note past performance doesn't guarantee future results.\n\
+        Speak in plain language. Explain technical concepts when you use them.\n\n\
+        Current signals data (JSON):\n{}", signals_context
+    );
+
+    match llm::chat(&state.http_client, provider, &system_prompt, &req.message).await {
+        Ok(response) => Ok(Json(serde_json::json!({ "response": response }))),
+        Err(e) => Ok(Json(serde_json::json!({ "response": format!("Error: {}", e) }))),
+    }
+}
+
+// ════════════════════════════════════════
+// Signal Generation Pipeline (INFERENCE ONLY)
+// ════════════════════════════════════════
+
+/// Refresh all signals (loads saved model weights, runs inference)
 async fn refresh_signals(state: &AppState) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let db_path = state.db_path.clone();
     let asset_config = state.asset_config.read().await.clone();
 
-    // Run the CPU-heavy signal generation on a blocking thread
     let new_signals = tokio::task::spawn_blocking(move || {
         generate_all_signals(&db_path, &asset_config)
     }).await??;
@@ -347,7 +501,7 @@ fn generate_all_signals(
     generate_signals_filtered(db_path, asset_config, true, true, true)
 }
 
-/// Generate signals with market hours filtering
+/// Generate signals with market hours filtering — inference only, no training
 fn generate_signals_filtered(
     db_path: &str,
     asset_config: &config::AssetConfig,
@@ -371,24 +525,23 @@ fn generate_signals_filtered(
 
     let mut enriched_signals = Vec::new();
 
-    // ── Stock signals ──
+    // ── Stock signals (inference only) ──
     if include_stocks {
         let enabled_stocks = asset_config.enabled_stocks();
         for asset_entry in &enabled_stocks {
-            // Find matching stock in STOCK_LIST or use the symbol directly
             let points = match database.get_stock_history(&asset_entry.symbol) {
                 Ok(p) => p,
                 Err(_) => continue,
             };
             if points.len() < 300 { continue; }
 
-            if let Some(sig) = generate_stock_signal(&asset_entry.symbol, &points, &market_context) {
+            if let Some(sig) = infer_stock_signal(&asset_entry.symbol, &points, &market_context) {
                 enriched_signals.push(sig);
             }
         }
     }
 
-    // ── FX signals ──
+    // ── FX signals (inference only) ──
     if include_fx {
         let enabled_fx = asset_config.enabled_fx();
         for asset_entry in &enabled_fx {
@@ -398,17 +551,16 @@ fn generate_signals_filtered(
             };
             if points.len() < 300 { continue; }
 
-            if let Some(sig) = generate_fx_signal(&asset_entry.symbol, &points, &market_context) {
+            if let Some(sig) = infer_fx_signal(&asset_entry.symbol, &points, &market_context) {
                 enriched_signals.push(sig);
             }
         }
     }
 
-    // ── Crypto signals ──
+    // ── Crypto signals (inference only) ──
     if include_crypto {
         let enabled_crypto = asset_config.enabled_crypto();
         if !enabled_crypto.is_empty() {
-            // Build crypto enrichment
             let coin_ids: Vec<String> = database.get_all_coin_ids()
                 .unwrap_or_default().into_iter().filter(|id| id != "tether").collect();
 
@@ -434,7 +586,7 @@ fn generate_signals_filtered(
             );
 
             for asset_entry in &enabled_crypto {
-                if let Some(sig) = generate_crypto_signal(
+                if let Some(sig) = infer_crypto_signal(
                     &asset_entry.symbol, &database, &crypto_enrichment,
                 ) {
                     enriched_signals.push(sig);
@@ -443,12 +595,126 @@ fn generate_signals_filtered(
         }
     }
 
-    println!("  Generated {} enriched signals", enriched_signals.len());
+    println!("  Generated {} enriched signals (inference only)", enriched_signals.len());
     Ok(enriched_signals)
 }
 
-/// Generate a single stock signal
-fn generate_stock_signal(
+// ════════════════════════════════════════
+// Inference-Only Signal Generation
+// ════════════════════════════════════════
+
+/// Load saved model weights and run inference on the latest feature vector.
+/// Returns a WalkForwardResult populated with saved accuracies + fresh predictions.
+fn infer_with_saved_models(
+    symbol: &str,
+    samples: &[ml::Sample],
+) -> Option<ensemble::WalkForwardResult> {
+    if samples.is_empty() {
+        println!("  {} — no samples for inference", symbol);
+        return None;
+    }
+
+    let n_features = samples[0].features.len();
+
+    // Load the 3 saved models
+    let linreg_saved = match model_store::load_weights(symbol, "linreg") {
+        Ok(w) => w,
+        Err(e) => {
+            println!("  {} — skipping: no linreg model ({})", symbol, e);
+            return None;
+        }
+    };
+    let logreg_saved = match model_store::load_weights(symbol, "logreg") {
+        Ok(w) => w,
+        Err(e) => {
+            println!("  {} — skipping: no logreg model ({})", symbol, e);
+            return None;
+        }
+    };
+    let (gbt_saved, gbt_classifier) = match model_store::load_gbt(symbol) {
+        Ok(g) => g,
+        Err(e) => {
+            println!("  {} — skipping: no GBT model ({})", symbol, e);
+            return None;
+        }
+    };
+
+    // Get the latest feature vector
+    let last_sample = samples.last().unwrap();
+    let feat = &last_sample.features;
+
+    // LinReg prediction (normalise with its own saved params)
+    let lin_feat = normalise_features(feat, &linreg_saved.norm_means, &linreg_saved.norm_stds);
+    let raw_lin = predict_linreg(&linreg_saved, &lin_feat);
+    let lin_prob = (1.0 / (1.0 + (-raw_lin).exp())).clamp(0.15, 0.85);
+
+    // LogReg prediction
+    let log_feat = normalise_features(feat, &logreg_saved.norm_means, &logreg_saved.norm_stds);
+    let log_prob = predict_logreg(&logreg_saved, &log_feat).clamp(0.15, 0.85);
+
+    // GBT prediction (GBT has its own norm params)
+    let gbt_feat = normalise_features(feat, &gbt_saved.norm_means, &gbt_saved.norm_stds);
+    let gbt_prob = gbt_classifier.predict_proba(&gbt_feat).clamp(0.15, 0.85);
+
+    // Use saved walk-forward accuracies
+    let lin_acc = linreg_saved.meta.walk_forward_accuracy;
+    let log_acc = logreg_saved.meta.walk_forward_accuracy;
+    let gbt_acc = gbt_saved.meta.walk_forward_accuracy;
+
+    println!("  {} — inference: LinR={:.1}% LogR={:.1}% GBT={:.1}% | probs: {:.2} {:.2} {:.2}",
+        symbol, lin_acc, log_acc, gbt_acc, lin_prob, log_prob, gbt_prob);
+
+    Some(ensemble::WalkForwardResult {
+        symbol: symbol.to_string(),
+        linear_accuracy: lin_acc,
+        logistic_accuracy: log_acc,
+        gbt_accuracy: gbt_acc,
+        lstm_accuracy: 50.0,
+        n_folds: 1,
+        total_test_samples: 0,
+        linear_recent: lin_acc,
+        logistic_recent: log_acc,
+        gbt_recent: gbt_acc,
+        lstm_recent: 50.0,
+        final_linear_prob: lin_prob,
+        final_logistic_prob: log_prob,
+        final_gbt_prob: gbt_prob,
+        final_lstm_prob: 0.5,
+        gbt_importance: Vec::new(),
+        n_features,
+        has_lstm: false,
+    })
+}
+
+/// Normalise a feature vector using pre-computed means and stds
+fn normalise_features(features: &[f64], means: &[f64], stds: &[f64]) -> Vec<f64> {
+    features.iter().enumerate().map(|(i, &f)| {
+        let mean = means.get(i).copied().unwrap_or(0.0);
+        let std = stds.get(i).copied().unwrap_or(1.0);
+        if std == 0.0 { f - mean } else { (f - mean) / std }
+    }).collect()
+}
+
+/// Run linreg inference: dot(weights, features) + bias
+fn predict_linreg(saved: &model_store::SavedWeights, features: &[f64]) -> f64 {
+    let mut result = saved.bias;
+    for (w, f) in saved.weights.iter().zip(features.iter()) {
+        result += w * f;
+    }
+    result
+}
+
+/// Run logreg inference: sigmoid(dot(weights, features) + bias)
+fn predict_logreg(saved: &model_store::SavedWeights, features: &[f64]) -> f64 {
+    let mut z = saved.bias;
+    for (w, f) in saved.weights.iter().zip(features.iter()) {
+        z += w * f;
+    }
+    1.0 / (1.0 + (-z).exp())
+}
+
+/// Generate a single stock signal via inference
+fn infer_stock_signal(
     symbol: &str,
     points: &[analysis::PricePoint],
     market_context: &features::MarketContext,
@@ -461,13 +727,9 @@ fn generate_stock_signal(
         &prices, &volumes, &timestamps,
         Some(market_context), "stock",
     );
-    if samples.len() < 100 { return None; }
+    if samples.is_empty() { return None; }
 
-    let train_window = (samples.len() as f64 * 0.6) as usize;
-    let test_window = 30.min(samples.len() / 10);
-    let step = test_window;
-
-    let wf = ensemble::walk_forward_samples(symbol, &samples, train_window, test_window, step)?;
+    let wf = infer_with_saved_models(symbol, &samples)?;
 
     let result = analysis::analyse_coin(symbol, points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -479,7 +741,6 @@ fn generate_stock_signal(
 
     let signal = ensemble::ensemble_signal(&wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
 
-    // Extract volatility for enrichment
     let vol_5d = if prices.len() >= 5 {
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-5..])))
     } else { None };
@@ -487,14 +748,13 @@ fn generate_stock_signal(
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-20..])))
     } else { None };
 
-    // BB position from recent features
     let bb_pos = extract_bb_position(&samples);
 
     Some(enriched_signals::enrich_signal(&signal, "stock", bb_pos, vol_5d, vol_20d))
 }
 
-/// Generate a single FX signal
-fn generate_fx_signal(
+/// Generate a single FX signal via inference
+fn infer_fx_signal(
     symbol: &str,
     points: &[analysis::PricePoint],
     market_context: &features::MarketContext,
@@ -507,13 +767,9 @@ fn generate_fx_signal(
         &prices, &volumes, &timestamps,
         Some(market_context), "fx",
     );
-    if samples.len() < 100 { return None; }
+    if samples.is_empty() { return None; }
 
-    let train_window = (samples.len() as f64 * 0.6) as usize;
-    let test_window = 30.min(samples.len() / 10);
-    let step = test_window;
-
-    let wf = ensemble::walk_forward_samples(symbol, &samples, train_window, test_window, step)?;
+    let wf = infer_with_saved_models(symbol, &samples)?;
 
     let result = analysis::analyse_coin(symbol, points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -537,8 +793,8 @@ fn generate_fx_signal(
     Some(enriched_signals::enrich_signal(&signal, "fx", bb_pos, vol_5d, vol_20d))
 }
 
-/// Generate a single crypto signal
-fn generate_crypto_signal(
+/// Generate a single crypto signal via inference
+fn infer_crypto_signal(
     coin_id: &str,
     database: &db::Database,
     crypto_enrichment: &HashMap<String, Vec<crypto_features::CryptoFeatureRow>>,
@@ -572,13 +828,9 @@ fn generate_crypto_signal(
         }).collect()
     };
 
-    if enriched_samples.len() < 100 { return None; }
+    if enriched_samples.is_empty() { return None; }
 
-    let train_window = (enriched_samples.len() as f64 * 0.6) as usize;
-    let test_window = 20.min(enriched_samples.len() / 10);
-    let step = test_window;
-
-    let wf = ensemble::walk_forward_samples(coin_id, &enriched_samples, train_window, test_window, step)?;
+    let wf = infer_with_saved_models(coin_id, &enriched_samples)?;
 
     let result = analysis::analyse_coin(coin_id, &points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -610,12 +862,9 @@ fn daily_returns(prices: &[f64]) -> Vec<f64> {
 
 /// Extract BB position from the last sample's features (feature index 3 is BB Position)
 fn extract_bb_position(samples: &[ml::Sample]) -> Option<f64> {
-    // In the rich features, BB Position is at index 3 (see ml::FEATURE_NAMES)
-    // But after build_rich_features, the ordering may differ
-    // The 83 rich features have BB position typically at index 3
     samples.last().map(|s| {
         if s.features.len() > 3 {
-            s.features[3].clamp(0.0, 1.0) // BB position is normalised 0-1
+            s.features[3].clamp(0.0, 1.0)
         } else {
             0.5
         }

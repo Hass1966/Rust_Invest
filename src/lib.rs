@@ -21,3 +21,4 @@ pub mod portfolio;
 pub mod crypto_features;
 pub mod config;
 pub mod enriched_signals;
+pub mod llm;

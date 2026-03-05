@@ -19,6 +19,47 @@ use crate::ml::Sample;
 use std::collections::HashMap;
 
 // ════════════════════════════════════════
+// Feature pruning — noise features identified by diagnostic analysis
+// ════════════════════════════════════════
+
+const PRUNED_FEATURES: &[&str] = &[
+    "VIX_above_20", "VIX_above_30", "SMA50_above_200", "vol_regime",
+    "daily_return", "is_month_end", "month_sin", "month_cos",
+    "day_of_week_cos", "risk_on_off", "up_days_ratio_10d",
+    "up_days_ratio_20d", "momentum_3d", "momentum_5d", "momentum_10d",
+];
+
+/// Return indices of features to keep (those NOT in the pruned list)
+fn pruned_feature_indices() -> Vec<usize> {
+    let names = feature_names();
+    names.iter().enumerate()
+        .filter(|(_, name)| !PRUNED_FEATURES.contains(&name.as_str()))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Feature names after pruning
+pub fn active_feature_names() -> Vec<String> {
+    let names = feature_names();
+    let keep = pruned_feature_indices();
+    keep.iter().map(|&i| names[i].clone()).collect()
+}
+
+/// Number of active features after pruning
+pub fn active_feature_count() -> usize {
+    feature_names().len() - PRUNED_FEATURES.len()
+}
+
+/// Apply feature pruning to a set of samples (removes pruned columns)
+pub fn prune_features(samples: &[Sample]) -> Vec<Sample> {
+    let keep = pruned_feature_indices();
+    samples.iter().map(|s| {
+        let features: Vec<f64> = keep.iter().map(|&i| s.features[i]).collect();
+        Sample { features, label: s.label }
+    }).collect()
+}
+
+// ════════════════════════════════════════
 // Market context data — fetched separately, passed in
 // ════════════════════════════════════════
 
@@ -582,10 +623,16 @@ pub fn build_rich_features(
         samples.push(Sample { features: f, label });
     }
 
-    println!("  Built {} samples × {} features for {}",
+    println!("  Built {} samples × {} features (raw) for {}",
         samples.len(), feat_count, asset_type);
 
-    samples
+    // Apply feature pruning
+    let pruned = prune_features(&samples);
+    let pruned_count = feat_count - pruned[0].features.len();
+    println!("  Built {} samples × {} features for {} ({} pruned)",
+        pruned.len(), pruned[0].features.len(), asset_type, pruned_count);
+
+    pruned
 }
 
 /// Simplified features for assets without enough history

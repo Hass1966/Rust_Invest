@@ -225,7 +225,7 @@ impl LSTMModel {
         let mut final_h = None;
 
         for t in 0..seq_len {
-            let step = input.narrow(1, t, 1)?.squeeze(1)?; // [batch_size, n_features]
+            let step = input.narrow(1, t, 1)?.squeeze(1)?.contiguous()?; // [batch_size, n_features]
 
             // For the first step, create zero state
             if t == 0 {
@@ -241,7 +241,7 @@ impl LSTMModel {
         }
 
         // Take final hidden state → linear → output
-        let h = final_h.unwrap().h().clone(); // [batch_size, hidden_size]
+        let h = final_h.unwrap().h().clone().contiguous()?; // [batch_size, hidden_size]
         let logits = self.fc.forward(&h)?; // [batch_size, 1]
 
         Ok(logits)

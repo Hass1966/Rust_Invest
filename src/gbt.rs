@@ -331,10 +331,19 @@ impl GradientBoostedClassifier {
 
         let subsample_n = (n_train as f64 * config.subsample_ratio) as usize;
 
+        // Class weighting to fix bullish bias
+        let n_positive = y_train.iter().filter(|&&y| y > 0.5).count() as f64;
+        let n_negative = n_train as f64 - n_positive;
+        let weight_positive = if n_positive > 0.0 { n_train as f64 / (2.0 * n_positive) } else { 1.0 };
+        let weight_negative = if n_negative > 0.0 { n_train as f64 / (2.0 * n_negative) } else { 1.0 };
+
         for round in 0..config.n_trees {
-            // 1. Pseudo-residuals: rᵢ = yᵢ - σ(Fᵢ)
+            // 1. Weighted pseudo-residuals: rᵢ = wᵢ * (yᵢ - σ(Fᵢ))
             let residuals: Vec<f64> = (0..n_train)
-                .map(|i| y_train[i] - sigmoid(f_train[i]))
+                .map(|i| {
+                    let w = if y_train[i] > 0.5 { weight_positive } else { weight_negative };
+                    w * (y_train[i] - sigmoid(f_train[i]))
+                })
                 .collect();
 
             // 2. Subsample (deterministic rotation for reproducibility)
