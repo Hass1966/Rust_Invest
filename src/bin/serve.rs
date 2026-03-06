@@ -551,25 +551,93 @@ async fn chat_handler(
 
     let tab_context = req.tab_context.unwrap_or_else(|| "overview".to_string());
 
-    // Build system prompt with current signal data as context
-    let signals_context = {
+    // Build portfolio context from daily tracker
+    let portfolio_context = {
+        let db_path = state.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            daily_tracker::build_api_response(&db_path)
+        }).await.unwrap_or_else(|_| serde_json::json!({"has_data": false}))
+    };
+
+    // Build system prompt with full portfolio context
+    let system_prompt = {
         let sigs = state.signals.read().await;
         let relevant: Vec<_> = match tab_context.as_str() {
             "stocks" => sigs.values().filter(|s| s.asset_class == "stock").cloned().collect(),
             "fx" => sigs.values().filter(|s| s.asset_class == "fx").cloned().collect(),
+            "crypto" => sigs.values().filter(|s| s.asset_class == "crypto").cloned().collect(),
             _ => sigs.values().cloned().collect(),
         };
-        serde_json::to_string_pretty(&relevant).unwrap_or_else(|_| "[]".to_string())
-    };
 
-    let system_prompt = format!(
-        "You are the AI analyst for Rust_Invest, an AI investment copilot.\n\
-        Your role is decision support — helping users understand risk and make informed decisions.\n\
-        You are NOT a prediction engine. You explain what the models show, assess risk, and guide decisions.\n\
-        Never give financial advice. Always note past performance doesn't guarantee future results.\n\
-        Speak in plain language. Explain technical concepts when you use them.\n\n\
-        Current signals data (JSON):\n{}", signals_context
-    );
+        // Format signals table
+        let mut signals_table = String::from("Asset | Signal | Confidence | Prob Up | RSI | Price | Quality\n");
+        for s in &relevant {
+            signals_table.push_str(&format!(
+                "{} | {} | {:.1}/10 | {:.1}% | {:.0} | {:.2} | {}\n",
+                s.asset, s.signal, s.technical.confidence,
+                s.technical.probability_up, s.technical.rsi,
+                s.price, s.technical.quality,
+            ));
+        }
+
+        // Format portfolio summary
+        let mut portfolio_summary = String::new();
+        if portfolio_context["has_data"].as_bool().unwrap_or(false) {
+            let value = portfolio_context["current_value"].as_f64().unwrap_or(0.0);
+            let daily_ret = portfolio_context["daily_return"].as_f64().unwrap_or(0.0);
+            let cum_ret = portfolio_context["cumulative_return"].as_f64().unwrap_or(0.0);
+            let accuracy = portfolio_context["model_accuracy_pct"].as_f64().unwrap_or(0.0);
+            let seed = portfolio_context["seed_value"].as_f64().unwrap_or(100_000.0);
+
+            portfolio_summary.push_str(&format!(
+                "Portfolio value: £{:.2} (seed: £{:.0})\n\
+                 Daily return: {:.2}%\n\
+                 Cumulative return: {:.2}%\n\
+                 Model accuracy: {:.1}%\n",
+                value, seed, daily_ret, cum_ret, accuracy,
+            ));
+
+            // Asset allocations
+            if let Some(today_sigs) = portfolio_context["today_signals"].as_array() {
+                portfolio_summary.push_str("\nAsset allocations:\n");
+                portfolio_summary.push_str("Asset | Weight | Signal | Daily Return | Contribution\n");
+                for ts in today_sigs {
+                    portfolio_summary.push_str(&format!(
+                        "{} | {:.1}% | {} | {:.2}% | {:.3}%\n",
+                        ts["asset"].as_str().unwrap_or("?"),
+                        ts["weight"].as_f64().unwrap_or(0.0),
+                        ts["signal"].as_str().unwrap_or("?"),
+                        ts["price_return"].as_f64().unwrap_or(0.0),
+                        ts["contribution"].as_f64().unwrap_or(0.0),
+                    ));
+                }
+            }
+        } else {
+            portfolio_summary.push_str("Portfolio tracking has not started yet — no historical data available.\n");
+        }
+
+        // Per-asset model accuracy from signals
+        let mut accuracy_summary = String::new();
+        for s in &relevant {
+            accuracy_summary.push_str(&format!(
+                "{}: walk-forward accuracy {:.1}%, agreement {}\n",
+                s.asset, s.technical.walk_forward_accuracy, s.technical.model_agreement,
+            ));
+        }
+
+        format!(
+            "You are an AI analyst for a quantitative investment system (Rust_Invest).\n\
+             Here is the current portfolio state:\n\n\
+             === PORTFOLIO ===\n{}\n\
+             === TODAY'S SIGNALS ===\n{}\n\
+             === MODEL ACCURACY ===\n{}\n\
+             Answer questions about this specific portfolio only.\n\
+             Be concise and specific with numbers.\n\
+             Never give financial advice. Always note past performance doesn't guarantee future results.\n\
+             Explain technical concepts in plain language when you use them.",
+            portfolio_summary, signals_table, accuracy_summary,
+        )
+    };
 
     match llm::chat(&state.http_client, provider, &system_prompt, &req.message).await {
         Ok(response) => Ok(Json(serde_json::json!({ "response": response }))),
