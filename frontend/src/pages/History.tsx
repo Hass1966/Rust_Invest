@@ -192,8 +192,8 @@ function PortfolioChart({ portfolio }: { portfolio: PortfolioHistory | null }) {
           <Tooltip
             contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
             labelStyle={{ color: '#9ca3af' }}
-            formatter={(v: number, name: string) => [
-              name === 'value' ? fmtGBP(v) : `${fmt(v)}%`,
+            formatter={(v: number | undefined, name?: string) => [
+              v == null ? '' : name === 'value' ? fmtGBP(v) : `${fmt(v)}%`,
               name === 'value' ? 'Portfolio' : 'Cumulative Return'
             ]}
           />
@@ -237,7 +237,7 @@ function DailyReturnsChart({ portfolio }: { portfolio: PortfolioHistory | null }
           />
           <Tooltip
             contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
-            formatter={(v: number) => [`${v > 0 ? '+' : ''}${fmt(v)}%`, 'Daily Return']}
+            formatter={(v: number | undefined) => [`${v != null && v > 0 ? '+' : ''}${v != null ? fmt(v) : ''}%`, 'Daily Return']}
           />
           <ReferenceLine y={0} stroke="#374151" />
           <Bar dataKey="daily_return" radius={[2, 2, 0, 0]}>

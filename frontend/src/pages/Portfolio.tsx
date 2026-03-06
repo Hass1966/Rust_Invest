@@ -216,7 +216,7 @@ function DailyTracker({ tracker }: { tracker: DailyTrackerResult | null }) {
                 <Tooltip
                   contentStyle={{ background: '#111827', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
                   labelStyle={{ color: '#e5e7eb' }}
-                  formatter={(v: number) => [fmtGBP(v), 'Value']}
+                  formatter={(v: number | undefined) => [v != null ? fmtGBP(v) : '', 'Value']}
                 />
                 <ReferenceLine y={seed} stroke="#374151" strokeDasharray="4 4" />
                 <Line
@@ -239,7 +239,7 @@ function DailyTracker({ tracker }: { tracker: DailyTrackerResult | null }) {
               Today's Signals · {tracker.last_updated}
             </div>
             <div className="space-y-2">
-              {signals.map((s) => (
+              {signals.map((s: { asset: string; signal: string; weight: number; price_return: number; contribution: number }) => (
                 <div key={s.asset} className="flex items-center justify-between bg-[#0a0e17] rounded px-3 py-2">
                   <div className="flex items-center gap-2">
                     <span

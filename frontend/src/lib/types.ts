@@ -99,6 +99,35 @@ export interface PortfolioResult {
   per_asset_backtest?: AssetBacktest[]
 }
 
+export interface TrackerSignal {
+  asset: string
+  signal: string
+  weight: number
+  price_return: number
+  contribution: number
+}
+
+export interface EquityCurvePoint {
+  date: string
+  value: number
+  daily_return: number
+}
+
+export interface DailyTrackerResult {
+  has_data: boolean
+  note?: string
+  seed_value?: number
+  current_value?: number
+  daily_return?: number
+  cumulative_return?: number
+  inception_date?: string
+  last_updated?: string
+  days_tracked?: number
+  model_accuracy_pct?: number
+  today_signals?: TrackerSignal[]
+  equity_curve?: EquityCurvePoint[]
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string

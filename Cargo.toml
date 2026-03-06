@@ -37,7 +37,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # through Apple's Metal GPU shaders instead of CPU.
 # The "accelerate" feature uses Apple's Accelerate framework (vecLib/BLAS)
 # for optimised CPU linear algebra when tensors are on CPU.
-candle-core = { version = "0.9", features = ["metal", "accelerate"] }
+candle-core = { version = "0.9"}
 candle-nn = { version = "0.9" }
 safetensors = "0.4"
 
