@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  Cell, Legend,
+  Cell, Legend, LineChart, Line, ReferenceLine,
 } from 'recharts'
-import { fetchPortfolio } from '../lib/api'
-import type { PortfolioResult, StrategyResult, AssetBacktest } from '../lib/types'
+import { fetchPortfolio, fetchDailyTracker } from '../lib/api'
+import type { PortfolioResult, StrategyResult, AssetBacktest, DailyTrackerResult } from '../lib/types'
 
 const STRATEGY_LABELS: Record<string, string> = {
   sharpe: 'Sharpe-Weighted',
@@ -38,15 +38,19 @@ function fmtGBP(n: number): string {
 
 export default function Portfolio() {
   const [data, setData] = useState<PortfolioResult | null>(null)
+  const [tracker, setTracker] = useState<DailyTrackerResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedStrategy, setSelectedStrategy] = useState('sharpe')
   const [expandedAsset, setExpandedAsset] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchPortfolio()
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    Promise.all([
+      fetchPortfolio().catch(() => null),
+      fetchDailyTracker().catch(() => null),
+    ]).then(([portfolio, tracker]) => {
+      if (portfolio) setData(portfolio)
+      if (tracker) setTracker(tracker)
+    }).finally(() => setLoading(false))
   }, [])
 
   if (loading) return <div className="text-gray-500 p-8">Loading portfolio data...</div>
@@ -84,6 +88,9 @@ export default function Portfolio() {
       {/* Headline */}
       <Headline capital={data.starting_capital} strategy={current} />
 
+      {/* Part 2 — Daily live tracker */}
+      <DailyTracker tracker={tracker} />
+
       {/* Allocation table + bar chart */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <AllocationTable allocations={current.allocations} />
@@ -102,6 +109,165 @@ export default function Portfolio() {
         expanded={expandedAsset}
         onToggle={(a) => setExpandedAsset(expandedAsset === a ? null : a)}
       />
+    </div>
+  )
+}
+
+// ─── Daily Tracker (Part 2) ───
+
+function DailyTracker({ tracker }: { tracker: DailyTrackerResult | null }) {
+  if (!tracker) return null
+
+  if (!tracker.has_data) {
+    return (
+      <div className="bg-[#111827] border border-[#1f2937] rounded-lg p-6">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+          <h3 className="text-white font-semibold">Live Signal Portfolio</h3>
+          <span className="text-xs px-2 py-0.5 rounded bg-amber-400/10 text-amber-400">Awaiting Data</span>
+        </div>
+        <p className="text-gray-500 text-sm">
+          {tracker.note || 'Daily tracking begins on the first run after training. The portfolio compounds from the backtest seed value above.'}
+        </p>
+      </div>
+    )
+  }
+
+  const seed = tracker.seed_value ?? 0
+  const current = tracker.current_value ?? 0
+  const dailyReturn = tracker.daily_return ?? 0
+  const cumReturn = tracker.cumulative_return ?? 0
+  const accuracy = tracker.model_accuracy_pct ?? 0
+  const days = tracker.days_tracked ?? 0
+  const signals = tracker.today_signals ?? []
+  const curve = tracker.equity_curve ?? []
+
+  const isUp = dailyReturn >= 0
+  const isCumUp = cumReturn >= 0
+
+  return (
+    <div className="bg-[#111827] border border-cyan-500/20 rounded-lg p-6 shadow-[0_0_30px_rgba(6,182,212,0.05)]">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+          <h3 className="text-white font-semibold">Live Signal Portfolio</h3>
+          <span className="text-xs px-2 py-0.5 rounded bg-cyan-400/10 text-cyan-400">Part 2</span>
+        </div>
+        <div className="text-gray-500 text-xs">
+          Since {tracker.inception_date} · {days} day{days !== 1 ? 's' : ''}
+        </div>
+      </div>
+
+      {/* KPI row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+        <div className="bg-[#0a0e17] rounded-lg p-4">
+          <div className="text-gray-500 text-xs mb-1">Current Value</div>
+          <div className="text-cyan-400 text-2xl font-bold">{fmtGBP(current)}</div>
+          <div className="text-gray-500 text-xs mt-1">from {fmtGBP(seed)}</div>
+        </div>
+        <div className="bg-[#0a0e17] rounded-lg p-4">
+          <div className="text-gray-500 text-xs mb-1">Today</div>
+          <div className={`text-2xl font-bold ${isUp ? 'text-emerald-400' : 'text-red-400'}`}>
+            {isUp ? '+' : ''}{fmt(dailyReturn)}%
+          </div>
+          <div className="text-gray-500 text-xs mt-1">
+            {isUp ? '+' : ''}{fmtGBP((current - current / (1 + dailyReturn / 100)))}
+          </div>
+        </div>
+        <div className="bg-[#0a0e17] rounded-lg p-4">
+          <div className="text-gray-500 text-xs mb-1">Since Inception</div>
+          <div className={`text-2xl font-bold ${isCumUp ? 'text-emerald-400' : 'text-red-400'}`}>
+            {isCumUp ? '+' : ''}{fmt(cumReturn)}%
+          </div>
+          <div className="text-gray-500 text-xs mt-1">
+            {isCumUp ? '+' : ''}{fmtGBP(current - seed)}
+          </div>
+        </div>
+        <div className="bg-[#0a0e17] rounded-lg p-4">
+          <div className="text-gray-500 text-xs mb-1">Signal Accuracy</div>
+          <div className={`text-2xl font-bold ${accuracy >= 55 ? 'text-emerald-400' : accuracy >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+            {fmt(accuracy, 1)}%
+          </div>
+          <div className="text-gray-500 text-xs mt-1">direction correct</div>
+        </div>
+      </div>
+
+      {/* Equity curve + today's signals */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Mini equity curve */}
+        {curve.length > 1 && (
+          <div>
+            <div className="text-gray-400 text-xs mb-3 uppercase tracking-wider">Portfolio Growth</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={curve} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: '#4b5563', fontSize: 10 }}
+                  tickFormatter={(v) => v.slice(5)} // MM-DD
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  tick={{ fill: '#4b5563', fontSize: 10 }}
+                  tickFormatter={(v) => `£${(v / 1000).toFixed(0)}k`}
+                  width={48}
+                  domain={['auto', 'auto']}
+                />
+                <Tooltip
+                  contentStyle={{ background: '#111827', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
+                  labelStyle={{ color: '#e5e7eb' }}
+                  formatter={(v: number) => [fmtGBP(v), 'Value']}
+                />
+                <ReferenceLine y={seed} stroke="#374151" strokeDasharray="4 4" />
+                <Line
+                  type="monotone"
+                  dataKey="value"
+                  stroke="#06b6d4"
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4, fill: '#06b6d4' }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Today's signals breakdown */}
+        {signals.length > 0 && (
+          <div>
+            <div className="text-gray-400 text-xs mb-3 uppercase tracking-wider">
+              Today's Signals · {tracker.last_updated}
+            </div>
+            <div className="space-y-2">
+              {signals.map((s) => (
+                <div key={s.asset} className="flex items-center justify-between bg-[#0a0e17] rounded px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="text-xs font-bold px-1.5 py-0.5 rounded"
+                      style={{
+                        color: SIGNAL_COLORS[s.signal] || SIGNAL_COLORS['N/A'],
+                        background: `${SIGNAL_COLORS[s.signal] || SIGNAL_COLORS['N/A']}20`,
+                      }}
+                    >
+                      {s.signal}
+                    </span>
+                    <span className="text-white text-sm font-medium">{s.asset}</span>
+                    <span className="text-gray-500 text-xs">{fmt(s.weight, 1)}%</span>
+                  </div>
+                  <div className="flex gap-4 text-xs">
+                    <span className={s.price_return >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                      {s.price_return >= 0 ? '+' : ''}{fmt(s.price_return)}%
+                    </span>
+                    <span className={`${s.contribution >= 0 ? 'text-emerald-400' : 'text-red-400'} text-gray-500`}>
+                      {s.contribution >= 0 ? '+' : ''}{fmt(s.contribution, 3)}% contrib
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

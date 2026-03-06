@@ -1,97 +1,97 @@
 {
   "assets": {
     "AAPL": {
-      "ensemble": 59.2,
-      "gbt": 59.0,
-      "linreg": 58.5,
-      "logreg": 61.0
+      "ensemble": 60.0,
+      "gbt": 60.8,
+      "linreg": 60.0,
+      "logreg": 58.5
     },
     "AMZN": {
-      "ensemble": 60.4,
-      "gbt": 58.7,
+      "ensemble": 57.4,
+      "gbt": 58.5,
       "linreg": 61.8,
-      "logreg": 58.7
+      "logreg": 58.5
     },
     "AUDUSD=X": {
-      "ensemble": 64.0,
-      "gbt": 64.6,
-      "linreg": 63.1,
-      "logreg": 63.8
+      "ensemble": 61.9,
+      "gbt": 64.4,
+      "linreg": 61.8,
+      "logreg": 64.4
     },
     "CHF=X": {
-      "ensemble": 61.0,
-      "gbt": 61.0,
+      "ensemble": 59.2,
+      "gbt": 62.1,
       "linreg": 61.0,
-      "logreg": 61.0
+      "logreg": 60.0
     },
     "DIA": {
-      "ensemble": 58.7,
+      "ensemble": 58.5,
       "gbt": 61.3,
-      "linreg": 59.0,
-      "logreg": 63.1
+      "linreg": 56.7,
+      "logreg": 60.5
     },
     "EURUSD=X": {
-      "ensemble": 59.4,
-      "gbt": 60.0,
-      "linreg": 59.5,
-      "logreg": 59.7
+      "ensemble": 58.3,
+      "gbt": 61.5,
+      "linreg": 59.2,
+      "logreg": 60.0
     },
     "GBPUSD=X": {
-      "ensemble": 63.0,
-      "gbt": 63.1,
-      "linreg": 63.3,
-      "logreg": 62.6
+      "ensemble": 60.7,
+      "gbt": 63.8,
+      "linreg": 62.8,
+      "logreg": 61.5
     },
     "GOOGL": {
-      "ensemble": 59.6,
-      "gbt": 59.2,
-      "linreg": 61.5,
-      "logreg": 59.7
+      "ensemble": 60.1,
+      "gbt": 63.6,
+      "linreg": 61.8,
+      "logreg": 60.5
     },
     "JPY=X": {
-      "ensemble": 61.6,
-      "gbt": 66.2,
-      "linreg": 61.5,
-      "logreg": 60.3
+      "ensemble": 62.1,
+      "gbt": 66.4,
+      "linreg": 61.8,
+      "logreg": 61.5
     },
     "META": {
-      "ensemble": 57.4,
-      "gbt": 57.7,
-      "linreg": 59.0,
-      "logreg": 59.7
+      "ensemble": 58.1,
+      "gbt": 58.7,
+      "linreg": 59.7,
+      "logreg": 58.7
     },
     "MSFT": {
       "ensemble": 57.4,
-      "gbt": 56.4,
+      "gbt": 59.2,
       "linreg": 59.5,
-      "logreg": 60.8
+      "logreg": 60.3
     },
     "NVDA": {
-      "ensemble": 58.1,
-      "gbt": 59.5,
+      "ensemble": 58.7,
+      "gbt": 60.3,
       "linreg": 61.3,
       "logreg": 60.3
     },
     "QQQ": {
-      "ensemble": 58.7,
+      "ensemble": 58.1,
       "gbt": 58.7,
-      "linreg": 60.5,
-      "logreg": 61.5
+      "linreg": 59.0,
+      "logreg": 60.0
     },
     "SPY": {
-      "ensemble": 58.8,
+      "ensemble": 58.3,
       "gbt": 57.9,
-      "linreg": 60.3,
-      "logreg": 61.0
+      "linreg": 59.0,
+      "logreg": 60.3
     },
     "TSLA": {
-      "ensemble": 58.8,
-      "gbt": 64.4,
-      "linreg": 60.8,
-      "logreg": 60.8
+      "ensemble": 60.6,
+      "gbt": 62.8,
+      "linreg": 63.6,
+      "logreg": 61.3
     }
   },
-  "date": "2026-03-05",
-  "features": 68,
+  "date": "2026-03-06",
+  "features": 80,
   "version": "v8_improved"
 }

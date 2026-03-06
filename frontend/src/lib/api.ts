@@ -1,4 +1,4 @@
-import type { EnrichedSignal, ModelManifest, PortfolioResult } from './types'
+import type { EnrichedSignal, ModelManifest, PortfolioResult, DailyTrackerResult } from './types'
 
 const BASE = ''
 
@@ -34,6 +34,12 @@ export async function reloadModels(): Promise<{ status: string; assets_found: nu
 
 export async function fetchPortfolio(): Promise<PortfolioResult> {
   const res = await fetch(`${BASE}/api/v1/portfolio/simulate`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchDailyTracker(): Promise<DailyTrackerResult> {
+  const res = await fetch(`${BASE}/api/v1/portfolio/daily-tracker`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }

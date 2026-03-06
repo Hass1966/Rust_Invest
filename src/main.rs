@@ -515,6 +515,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "stock",
+            features::sector_etf_for(stock.symbol),
         );
 
         if samples.len() < 100 {
@@ -626,6 +627,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "fx",
+            None,
         );
 
         if samples.len() < 100 {
@@ -795,6 +797,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "stock",
+            features::sector_etf_for(stock.symbol),
         );
 
         if samples.len() < 100 { continue; }
@@ -823,6 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "fx",
+            None,
         );
 
         if samples.len() < 100 { continue; }

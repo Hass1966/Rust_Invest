@@ -16,6 +16,7 @@ use axum::{
     Json,
     http::StatusCode,
 };
+use tower_http::services::{ServeDir, ServeFile};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -97,9 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start hourly scheduler
     let scheduler_state = state.clone();
     tokio::spawn(async move {
-        // Wait 1 hour before first scheduled refresh (we just did initial)
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
-        interval.tick().await; // skip immediate tick
 
         loop {
             interval.tick().await;
@@ -110,6 +109,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("  [Scheduler] Error: {}", e);
             }
 
+            // Run portfolio tracker every hour so it's current throughout the day
+            {
+                let sigs = scheduler_state.signals.read().await;
+                let signals_clone: std::collections::HashMap<String, enriched_signals::EnrichedSignal> =
+                    sigs.clone();
+                drop(sigs);
+                let db_path = scheduler_state.db_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    daily_tracker::run_daily_update(&signals_clone, &db_path);
+                }).await.ok();
+            }
+
             let sigs = scheduler_state.signals.read().await;
             println!("  [Scheduler] Refresh complete. {} signals cached.", sigs.len());
         }
@@ -117,6 +128,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build router
     let cors = tower_http::cors::CorsLayer::permissive();
+
+    // Serve frontend static files from frontend/dist/
+    // Falls back to index.html for SPA routing
+    let frontend_dist = std::path::PathBuf::from("frontend/dist");
+    let serve_frontend = if frontend_dist.exists() {
+        println!("  Serving frontend from: frontend/dist/");
+        true
+    } else {
+        println!("  Note: frontend/dist/ not found — run 'npm run build' in frontend/ to enable static serving");
+        println!("  For development, run 'npm run dev' in frontend/ separately");
+        false
+    };
 
     let app = Router::new()
         .route("/health", get(health))
@@ -129,9 +152,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/signals/current/crypto", get(get_crypto_signals))
         .route("/api/v1/signals/history/{asset}", get(get_signal_history))
         .route("/api/v1/portfolio/simulate", get(simulate_portfolio))
+        .route("/api/v1/portfolio/daily-tracker", get(get_daily_tracker))
+        .route("/api/v1/history/portfolio", get(get_portfolio_history))
+        .route("/api/v1/history/signals", get(get_signals_history))
         .route("/api/v1/chat", post(chat_handler))
-        .layer(cors)
+        .layer(cors.clone())
         .with_state(state);
+
+    // Nest static file serving outside the API router so CORS doesn't interfere
+    let app = if serve_frontend {
+        let index = frontend_dist.join("index.html");
+        Router::new()
+            .nest_service("/assets", ServeDir::new(frontend_dist.join("assets")))
+            .route_service("/", ServeFile::new(&index))
+            .fallback_service(ServeFile::new(&index))
+            .merge(app)
+    } else {
+        app
+    };
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     println!("\n  Server listening on http://0.0.0.0:8080");
@@ -146,6 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    GET  /api/v1/signals/current/crypto");
     println!("    GET  /api/v1/signals/history/:asset");
     println!("    GET  /api/v1/portfolio/simulate");
+    println!("    GET  /api/v1/portfolio/daily-tracker");
     println!("    POST /api/v1/chat\n");
 
     axum::serve(listener, app).await?;
@@ -357,6 +396,133 @@ async fn simulate_portfolio(
         "has_data": true,
         "strategies": strategies,
         "per_asset_backtest": per_asset,
+    })))
+}
+
+async fn get_daily_tracker(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        daily_tracker::build_api_response(&db_path)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(result))
+}
+
+async fn get_portfolio_history(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let database = db::Database::new(&state.db_path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = database.get_daily_portfolio(90).unwrap_or_default();
+
+    if rows.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "has_data": false,
+            "note": "No portfolio history yet. Data accumulates hourly once serve is running."
+        })));
+    }
+
+    // Reverse to chronological order for charting
+    let mut rows = rows;
+    rows.reverse();
+
+    let seed = rows.first().map(|r| r.seed_value).unwrap_or(0.0);
+    let latest = rows.last().unwrap();
+
+    let points: Vec<serde_json::Value> = rows.iter().map(|r| {
+        serde_json::json!({
+            "date": r.date,
+            "value": r.portfolio_value,
+            "daily_return": r.daily_return,
+            "cumulative_return": r.cumulative_return,
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "has_data": true,
+        "seed_value": seed,
+        "current_value": latest.portfolio_value,
+        "cumulative_return": latest.cumulative_return,
+        "days": rows.len(),
+        "points": points,
+    })))
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryParams {
+    days: Option<usize>,
+}
+
+async fn get_signals_history(
+    State(state): State<AppState>,
+    Query(params): Query<HistoryParams>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let database = db::Database::new(&state.db_path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let days = params.days.unwrap_or(14);
+    let rows = database.get_recent_signals_all_assets(days).unwrap_or_default();
+
+    if rows.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "has_data": false,
+            "note": "No signal history yet."
+        })));
+    }
+
+    // Group by asset, then by date (take one signal per asset per day — most recent)
+    let mut by_asset: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+
+    for row in &rows {
+        let date = &row.timestamp[..10]; // YYYY-MM-DD
+        let entry = serde_json::json!({
+            "date": date,
+            "signal": row.signal,
+            "confidence": row.confidence,
+            "probability_up": row.probability_up,
+            "price": row.price,
+            "rsi": row.rsi,
+            "asset_class": row.asset_class,
+        });
+        by_asset.entry(row.asset.clone()).or_default().push(entry);
+    }
+
+    // Deduplicate — keep one per asset per date (first = most recent due to ORDER BY timestamp DESC)
+    let mut deduped: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for (asset, entries) in &by_asset {
+        let mut seen_dates = std::collections::HashSet::new();
+        let unique: Vec<serde_json::Value> = entries.iter().filter(|e| {
+            let date = e["date"].as_str().unwrap_or("").to_string();
+            seen_dates.insert(date)
+        }).cloned().collect();
+        deduped.insert(asset.clone(), unique);
+    }
+
+    // Compute per-asset accuracy
+    let accuracy: std::collections::HashMap<String, serde_json::Value> = deduped.iter()
+        .map(|(asset, entries)| {
+            let total = entries.len();
+            // We don't have actual returns here, but we can show signal distribution
+            let buys = entries.iter().filter(|e| e["signal"] == "BUY").count();
+            let sells = entries.iter().filter(|e| e["signal"] == "SELL").count();
+            let holds = entries.iter().filter(|e| e["signal"] == "HOLD").count();
+            (asset.clone(), serde_json::json!({
+                "total": total,
+                "buys": buys,
+                "sells": sells,
+                "holds": holds,
+            }))
+        }).collect();
+
+    Ok(Json(serde_json::json!({
+        "has_data": true,
+        "days": days,
+        "signals": deduped,
+        "accuracy": accuracy,
     })))
 }
 
@@ -726,6 +892,7 @@ fn infer_stock_signal(
     let samples = features::build_rich_features(
         &prices, &volumes, &timestamps,
         Some(market_context), "stock",
+        features::sector_etf_for(symbol),
     );
     if samples.is_empty() { return None; }
 
@@ -766,6 +933,7 @@ fn infer_fx_signal(
     let samples = features::build_rich_features(
         &prices, &volumes, &timestamps,
         Some(market_context), "fx",
+        None,
     );
     if samples.is_empty() { return None; }
 

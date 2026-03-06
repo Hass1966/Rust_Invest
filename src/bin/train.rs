@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock");
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol));
         if samples.len() < 100 { continue; }
 
         let n_feat = samples[0].features.len();
@@ -231,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx");
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", None);
         if samples.len() < 100 { continue; }
 
         let n_feat = samples[0].features.len();

@@ -1,0 +1,603 @@
+╔══════════════════════════════════════════════════════════════════╗
+║         RUST INVEST — VALIDATION (Retrospective Simulation)    ║
+╚══════════════════════════════════════════════════════════════════╝
+
+  Period:  Last 14 trading days
+  Capital: £10000
+  DB:      rust_invest.db
+
+  Loaded 16 asset allocations from last training run
+
+  Loading price history for 16 assets...
+  Simulating 7 trading days: 2026-02-17 → 2026-02-25
+
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded TSLA linreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA GBT (80 trees, trained: 2026-03-05, acc: 64.4%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded NVDA linreg (trained: 2026-03-05, acc: 61.3%)
+    [Store] Loaded NVDA logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded NVDA GBT (80 trees, trained: 2026-03-05, acc: 59.5%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded GOOGL linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded GOOGL logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded GOOGL GBT (61 trees, trained: 2026-03-05, acc: 59.2%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded META linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded META logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded META GBT (50 trees, trained: 2026-03-05, acc: 57.7%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AMZN linreg (trained: 2026-03-05, acc: 61.8%)
+    [Store] Loaded AMZN logreg (trained: 2026-03-05, acc: 58.7%)
+    [Store] Loaded AMZN GBT (15 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded MSFT linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded MSFT logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded MSFT GBT (50 trees, trained: 2026-03-05, acc: 56.4%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded QQQ linreg (trained: 2026-03-05, acc: 60.5%)
+    [Store] Loaded QQQ logreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded QQQ GBT (44 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded DIA linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded DIA logreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded DIA GBT (24 trees, trained: 2026-03-05, acc: 61.3%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AAPL linreg (trained: 2026-03-05, acc: 58.5%)
+    [Store] Loaded AAPL logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded AAPL GBT (45 trees, trained: 2026-03-05, acc: 59.0%)
+  Built 1029 samples × 83 features (raw) for fx
+  Built 1029 samples × 68 features for fx (15 pruned)
+    [Store] Loaded JPY=X linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded JPY=X logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded JPY=X GBT (64 trees, trained: 2026-03-05, acc: 66.2%)
+  Built 1029 samples × 83 features (raw) for fx
+  Built 1029 samples × 68 features for fx (15 pruned)
+    [Store] Loaded AUDUSD=X linreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded AUDUSD=X logreg (trained: 2026-03-05, acc: 63.8%)
+    [Store] Loaded AUDUSD=X GBT (80 trees, trained: 2026-03-05, acc: 64.6%)
+  Built 988 samples × 83 features (raw) for stock
+  Built 988 samples × 68 features for stock (15 pruned)
+    [Store] Loaded SPY linreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded SPY logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded SPY GBT (51 trees, trained: 2026-03-05, acc: 57.9%)
+  Built 1029 samples × 83 features (raw) for fx
+  Built 1029 samples × 68 features for fx (15 pruned)
+    [Store] Loaded EURUSD=X linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded EURUSD=X logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded EURUSD=X GBT (60 trees, trained: 2026-03-05, acc: 60.0%)
+  Built 1029 samples × 83 features (raw) for fx
+  Built 1029 samples × 68 features for fx (15 pruned)
+    [Store] Loaded GBPUSD=X linreg (trained: 2026-03-05, acc: 63.3%)
+    [Store] Loaded GBPUSD=X logreg (trained: 2026-03-05, acc: 62.6%)
+    [Store] Loaded GBPUSD=X GBT (78 trees, trained: 2026-03-05, acc: 63.1%)
+  Built 1029 samples × 83 features (raw) for fx
+  Built 1029 samples × 68 features for fx (15 pruned)
+    [Store] Loaded CHF=X linreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X GBT (56 trees, trained: 2026-03-05, acc: 61.0%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded TSLA linreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA GBT (80 trees, trained: 2026-03-05, acc: 64.4%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded NVDA linreg (trained: 2026-03-05, acc: 61.3%)
+    [Store] Loaded NVDA logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded NVDA GBT (80 trees, trained: 2026-03-05, acc: 59.5%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded GOOGL linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded GOOGL logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded GOOGL GBT (61 trees, trained: 2026-03-05, acc: 59.2%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded META linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded META logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded META GBT (50 trees, trained: 2026-03-05, acc: 57.7%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AMZN linreg (trained: 2026-03-05, acc: 61.8%)
+    [Store] Loaded AMZN logreg (trained: 2026-03-05, acc: 58.7%)
+    [Store] Loaded AMZN GBT (15 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded MSFT linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded MSFT logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded MSFT GBT (50 trees, trained: 2026-03-05, acc: 56.4%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded QQQ linreg (trained: 2026-03-05, acc: 60.5%)
+    [Store] Loaded QQQ logreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded QQQ GBT (44 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded DIA linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded DIA logreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded DIA GBT (24 trees, trained: 2026-03-05, acc: 61.3%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AAPL linreg (trained: 2026-03-05, acc: 58.5%)
+    [Store] Loaded AAPL logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded AAPL GBT (45 trees, trained: 2026-03-05, acc: 59.0%)
+  Built 1030 samples × 83 features (raw) for fx
+  Built 1030 samples × 68 features for fx (15 pruned)
+    [Store] Loaded JPY=X linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded JPY=X logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded JPY=X GBT (64 trees, trained: 2026-03-05, acc: 66.2%)
+  Built 1030 samples × 83 features (raw) for fx
+  Built 1030 samples × 68 features for fx (15 pruned)
+    [Store] Loaded AUDUSD=X linreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded AUDUSD=X logreg (trained: 2026-03-05, acc: 63.8%)
+    [Store] Loaded AUDUSD=X GBT (80 trees, trained: 2026-03-05, acc: 64.6%)
+  Built 989 samples × 83 features (raw) for stock
+  Built 989 samples × 68 features for stock (15 pruned)
+    [Store] Loaded SPY linreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded SPY logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded SPY GBT (51 trees, trained: 2026-03-05, acc: 57.9%)
+  Built 1030 samples × 83 features (raw) for fx
+  Built 1030 samples × 68 features for fx (15 pruned)
+    [Store] Loaded EURUSD=X linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded EURUSD=X logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded EURUSD=X GBT (60 trees, trained: 2026-03-05, acc: 60.0%)
+  Built 1030 samples × 83 features (raw) for fx
+  Built 1030 samples × 68 features for fx (15 pruned)
+    [Store] Loaded GBPUSD=X linreg (trained: 2026-03-05, acc: 63.3%)
+    [Store] Loaded GBPUSD=X logreg (trained: 2026-03-05, acc: 62.6%)
+    [Store] Loaded GBPUSD=X GBT (78 trees, trained: 2026-03-05, acc: 63.1%)
+  Built 1030 samples × 83 features (raw) for fx
+  Built 1030 samples × 68 features for fx (15 pruned)
+    [Store] Loaded CHF=X linreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X GBT (56 trees, trained: 2026-03-05, acc: 61.0%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded TSLA linreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA GBT (80 trees, trained: 2026-03-05, acc: 64.4%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded NVDA linreg (trained: 2026-03-05, acc: 61.3%)
+    [Store] Loaded NVDA logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded NVDA GBT (80 trees, trained: 2026-03-05, acc: 59.5%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded GOOGL linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded GOOGL logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded GOOGL GBT (61 trees, trained: 2026-03-05, acc: 59.2%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded META linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded META logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded META GBT (50 trees, trained: 2026-03-05, acc: 57.7%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AMZN linreg (trained: 2026-03-05, acc: 61.8%)
+    [Store] Loaded AMZN logreg (trained: 2026-03-05, acc: 58.7%)
+    [Store] Loaded AMZN GBT (15 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded MSFT linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded MSFT logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded MSFT GBT (50 trees, trained: 2026-03-05, acc: 56.4%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded QQQ linreg (trained: 2026-03-05, acc: 60.5%)
+    [Store] Loaded QQQ logreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded QQQ GBT (44 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded DIA linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded DIA logreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded DIA GBT (24 trees, trained: 2026-03-05, acc: 61.3%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AAPL linreg (trained: 2026-03-05, acc: 58.5%)
+    [Store] Loaded AAPL logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded AAPL GBT (45 trees, trained: 2026-03-05, acc: 59.0%)
+  Built 1031 samples × 83 features (raw) for fx
+  Built 1031 samples × 68 features for fx (15 pruned)
+    [Store] Loaded JPY=X linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded JPY=X logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded JPY=X GBT (64 trees, trained: 2026-03-05, acc: 66.2%)
+  Built 1031 samples × 83 features (raw) for fx
+  Built 1031 samples × 68 features for fx (15 pruned)
+    [Store] Loaded AUDUSD=X linreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded AUDUSD=X logreg (trained: 2026-03-05, acc: 63.8%)
+    [Store] Loaded AUDUSD=X GBT (80 trees, trained: 2026-03-05, acc: 64.6%)
+  Built 990 samples × 83 features (raw) for stock
+  Built 990 samples × 68 features for stock (15 pruned)
+    [Store] Loaded SPY linreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded SPY logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded SPY GBT (51 trees, trained: 2026-03-05, acc: 57.9%)
+  Built 1031 samples × 83 features (raw) for fx
+  Built 1031 samples × 68 features for fx (15 pruned)
+    [Store] Loaded EURUSD=X linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded EURUSD=X logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded EURUSD=X GBT (60 trees, trained: 2026-03-05, acc: 60.0%)
+  Built 1031 samples × 83 features (raw) for fx
+  Built 1031 samples × 68 features for fx (15 pruned)
+    [Store] Loaded GBPUSD=X linreg (trained: 2026-03-05, acc: 63.3%)
+    [Store] Loaded GBPUSD=X logreg (trained: 2026-03-05, acc: 62.6%)
+    [Store] Loaded GBPUSD=X GBT (78 trees, trained: 2026-03-05, acc: 63.1%)
+  Built 1031 samples × 83 features (raw) for fx
+  Built 1031 samples × 68 features for fx (15 pruned)
+    [Store] Loaded CHF=X linreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X GBT (56 trees, trained: 2026-03-05, acc: 61.0%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded TSLA linreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA GBT (80 trees, trained: 2026-03-05, acc: 64.4%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded NVDA linreg (trained: 2026-03-05, acc: 61.3%)
+    [Store] Loaded NVDA logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded NVDA GBT (80 trees, trained: 2026-03-05, acc: 59.5%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded GOOGL linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded GOOGL logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded GOOGL GBT (61 trees, trained: 2026-03-05, acc: 59.2%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded META linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded META logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded META GBT (50 trees, trained: 2026-03-05, acc: 57.7%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AMZN linreg (trained: 2026-03-05, acc: 61.8%)
+    [Store] Loaded AMZN logreg (trained: 2026-03-05, acc: 58.7%)
+    [Store] Loaded AMZN GBT (15 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded MSFT linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded MSFT logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded MSFT GBT (50 trees, trained: 2026-03-05, acc: 56.4%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded QQQ linreg (trained: 2026-03-05, acc: 60.5%)
+    [Store] Loaded QQQ logreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded QQQ GBT (44 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded DIA linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded DIA logreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded DIA GBT (24 trees, trained: 2026-03-05, acc: 61.3%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AAPL linreg (trained: 2026-03-05, acc: 58.5%)
+    [Store] Loaded AAPL logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded AAPL GBT (45 trees, trained: 2026-03-05, acc: 59.0%)
+  Built 1032 samples × 83 features (raw) for fx
+  Built 1032 samples × 68 features for fx (15 pruned)
+    [Store] Loaded JPY=X linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded JPY=X logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded JPY=X GBT (64 trees, trained: 2026-03-05, acc: 66.2%)
+  Built 1032 samples × 83 features (raw) for fx
+  Built 1032 samples × 68 features for fx (15 pruned)
+    [Store] Loaded AUDUSD=X linreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded AUDUSD=X logreg (trained: 2026-03-05, acc: 63.8%)
+    [Store] Loaded AUDUSD=X GBT (80 trees, trained: 2026-03-05, acc: 64.6%)
+  Built 991 samples × 83 features (raw) for stock
+  Built 991 samples × 68 features for stock (15 pruned)
+    [Store] Loaded SPY linreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded SPY logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded SPY GBT (51 trees, trained: 2026-03-05, acc: 57.9%)
+  Built 1032 samples × 83 features (raw) for fx
+  Built 1032 samples × 68 features for fx (15 pruned)
+    [Store] Loaded EURUSD=X linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded EURUSD=X logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded EURUSD=X GBT (60 trees, trained: 2026-03-05, acc: 60.0%)
+  Built 1032 samples × 83 features (raw) for fx
+  Built 1032 samples × 68 features for fx (15 pruned)
+    [Store] Loaded GBPUSD=X linreg (trained: 2026-03-05, acc: 63.3%)
+    [Store] Loaded GBPUSD=X logreg (trained: 2026-03-05, acc: 62.6%)
+    [Store] Loaded GBPUSD=X GBT (78 trees, trained: 2026-03-05, acc: 63.1%)
+  Built 1032 samples × 83 features (raw) for fx
+  Built 1032 samples × 68 features for fx (15 pruned)
+    [Store] Loaded CHF=X linreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X GBT (56 trees, trained: 2026-03-05, acc: 61.0%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded TSLA linreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA GBT (80 trees, trained: 2026-03-05, acc: 64.4%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded NVDA linreg (trained: 2026-03-05, acc: 61.3%)
+    [Store] Loaded NVDA logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded NVDA GBT (80 trees, trained: 2026-03-05, acc: 59.5%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded GOOGL linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded GOOGL logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded GOOGL GBT (61 trees, trained: 2026-03-05, acc: 59.2%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded META linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded META logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded META GBT (50 trees, trained: 2026-03-05, acc: 57.7%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AMZN linreg (trained: 2026-03-05, acc: 61.8%)
+    [Store] Loaded AMZN logreg (trained: 2026-03-05, acc: 58.7%)
+    [Store] Loaded AMZN GBT (15 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded MSFT linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded MSFT logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded MSFT GBT (50 trees, trained: 2026-03-05, acc: 56.4%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded QQQ linreg (trained: 2026-03-05, acc: 60.5%)
+    [Store] Loaded QQQ logreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded QQQ GBT (44 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded DIA linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded DIA logreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded DIA GBT (24 trees, trained: 2026-03-05, acc: 61.3%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AAPL linreg (trained: 2026-03-05, acc: 58.5%)
+    [Store] Loaded AAPL logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded AAPL GBT (45 trees, trained: 2026-03-05, acc: 59.0%)
+  Built 1033 samples × 83 features (raw) for fx
+  Built 1033 samples × 68 features for fx (15 pruned)
+    [Store] Loaded JPY=X linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded JPY=X logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded JPY=X GBT (64 trees, trained: 2026-03-05, acc: 66.2%)
+  Built 1033 samples × 83 features (raw) for fx
+  Built 1033 samples × 68 features for fx (15 pruned)
+    [Store] Loaded AUDUSD=X linreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded AUDUSD=X logreg (trained: 2026-03-05, acc: 63.8%)
+    [Store] Loaded AUDUSD=X GBT (80 trees, trained: 2026-03-05, acc: 64.6%)
+  Built 992 samples × 83 features (raw) for stock
+  Built 992 samples × 68 features for stock (15 pruned)
+    [Store] Loaded SPY linreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded SPY logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded SPY GBT (51 trees, trained: 2026-03-05, acc: 57.9%)
+  Built 1033 samples × 83 features (raw) for fx
+  Built 1033 samples × 68 features for fx (15 pruned)
+    [Store] Loaded EURUSD=X linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded EURUSD=X logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded EURUSD=X GBT (60 trees, trained: 2026-03-05, acc: 60.0%)
+  Built 1033 samples × 83 features (raw) for fx
+  Built 1033 samples × 68 features for fx (15 pruned)
+    [Store] Loaded GBPUSD=X linreg (trained: 2026-03-05, acc: 63.3%)
+    [Store] Loaded GBPUSD=X logreg (trained: 2026-03-05, acc: 62.6%)
+    [Store] Loaded GBPUSD=X GBT (78 trees, trained: 2026-03-05, acc: 63.1%)
+  Built 1033 samples × 83 features (raw) for fx
+  Built 1033 samples × 68 features for fx (15 pruned)
+    [Store] Loaded CHF=X linreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X GBT (56 trees, trained: 2026-03-05, acc: 61.0%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded TSLA linreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded TSLA GBT (80 trees, trained: 2026-03-05, acc: 64.4%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded NVDA linreg (trained: 2026-03-05, acc: 61.3%)
+    [Store] Loaded NVDA logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded NVDA GBT (80 trees, trained: 2026-03-05, acc: 59.5%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded GOOGL linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded GOOGL logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded GOOGL GBT (61 trees, trained: 2026-03-05, acc: 59.2%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded META linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded META logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded META GBT (50 trees, trained: 2026-03-05, acc: 57.7%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AMZN linreg (trained: 2026-03-05, acc: 61.8%)
+    [Store] Loaded AMZN logreg (trained: 2026-03-05, acc: 58.7%)
+    [Store] Loaded AMZN GBT (15 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded MSFT linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded MSFT logreg (trained: 2026-03-05, acc: 60.8%)
+    [Store] Loaded MSFT GBT (50 trees, trained: 2026-03-05, acc: 56.4%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded QQQ linreg (trained: 2026-03-05, acc: 60.5%)
+    [Store] Loaded QQQ logreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded QQQ GBT (44 trees, trained: 2026-03-05, acc: 58.7%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded DIA linreg (trained: 2026-03-05, acc: 59.0%)
+    [Store] Loaded DIA logreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded DIA GBT (24 trees, trained: 2026-03-05, acc: 61.3%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded AAPL linreg (trained: 2026-03-05, acc: 58.5%)
+    [Store] Loaded AAPL logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded AAPL GBT (45 trees, trained: 2026-03-05, acc: 59.0%)
+  Built 1034 samples × 83 features (raw) for fx
+  Built 1034 samples × 68 features for fx (15 pruned)
+    [Store] Loaded JPY=X linreg (trained: 2026-03-05, acc: 61.5%)
+    [Store] Loaded JPY=X logreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded JPY=X GBT (64 trees, trained: 2026-03-05, acc: 66.2%)
+  Built 1034 samples × 83 features (raw) for fx
+  Built 1034 samples × 68 features for fx (15 pruned)
+    [Store] Loaded AUDUSD=X linreg (trained: 2026-03-05, acc: 63.1%)
+    [Store] Loaded AUDUSD=X logreg (trained: 2026-03-05, acc: 63.8%)
+    [Store] Loaded AUDUSD=X GBT (80 trees, trained: 2026-03-05, acc: 64.6%)
+  Built 994 samples × 83 features (raw) for stock
+  Built 994 samples × 68 features for stock (15 pruned)
+    [Store] Loaded SPY linreg (trained: 2026-03-05, acc: 60.3%)
+    [Store] Loaded SPY logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded SPY GBT (51 trees, trained: 2026-03-05, acc: 57.9%)
+  Built 1034 samples × 83 features (raw) for fx
+  Built 1034 samples × 68 features for fx (15 pruned)
+    [Store] Loaded EURUSD=X linreg (trained: 2026-03-05, acc: 59.5%)
+    [Store] Loaded EURUSD=X logreg (trained: 2026-03-05, acc: 59.7%)
+    [Store] Loaded EURUSD=X GBT (60 trees, trained: 2026-03-05, acc: 60.0%)
+  Built 1034 samples × 83 features (raw) for fx
+  Built 1034 samples × 68 features for fx (15 pruned)
+    [Store] Loaded GBPUSD=X linreg (trained: 2026-03-05, acc: 63.3%)
+    [Store] Loaded GBPUSD=X logreg (trained: 2026-03-05, acc: 62.6%)
+    [Store] Loaded GBPUSD=X GBT (78 trees, trained: 2026-03-05, acc: 63.1%)
+  Built 1034 samples × 83 features (raw) for fx
+  Built 1034 samples × 68 features for fx (15 pruned)
+    [Store] Loaded CHF=X linreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X logreg (trained: 2026-03-05, acc: 61.0%)
+    [Store] Loaded CHF=X GBT (56 trees, trained: 2026-03-05, acc: 61.0%)
+[1m━━━ DAY BY DAY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[2mDate[0m [2mValue[0m [2mDay P&L[0m [2mAcc[0m [2mSignals[0m
+[2m────────────────────────────────────────────────────────────[0m
+  [96m2026-02-17[0m      £10044  [92m+0.44%[0m  [93m50%[0m  [2m3/6[0m
+    [91mSELL[0m TSLA         [2m7.9%w[0m  actual [92m+0.17%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m NVDA         [2m9.8%w[0m  actual [92m+1.63%[0m contrib [92m+0.16%[0m[92m  ✓[0m
+    [92mBUY [0m GOOGL        [2m6.6%w[0m  actual [92m+0.43%[0m contrib [92m+0.03%[0m[92m  ✓[0m
+    [93mHOLD[0m META         [2m6.3%w[0m  actual [92m+0.61%[0m contrib [92m+0.04%[0m[2m  ·[0m
+    [93mHOLD[0m AMZN         [2m5.6%w[0m  actual [92m+1.81%[0m contrib [92m+0.10%[0m[2m  ·[0m
+    [93mHOLD[0m MSFT         [2m7.6%w[0m  actual [92m+0.69%[0m contrib [92m+0.05%[0m[2m  ·[0m
+    [93mHOLD[0m QQQ          [2m6.8%w[0m  actual [92m+0.75%[0m contrib [92m+0.05%[0m[2m  ·[0m
+    [91mSELL[0m DIA          [2m6.8%w[0m  actual [92m+0.23%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [93mHOLD[0m AAPL         [2m4.6%w[0m  actual [92m+0.18%[0m contrib [92m+0.01%[0m[2m  ·[0m
+    [92mBUY [0m JPY=X        [2m7.8%w[0m  actual [91m-0.30%[0m contrib [91m-0.02%[0m[91m  ✗[0m
+    [93mHOLD[0m AUDUSD=X     [2m7.7%w[0m  actual [92m+0.14%[0m contrib [92m+0.01%[0m[2m  ·[0m
+    [92mBUY [0m SPY          [2m5.7%w[0m  actual [92m+0.50%[0m contrib [92m+0.03%[0m[92m  ✓[0m
+    [93mHOLD[0m EURUSD=X     [2m5.6%w[0m  actual [92m+0.02%[0m contrib [92m+0.00%[0m[2m  ·[0m
+    [93mHOLD[0m GBPUSD=X     [2m4.9%w[0m  actual [91m-0.46%[0m contrib [91m-0.02%[0m[2m  ·[0m
+    [93mHOLD[0m CHF=X        [2m5.2%w[0m  actual [92m+0.08%[0m contrib [92m+0.00%[0m[2m  ·[0m
+
+  [96m2026-02-18[0m      £10031  [91m-0.13%[0m  [91m38%[0m  [2m3/8[0m
+    [91mSELL[0m TSLA         [2m7.9%w[0m  actual [92m+0.09%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m NVDA         [2m9.8%w[0m  actual [91m-0.04%[0m contrib [91m-0.00%[0m[91m  ✗[0m
+    [92mBUY [0m GOOGL        [2m6.6%w[0m  actual [91m-0.16%[0m contrib [91m-0.01%[0m[91m  ✗[0m
+    [92mBUY [0m META         [2m6.3%w[0m  actual [92m+0.24%[0m contrib [92m+0.02%[0m[92m  ✓[0m
+    [93mHOLD[0m AMZN         [2m5.6%w[0m  actual [92m+0.03%[0m contrib [92m+0.00%[0m[2m  ·[0m
+    [92mBUY [0m MSFT         [2m7.6%w[0m  actual [91m-0.29%[0m contrib [91m-0.02%[0m[91m  ✗[0m
+    [93mHOLD[0m QQQ          [2m6.8%w[0m  actual [91m-0.38%[0m contrib [91m-0.03%[0m[2m  ·[0m
+    [91mSELL[0m DIA          [2m6.8%w[0m  actual [91m-0.53%[0m contrib [92m+0.00%[0m[92m  ✓[0m
+    [92mBUY [0m AAPL         [2m4.6%w[0m  actual [91m-1.43%[0m contrib [91m-0.07%[0m[91m  ✗[0m
+    [92mBUY [0m JPY=X        [2m7.8%w[0m  actual [92m+1.01%[0m contrib [92m+0.08%[0m[92m  ✓[0m
+    [93mHOLD[0m AUDUSD=X     [2m7.7%w[0m  actual [91m-0.56%[0m contrib [91m-0.04%[0m[2m  ·[0m
+    [93mHOLD[0m SPY          [2m5.7%w[0m  actual [91m-0.26%[0m contrib [91m-0.02%[0m[2m  ·[0m
+    [93mHOLD[0m EURUSD=X     [2m5.6%w[0m  actual [91m-0.53%[0m contrib [91m-0.03%[0m[2m  ·[0m
+    [93mHOLD[0m GBPUSD=X     [2m4.9%w[0m  actual [91m-0.51%[0m contrib [91m-0.02%[0m[2m  ·[0m
+    [93mHOLD[0m CHF=X        [2m5.2%w[0m  actual [92m+0.26%[0m contrib [92m+0.01%[0m[2m  ·[0m
+
+  [96m2026-02-19[0m      £10095  [92m+0.64%[0m  [93m50%[0m  [2m5/10[0m
+    [91mSELL[0m TSLA         [2m7.9%w[0m  actual [92m+0.03%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m NVDA         [2m9.8%w[0m  actual [92m+1.02%[0m contrib [92m+0.10%[0m[92m  ✓[0m
+    [93mHOLD[0m GOOGL        [2m6.6%w[0m  actual [92m+4.01%[0m contrib [92m+0.26%[0m[2m  ·[0m
+    [92mBUY [0m META         [2m6.3%w[0m  actual [92m+1.69%[0m contrib [92m+0.11%[0m[92m  ✓[0m
+    [91mSELL[0m AMZN         [2m5.6%w[0m  actual [92m+2.56%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [93mHOLD[0m MSFT         [2m7.6%w[0m  actual [91m-0.31%[0m contrib [91m-0.02%[0m[2m  ·[0m
+    [93mHOLD[0m QQQ          [2m6.8%w[0m  actual [92m+0.88%[0m contrib [92m+0.06%[0m[2m  ·[0m
+    [91mSELL[0m DIA          [2m6.8%w[0m  actual [92m+0.34%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m AAPL         [2m4.6%w[0m  actual [92m+1.54%[0m contrib [92m+0.07%[0m[92m  ✓[0m
+    [92mBUY [0m JPY=X        [2m7.8%w[0m  actual [92m+0.30%[0m contrib [92m+0.02%[0m[92m  ✓[0m
+    [91mSELL[0m AUDUSD=X     [2m7.7%w[0m  actual [92m+0.17%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m SPY          [2m5.7%w[0m  actual [92m+0.72%[0m contrib [92m+0.04%[0m[92m  ✓[0m
+    [93mHOLD[0m EURUSD=X     [2m5.6%w[0m  actual [91m-0.17%[0m contrib [91m-0.01%[0m[2m  ·[0m
+    [92mBUY [0m GBPUSD=X     [2m4.9%w[0m  actual [91m-0.26%[0m contrib [91m-0.01%[0m[91m  ✗[0m
+    [93mHOLD[0m CHF=X        [2m5.2%w[0m  actual [92m+0.41%[0m contrib [92m+0.02%[0m[2m  ·[0m
+
+  [96m2026-02-20[0m      £10028  [91m-0.66%[0m  [92m60%[0m  [2m6/10[0m
+    [91mSELL[0m TSLA         [2m7.9%w[0m  actual [91m-2.91%[0m contrib [92m+0.00%[0m[92m  ✓[0m
+    [92mBUY [0m NVDA         [2m9.8%w[0m  actual [92m+0.91%[0m contrib [92m+0.09%[0m[92m  ✓[0m
+    [93mHOLD[0m GOOGL        [2m6.6%w[0m  actual [91m-1.11%[0m contrib [91m-0.07%[0m[2m  ·[0m
+    [92mBUY [0m META         [2m6.3%w[0m  actual [91m-2.81%[0m contrib [91m-0.18%[0m[91m  ✗[0m
+    [93mHOLD[0m AMZN         [2m5.6%w[0m  actual [91m-2.30%[0m contrib [91m-0.13%[0m[2m  ·[0m
+    [92mBUY [0m MSFT         [2m7.6%w[0m  actual [91m-3.21%[0m contrib [91m-0.24%[0m[91m  ✗[0m
+    [92mBUY [0m QQQ          [2m6.8%w[0m  actual [91m-1.22%[0m contrib [91m-0.08%[0m[91m  ✗[0m
+    [93mHOLD[0m DIA          [2m6.8%w[0m  actual [91m-1.63%[0m contrib [91m-0.11%[0m[2m  ·[0m
+    [92mBUY [0m AAPL         [2m4.6%w[0m  actual [92m+0.60%[0m contrib [92m+0.03%[0m[92m  ✓[0m
+    [91mSELL[0m JPY=X        [2m7.8%w[0m  actual [91m-0.53%[0m contrib [92m+0.00%[0m[92m  ✓[0m
+    [93mHOLD[0m AUDUSD=X     [2m7.7%w[0m  actual [92m+0.78%[0m contrib [92m+0.06%[0m[2m  ·[0m
+    [92mBUY [0m SPY          [2m5.7%w[0m  actual [91m-1.02%[0m contrib [91m-0.06%[0m[91m  ✗[0m
+    [92mBUY [0m EURUSD=X     [2m5.6%w[0m  actual [92m+0.56%[0m contrib [92m+0.03%[0m[92m  ✓[0m
+    [92mBUY [0m GBPUSD=X     [2m4.9%w[0m  actual [92m+0.54%[0m contrib [92m+0.03%[0m[92m  ✓[0m
+    [93mHOLD[0m CHF=X        [2m5.2%w[0m  actual [91m-0.47%[0m contrib [91m-0.02%[0m[2m  ·[0m
+
+  [96m2026-02-23[0m      £10033  [92m+0.05%[0m  [91m42%[0m  [2m5/12[0m
+    [91mSELL[0m TSLA         [2m7.9%w[0m  actual [92m+0.37%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [93mHOLD[0m NVDA         [2m9.8%w[0m  actual [91m-0.40%[0m contrib [91m-0.04%[0m[2m  ·[0m
+    [91mSELL[0m GOOGL        [2m6.6%w[0m  actual [91m-1.16%[0m contrib [92m+0.00%[0m[92m  ✓[0m
+    [91mSELL[0m META         [2m6.3%w[0m  actual [91m-1.04%[0m contrib [92m+0.00%[0m[92m  ✓[0m
+    [91mSELL[0m AMZN         [2m5.6%w[0m  actual [92m+0.20%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m MSFT         [2m7.6%w[0m  actual [92m+0.31%[0m contrib [92m+0.02%[0m[92m  ✓[0m
+    [91mSELL[0m QQQ          [2m6.8%w[0m  actual [92m+0.42%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [91mSELL[0m DIA          [2m6.8%w[0m  actual [92m+0.48%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m AAPL         [2m4.6%w[0m  actual [92m+2.91%[0m contrib [92m+0.13%[0m[92m  ✓[0m
+    [91mSELL[0m JPY=X        [2m7.8%w[0m  actual [92m+0.19%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [93mHOLD[0m AUDUSD=X     [2m7.7%w[0m  actual [91m-0.71%[0m contrib [91m-0.05%[0m[2m  ·[0m
+    [92mBUY [0m SPY          [2m5.7%w[0m  actual [92m+0.12%[0m contrib [92m+0.01%[0m[92m  ✓[0m
+    [92mBUY [0m EURUSD=X     [2m5.6%w[0m  actual [91m-0.35%[0m contrib [91m-0.02%[0m[91m  ✗[0m
+    [92mBUY [0m GBPUSD=X     [2m4.9%w[0m  actual [91m-0.27%[0m contrib [91m-0.01%[0m[91m  ✗[0m
+    [93mHOLD[0m CHF=X        [2m5.2%w[0m  actual [92m+0.33%[0m contrib [92m+0.02%[0m[2m  ·[0m
+
+  [96m2026-02-24[0m      £10138  [92m+1.04%[0m  [91m17%[0m  [2m1/6[0m
+    [91mSELL[0m TSLA         [2m7.9%w[0m  actual [92m+4.01%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [93mHOLD[0m NVDA         [2m9.8%w[0m  actual [92m+2.51%[0m contrib [92m+0.25%[0m[2m  ·[0m
+    [91mSELL[0m GOOGL        [2m6.6%w[0m  actual [92m+1.63%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [93mHOLD[0m META         [2m6.3%w[0m  actual [92m+3.66%[0m contrib [92m+0.23%[0m[2m  ·[0m
+    [93mHOLD[0m AMZN         [2m5.6%w[0m  actual [92m+2.41%[0m contrib [92m+0.13%[0m[2m  ·[0m
+    [93mHOLD[0m MSFT         [2m7.6%w[0m  actual [92m+3.88%[0m contrib [92m+0.29%[0m[2m  ·[0m
+    [91mSELL[0m QQQ          [2m6.8%w[0m  actual [92m+2.11%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [91mSELL[0m DIA          [2m6.8%w[0m  actual [92m+0.91%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [92mBUY [0m AAPL         [2m4.6%w[0m  actual [92m+0.12%[0m contrib [92m+0.01%[0m[92m  ✓[0m
+    [93mHOLD[0m JPY=X        [2m7.8%w[0m  actual [92m+0.81%[0m contrib [92m+0.06%[0m[2m  ·[0m
+    [91mSELL[0m AUDUSD=X     [2m7.7%w[0m  actual [92m+0.00%[0m contrib [92m+0.00%[0m[91m  ✗[0m
+    [93mHOLD[0m SPY          [2m5.7%w[0m  actual [92m+1.45%[0m contrib [92m+0.08%[0m[2m  ·[0m
+    [93mHOLD[0m EURUSD=X     [2m5.6%w[0m  actual [91m-0.16%[0m contrib [91m-0.01%[0m[2m  ·[0m
+    [93mHOLD[0m GBPUSD=X     [2m4.9%w[0m  actual [92m+0.00%[0m contrib [92m+0.00%[0m[2m  ·[0m
+    [93mHOLD[0m CHF=X        [2m5.2%w[0m  actual [91m-0.06%[0m contrib [91m-0.00%[0m[2m  ·[0m
+
+  [96m2026-02-25[0m      £10138  [92m+0.00%[0m  [2m—[0m  [2m0/0[0m
+
+[1m━━━ SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+  Starting capital : £10000
+  Final value      : [96m£10138.28[0m
+  Total return     : [92m+1.38%[0m
+  Period           : 7 trading days
+
+  Signal accuracy  : [91m44.2%[0m  (BUY/SELL only, 23/52)
+  Verdict          : [91m✗ MODEL BELOW RANDOM — INVESTIGATE[0m
+
+[1m━━━ PER-ASSET ACCURACY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+  [2mAsset[0m  [2mAccuracy[0m [2mSignals[0m [2mContribution[0m
+  [2m──────────────────────────────────────────────────[0m
+  NVDA           [92m75%[0m [2m3/4[0m [92m+0.55%[0m
+  META           [92m75%[0m [2m3/4[0m [92m+0.21%[0m
+  GOOGL          [93m50%[0m [2m2/4[0m [92m+0.21%[0m
+  AAPL           [92m80%[0m [2m4/5[0m [92m+0.18%[0m
+  JPY=X          [92m60%[0m [2m3/5[0m [92m+0.14%[0m
+  AMZN           [91m0%[0m [2m0/2[0m [92m+0.11%[0m
+  SPY            [92m75%[0m [2m3/4[0m [92m+0.09%[0m
+  MSFT           [91m33%[0m [2m1/3[0m [92m+0.08%[0m
+  CHF=X          [2mHOLD only[0m [2m0/0[0m [92m+0.03%[0m
+  QQQ            [91m0%[0m [2m0/3[0m [92m+0.00%[0m
+  TSLA           [91m17%[0m [2m1/6[0m [92m+0.00%[0m
+  AUDUSD=X       [91m0%[0m [2m0/2[0m [91m-0.03%[0m
+  EURUSD=X       [93m50%[0m [2m1/2[0m [91m-0.04%[0m
+  GBPUSD=X       [91m33%[0m [2m1/3[0m [91m-0.05%[0m
+  DIA            [91m20%[0m [2m1/5[0m [91m-0.11%[0m
+
+  Note: HOLD signals excluded from accuracy. Contribution = weighted return.
+        Run with --verbose to see per-day model probabilities.
+

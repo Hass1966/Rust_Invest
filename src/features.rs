@@ -99,6 +99,18 @@ pub const MARKET_TICKERS: &[&str] = &[
     "UUP",    // US Dollar ETF
 ];
 
+/// Map a symbol to its sector ETF (returns None for FX/crypto)
+pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
+    match symbol {
+        "TSLA" | "AMZN" => Some("XLY"),
+        "NVDA" | "MSFT" | "AAPL" | "QQQ" => Some("XLK"),
+        "GOOGL" | "META" => Some("XLC"),
+        "DIA" => Some("XLF"),
+        "SPY" => Some("SPY"),
+        _ => None,
+    }
+}
+
 /// Feature names — all 80+
 pub fn feature_names() -> Vec<String> {
     let mut names = Vec::new();
@@ -201,6 +213,20 @@ pub fn feature_names() -> Vec<String> {
     names.push("autocorr_5d".into());
     names.push("hurst_exponent_est".into());
     names.push("mean_reversion_score".into());
+
+    // I. Relative & Cross-Asset features (12 features)
+    names.push("stock_vs_sector_5d".into());
+    names.push("stock_vs_sector_20d".into());
+    names.push("stock_vs_spy_5d".into());
+    names.push("stock_vs_spy_20d".into());
+    names.push("breadth_score".into());
+    names.push("momentum_volume_confirm".into());
+    names.push("vol_adjusted_momentum_5d".into());
+    names.push("vol_adjusted_momentum_20d".into());
+    names.push("consecutive_up_days".into());
+    names.push("consecutive_down_days".into());
+    names.push("price_acceleration".into());
+    names.push("regime_consistency".into());
 
     names
 }
@@ -307,6 +333,7 @@ pub fn build_rich_features(
     timestamps: &[String],
     market: Option<&MarketContext>,
     asset_type: &str,
+    sector_etf: Option<&str>,
 ) -> Vec<Sample> {
     let min_lookback = 260; // need 252 trading days + buffer for SMA200
     if prices.len() < min_lookback {
@@ -613,6 +640,92 @@ pub fn build_rich_features(
             } else { false }
         }).count() as f64;
         f.push(revert_count / 20.0);                             // mean_reversion_score
+
+        // ══ I. Relative & Cross-Asset features (12) ══
+
+        // Precompute momentum values used by multiple features below
+        let mom_1d = safe_div(price - prices[i.saturating_sub(1)], prices[i.saturating_sub(1)]);
+        let mom_5d = safe_div(price - prices[i.saturating_sub(5)], prices[i.saturating_sub(5)]);
+        let mom_10d = safe_div(price - prices[i.saturating_sub(10)], prices[i.saturating_sub(10)]);
+        let mom_20d = safe_div(price - prices[i.saturating_sub(20)], prices[i.saturating_sub(20)]);
+
+        // stock_vs_sector_5d / stock_vs_sector_20d
+        if let (Some(mkt), Some(etf)) = (market, sector_etf) {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            let sector_rets = mkt.sector_returns.get(etf);
+            let sector_5d = sector_rets
+                .filter(|v| v.len() > mi && mi >= 5)
+                .map(|v| v[mi.saturating_sub(4)..=mi].iter().sum::<f64>())
+                .unwrap_or(0.0);
+            let sector_20d = sector_rets
+                .filter(|v| v.len() > mi && mi >= 20)
+                .map(|v| v[mi.saturating_sub(19)..=mi].iter().sum::<f64>())
+                .unwrap_or(0.0);
+            f.push(mom_5d - sector_5d);                              // stock_vs_sector_5d
+            f.push(mom_20d - sector_20d);                            // stock_vs_sector_20d
+        } else {
+            f.push(0.0);                                             // stock_vs_sector_5d (FX/no data)
+            f.push(0.0);                                             // stock_vs_sector_20d (FX/no data)
+        }
+
+        // stock_vs_spy_5d / stock_vs_spy_20d
+        if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            let spy_5d = if mkt.spy_returns.len() > mi && mi >= 5 {
+                mkt.spy_returns[mi.saturating_sub(4)..=mi].iter().sum::<f64>()
+            } else { 0.0 };
+            let spy_20d = if mkt.spy_returns.len() > mi && mi >= 20 {
+                mkt.spy_returns[mi.saturating_sub(19)..=mi].iter().sum::<f64>()
+            } else { 0.0 };
+            f.push(mom_5d - spy_5d);                                 // stock_vs_spy_5d
+            f.push(mom_20d - spy_20d);                               // stock_vs_spy_20d
+        } else {
+            f.push(0.0);                                             // stock_vs_spy_5d
+            f.push(0.0);                                             // stock_vs_spy_20d
+        }
+
+        f.push(0.0);                                                // breadth_score (placeholder)
+
+        // momentum_volume_confirm: sign(momentum_5d) * volume_ratio_20d
+        let vol_ratio_20d = safe_div(v_now, v_sma20);
+        let mom_sign = if mom_5d > 0.0 { 1.0 } else if mom_5d < 0.0 { -1.0 } else { 0.0 };
+        f.push(mom_sign * vol_ratio_20d);                           // momentum_volume_confirm
+
+        // vol_adjusted_momentum_5d: mom_5d / vol_20d
+        f.push(safe_div(mom_5d, vol20));                            // vol_adjusted_momentum_5d
+
+        // vol_adjusted_momentum_20d: mom_20d / vol_60d
+        f.push(safe_div(mom_20d, vol60));                           // vol_adjusted_momentum_20d
+
+        // consecutive_up_days (capped at 10)
+        let mut consec_up = 0_usize;
+        for j in (1..=10.min(i)).rev() {
+            if all_returns.len() > i - j && all_returns[i - j] > 0.0 {
+                consec_up += 1;
+            } else {
+                break;
+            }
+        }
+        f.push(consec_up as f64);                                   // consecutive_up_days
+
+        // consecutive_down_days (capped at 10)
+        let mut consec_down = 0_usize;
+        for j in (1..=10.min(i)).rev() {
+            if all_returns.len() > i - j && all_returns[i - j] < 0.0 {
+                consec_down += 1;
+            } else {
+                break;
+            }
+        }
+        f.push(consec_down as f64);                                 // consecutive_down_days
+
+        // price_acceleration: momentum_5d - momentum_10d
+        f.push(mom_5d - mom_10d);                                   // price_acceleration
+
+        // regime_consistency: 1.0 if mom_1d, 5d, 20d all same sign, else 0.0
+        let same_sign = (mom_1d > 0.0 && mom_5d > 0.0 && mom_20d > 0.0)
+            || (mom_1d < 0.0 && mom_5d < 0.0 && mom_20d < 0.0);
+        f.push(if same_sign { 1.0 } else { 0.0 });                 // regime_consistency
 
         // ══ Label: next day return ══
         let label = prices[i+1] - prices[i]; // positive = up

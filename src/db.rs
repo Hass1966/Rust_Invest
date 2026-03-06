@@ -162,7 +162,21 @@ impl Database {
                 contribution REAL,
                 sharpe REAL,
                 UNIQUE(model_version, strategy, asset)
-            );"
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_portfolio (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                date            TEXT NOT NULL UNIQUE,
+                seed_value      REAL NOT NULL,
+                portfolio_value REAL NOT NULL,
+                daily_return    REAL NOT NULL,
+                cumulative_return REAL NOT NULL,
+                signals_json    TEXT,
+                model_version   INTEGER NOT NULL,
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_daily_portfolio_date
+                ON daily_portfolio(date);"
         )?;
         Ok(())
     }
@@ -474,6 +488,38 @@ impl Database {
         Ok(())
     }
 
+    /// Get the most recent signal for each asset within the last N days
+    /// Used for the signal history heatmap
+    pub fn get_recent_signals_all_assets(&self, days: usize) -> Result<Vec<SignalSnapshotRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, asset, asset_class, signal, confidence,
+                    probability_up, model_agreement, rsi, trend, price,
+                    quality, reason, suggested_action
+             FROM signal_snapshots
+             WHERE timestamp >= datetime('now', ?1)
+             ORDER BY asset, timestamp DESC"
+        )?;
+        let days_param = format!("-{} days", days);
+        let rows = stmt.query_map(params![days_param], |row| {
+            Ok(SignalSnapshotRow {
+                timestamp: row.get(0)?,
+                asset: row.get(1)?,
+                asset_class: row.get(2)?,
+                signal: row.get(3)?,
+                confidence: row.get(4)?,
+                probability_up: row.get(5)?,
+                model_agreement: row.get(6)?,
+                rsi: row.get(7)?,
+                trend: row.get(8)?,
+                price: row.get(9)?,
+                quality: row.get(10)?,
+                reason: row.get(11)?,
+                suggested_action: row.get(12)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
     pub fn get_signal_history(&self, asset: &str, limit: usize) -> Result<Vec<SignalSnapshotRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT timestamp, asset, asset_class, signal, confidence,
@@ -660,6 +706,91 @@ impl Database {
         )?;
         Ok(count > 0)
     }
+
+    // ── Daily portfolio tracker ──
+
+    pub fn upsert_daily_portfolio(&self, row: &DailyPortfolioRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO daily_portfolio
+                (date, seed_value, portfolio_value, daily_return,
+                 cumulative_return, signals_json, model_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                row.date, row.seed_value, row.portfolio_value,
+                row.daily_return, row.cumulative_return,
+                row.signals_json, row.model_version,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_daily_portfolio(&self, limit: usize) -> Result<Vec<DailyPortfolioRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, seed_value, portfolio_value, daily_return,
+                    cumulative_return, signals_json, model_version
+             FROM daily_portfolio
+             ORDER BY date DESC
+             LIMIT ?1"
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(DailyPortfolioRow {
+                date: row.get(0)?,
+                seed_value: row.get(1)?,
+                portfolio_value: row.get(2)?,
+                daily_return: row.get(3)?,
+                cumulative_return: row.get(4)?,
+                signals_json: row.get(5)?,
+                model_version: row.get(6)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn get_latest_daily_portfolio(&self) -> Result<Option<DailyPortfolioRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, seed_value, portfolio_value, daily_return,
+                    cumulative_return, signals_json, model_version
+             FROM daily_portfolio
+             ORDER BY date DESC
+             LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map([], |row| {
+            Ok(DailyPortfolioRow {
+                date: row.get(0)?,
+                seed_value: row.get(1)?,
+                portfolio_value: row.get(2)?,
+                daily_return: row.get(3)?,
+                cumulative_return: row.get(4)?,
+                signals_json: row.get(5)?,
+                model_version: row.get(6)?,
+            })
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn get_backtest_seed_value(&self, model_version: u32) -> Result<Option<f64>> {
+        let result = self.conn.query_row(
+            "SELECT final_value FROM portfolio_results
+             WHERE model_version = ?1 AND strategy = 'sharpe'
+             LIMIT 1",
+            params![model_version],
+            |row| row.get::<_, f64>(0),
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn has_daily_portfolio_for_date(&self, date: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM daily_portfolio WHERE date = ?1",
+            params![date],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -720,4 +851,15 @@ pub struct SignalSnapshotRow {
     pub quality: Option<String>,
     pub reason: Option<String>,
     pub suggested_action: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DailyPortfolioRow {
+    pub date: String,
+    pub seed_value: f64,
+    pub portfolio_value: f64,
+    pub daily_return: f64,
+    pub cumulative_return: f64,
+    pub signals_json: Option<String>,
+    pub model_version: i64,
 }
