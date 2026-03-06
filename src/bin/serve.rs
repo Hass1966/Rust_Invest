@@ -893,6 +893,7 @@ fn infer_stock_signal(
         &prices, &volumes, &timestamps,
         Some(market_context), "stock",
         features::sector_etf_for(symbol),
+        None, None,
     );
     if samples.is_empty() { return None; }
 
@@ -906,7 +907,7 @@ fn infer_stock_signal(
         _ => "BEARISH",
     };
 
-    let signal = ensemble::ensemble_signal(&wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
+    let signal = ensemble::ensemble_signal(symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
 
     let vol_5d = if prices.len() >= 5 {
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-5..])))
@@ -933,7 +934,7 @@ fn infer_fx_signal(
     let samples = features::build_rich_features(
         &prices, &volumes, &timestamps,
         Some(market_context), "fx",
-        None,
+        None, None, None,
     );
     if samples.is_empty() { return None; }
 
@@ -947,7 +948,7 @@ fn infer_fx_signal(
         _ => "BEARISH",
     };
 
-    let signal = ensemble::ensemble_signal(&wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
+    let signal = ensemble::ensemble_signal(symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
 
     let vol_5d = if prices.len() >= 5 {
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-5..])))
@@ -1008,7 +1009,7 @@ fn infer_crypto_signal(
         _ => "BEARISH",
     };
 
-    let signal = ensemble::ensemble_signal(&wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
+    let signal = ensemble::ensemble_signal(coin_id, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
 
     let vol_5d = if prices.len() >= 5 {
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-5..])))

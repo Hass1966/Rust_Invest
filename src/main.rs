@@ -207,8 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Load stock history (5 years) ──
-    println!("\n━━━ LOADING STOCK HISTORY (5 years) ━━━\n");
+    // ── Load stock history (7 years) ──
+    println!("\n━━━ LOADING STOCK HISTORY (7 years) ━━━\n");
 
     for stock in stocks::STOCK_LIST {
         let existing = database.count_stock_history(stock.symbol)?;
@@ -219,9 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        println!("  Fetching {} 5-year history...", stock.symbol);
+        println!("  Fetching {} 7-year history...", stock.symbol);
 
-        match stocks::fetch_history(&client, stock.symbol, "5y").await {
+        match stocks::fetch_history(&client, stock.symbol, "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -266,8 +266,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Load FX history (5 years) ──
-    println!("\n━━━ LOADING FX HISTORY (5 years) ━━━\n");
+    // ── Load FX history (7 years) ──
+    println!("\n━━━ LOADING FX HISTORY (7 years) ━━━\n");
 
     for fx in stocks::FX_LIST {
         let existing = database.count_fx_history(fx.symbol)?;
@@ -278,9 +278,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        println!("  Fetching {} 5-year history...", fx.symbol);
+        println!("  Fetching {} 7-year history...", fx.symbol);
 
-        match stocks::fetch_history(&client, fx.symbol, "5y").await {
+        match stocks::fetch_history(&client, fx.symbol, "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -306,7 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ════════════════════════════════════════
     // PART 5b: Fetch MARKET INDICATORS (VIX, treasuries, sectors, gold, dollar)
     // ════════════════════════════════════════
-    println!("\n━━━ LOADING MARKET INDICATORS (5 years) ━━━\n");
+    println!("\n━━━ LOADING MARKET INDICATORS (7 years) ━━━\n");
 
     for ticker in features::MARKET_TICKERS {
         let existing = database.count_market_history(ticker)?;
@@ -318,9 +318,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Yahoo Finance uses the ticker as-is for indices (^VIX, ^TNX, etc.)
-        println!("  Fetching {} 5-year history...", ticker);
+        println!("  Fetching {} 7-year history...", ticker);
 
-        match stocks::fetch_history(&client, ticker, "5y").await {
+        match stocks::fetch_history(&client, ticker, "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -516,6 +516,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &prices, &volumes, &timestamps,
             Some(&market_context), "stock",
             features::sector_etf_for(stock.symbol),
+            None, None,
         );
 
         if samples.len() < 100 {
@@ -606,6 +607,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let signal = ensemble::ensemble_signal(
+                &wf.symbol,
                 &wf,
                 result.current_price,
                 result.rsi_14.unwrap_or(50.0),
@@ -627,7 +629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "fx",
-            None,
+            None, None, None,
         );
 
         if samples.len() < 100 {
@@ -658,6 +660,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let signal = ensemble::ensemble_signal(
+                &wf.symbol,
                 &wf,
                 result.current_price,
                 result.rsi_14.unwrap_or(50.0),
@@ -762,6 +765,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let signal = ensemble::ensemble_signal(
+                &wf.symbol,
                 &wf,
                 result.current_price,
                 result.rsi_14.unwrap_or(50.0),
@@ -798,6 +802,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &prices, &volumes, &timestamps,
             Some(&market_context), "stock",
             features::sector_etf_for(stock.symbol),
+            None, None,
         );
 
         if samples.len() < 100 { continue; }
@@ -826,7 +831,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "fx",
-            None,
+            None, None, None,
         );
 
         if samples.len() < 100 { continue; }

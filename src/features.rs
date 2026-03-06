@@ -228,6 +228,16 @@ pub fn feature_names() -> Vec<String> {
     names.push("price_acceleration".into());
     names.push("regime_consistency".into());
 
+    // J. Event, Sentiment & Momentum Quality features (8 features)
+    names.push("days_to_next_earnings".into());
+    names.push("days_since_last_earnings".into());
+    names.push("in_earnings_window".into());
+    names.push("fear_greed_index".into());
+    names.push("fear_greed_delta_5d".into());
+    names.push("volume_surge_on_move".into());
+    names.push("bid_ask_proxy".into());
+    names.push("smart_money_flow".into());
+
     names
 }
 
@@ -334,6 +344,8 @@ pub fn build_rich_features(
     market: Option<&MarketContext>,
     asset_type: &str,
     sector_etf: Option<&str>,
+    earnings_dates: Option<&[String]>,
+    fear_greed: Option<&[(String, f64)]>,
 ) -> Vec<Sample> {
     let min_lookback = 260; // need 252 trading days + buffer for SMA200
     if prices.len() < min_lookback {
@@ -727,6 +739,41 @@ pub fn build_rich_features(
             || (mom_1d < 0.0 && mom_5d < 0.0 && mom_20d < 0.0);
         f.push(if same_sign { 1.0 } else { 0.0 });                 // regime_consistency
 
+        // ══ J. Event, Sentiment & Momentum Quality features (8) ══
+
+        // Earnings features
+        let (days_to_next, days_since_last, in_window) = if let Some(edates) = earnings_dates {
+            compute_earnings_features(&timestamps[i], edates)
+        } else {
+            (1.0, 1.0, 0.0)
+        };
+        f.push(days_to_next);                                        // days_to_next_earnings
+        f.push(days_since_last);                                     // days_since_last_earnings
+        f.push(in_window);                                           // in_earnings_window
+
+        // Fear & Greed features
+        let (fg_val, fg_delta) = if let Some(fg) = fear_greed {
+            compute_fear_greed_features(&timestamps[i], fg)
+        } else {
+            (0.5, 0.0)
+        };
+        f.push(fg_val);                                              // fear_greed_index
+        f.push(fg_delta);                                            // fear_greed_delta_5d
+
+        // Volume surge on move: vol_ratio_20d * abs(momentum_1d) * 10
+        let vol_surge = vol_ratio_20d * mom_1d.abs() * 10.0;
+        f.push(vol_surge.min(5.0));                                  // volume_surge_on_move
+
+        // Bid-ask proxy: volatility_5d / volatility_20d ratio
+        f.push(safe_div(vol5, vol20));                               // bid_ask_proxy
+
+        // Smart money flow: OBV slope direction aligned with price trend
+        let obv_sign = if obv_sum > 0.0 { 1.0 } else if obv_sum < 0.0 { -1.0 } else { 0.0 };
+        let price_sign = if mom_5d > 0.0 { 1.0 } else if mom_5d < 0.0 { -1.0 } else { 0.0 };
+        let smart_money = if obv_sign == 0.0 || price_sign == 0.0 { 0.0 }
+            else if obv_sign == price_sign { 1.0 } else { -1.0 };
+        f.push(smart_money);                                         // smart_money_flow
+
         // ══ Label: next day return ══
         let label = prices[i+1] - prices[i]; // positive = up
 
@@ -822,6 +869,76 @@ fn estimate_hurst(returns: &[f64]) -> f64 {
     // H ≈ log(R/S) / log(n)
     let h = if rs > 0.0 { rs.ln() / (n as f64).ln() } else { 0.5 };
     h.clamp(0.0, 1.0)
+}
+
+/// Compute earnings features: (days_to_next/60, days_since_last/60, in_window)
+fn compute_earnings_features(timestamp: &str, earnings_dates: &[String]) -> (f64, f64, f64) {
+    let date_str = &timestamp[..10.min(timestamp.len())];
+    let mut days_to_next = 60_i64;
+    let mut days_since_last = 60_i64;
+
+    for ed in earnings_dates {
+        let ed_str = &ed[..10.min(ed.len())];
+        // Simple date diff using string comparison + rough day calculation
+        if let (Some(cur), Some(earn)) = (parse_date_days(date_str), parse_date_days(ed_str)) {
+            let diff = earn - cur;
+            if diff >= 0 && diff < days_to_next {
+                days_to_next = diff;
+            }
+            if diff <= 0 && (-diff) < days_since_last {
+                days_since_last = -diff;
+            }
+        }
+    }
+
+    let in_window = if days_to_next <= 3 || days_since_last <= 3 { 1.0 } else { 0.0 };
+    (
+        (days_to_next.min(60) as f64) / 60.0,
+        (days_since_last.min(60) as f64) / 60.0,
+        in_window,
+    )
+}
+
+/// Parse YYYY-MM-DD into approximate day number for date arithmetic
+fn parse_date_days(date: &str) -> Option<i64> {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() < 3 { return None; }
+    let y: i64 = parts[0].parse().ok()?;
+    let m: i64 = parts[1].parse().ok()?;
+    let d: i64 = parts[2].parse().ok()?;
+    Some(y * 365 + m * 30 + d)
+}
+
+/// Compute fear & greed features: (normalised 0-1, 5-day delta)
+fn compute_fear_greed_features(timestamp: &str, fg_history: &[(String, f64)]) -> (f64, f64) {
+    let date_str = &timestamp[..10.min(timestamp.len())];
+
+    // Find the most recent F&G value on or before this date
+    let mut current_val = 50.0;
+    let mut val_5d_ago = 50.0;
+    let mut found = false;
+
+    for (i, (d, v)) in fg_history.iter().enumerate() {
+        let d_str = &d[..10.min(d.len())];
+        if d_str <= date_str {
+            current_val = *v;
+            found = true;
+            // Look back ~5 entries for delta
+            if i >= 5 {
+                val_5d_ago = fg_history[i - 5].1;
+            }
+        } else {
+            break;
+        }
+    }
+
+    if !found {
+        return (0.5, 0.0);
+    }
+
+    let normalised = (current_val / 100.0).clamp(0.0, 1.0);
+    let delta = (current_val - val_5d_ago) / 100.0;
+    (normalised, delta)
 }
 
 /// Build MarketContext from fetched price histories

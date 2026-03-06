@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol));
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None);
         if samples.len() < 100 { continue; }
 
         let train_window = (samples.len() as f64 * 0.6) as usize;
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (Some(s), Some(l)) if s > l => "BULLISH",
                 _ => "BEARISH",
             };
-            signals.push(ensemble::ensemble_signal(&wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
+            signals.push(ensemble::ensemble_signal(stock.symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
         }
     }
 
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", None);
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", None, None, None);
         if samples.len() < 100 { continue; }
 
         let train_window = (samples.len() as f64 * 0.6) as usize;
@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (Some(s), Some(l)) if s > l => "BULLISH",
                 _ => "BEARISH",
             };
-            signals.push(ensemble::ensemble_signal(&wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
+            signals.push(ensemble::ensemble_signal(fx.symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
         }
     }
 
@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (Some(s), Some(l)) if s > l => "BULLISH",
                 _ => "BEARISH",
             };
-            signals.push(ensemble::ensemble_signal(&wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
+            signals.push(ensemble::ensemble_signal(coin_id, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
         }
     }
 

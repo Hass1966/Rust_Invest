@@ -355,6 +355,7 @@ fn generate_signal_for_date(
             &prices, &volumes, &timestamps,
             Some(market_context), asset_class,
             if asset_class == "stock" { features::sector_etf_for(symbol) } else { None },
+            None, None,
         ),
         _ => return None,
     };
@@ -373,6 +374,7 @@ fn generate_signal_for_date(
     };
 
     let signal = ensemble::ensemble_signal(
+        symbol,
         &wf,
         result.current_price,
         result.rsi_14.unwrap_or(50.0),

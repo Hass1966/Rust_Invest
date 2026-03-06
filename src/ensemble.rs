@@ -481,16 +481,30 @@ pub struct TradingSignal {
     pub has_lstm: bool,
 }
 
+/// Per-asset signal thresholds — noisy assets need higher confidence
+pub fn get_signal_threshold(symbol: &str) -> (f64, f64) {
+    match symbol {
+        "TSLA" | "DIA" => (0.62, 0.38),
+        "QQQ" | "AMZN" | "GOOGL" => (0.60, 0.40),
+        "MSFT" => (0.58, 0.42),
+        "META" | "NVDA" | "AAPL" | "SPY" => (0.57, 0.43),
+        "JPY=X" | "AUDUSD=X" | "EURUSD=X" | "GBPUSD=X" | "CHF=X" => (0.55, 0.45),
+        _ => (0.57, 0.43),
+    }
+}
+
 pub fn ensemble_signal(
+    symbol: &str,
     wf: &WalkForwardResult,
     current_price: f64,
     rsi: f64,
     sma_trend: &str,
 ) -> TradingSignal {
-    ensemble_signal_with_override(wf, current_price, rsi, sma_trend, &EnsembleOverride::default())
+    ensemble_signal_with_override(symbol, wf, current_price, rsi, sma_trend, &EnsembleOverride::default())
 }
 
 pub fn ensemble_signal_with_override(
+    symbol: &str,
     wf: &WalkForwardResult,
     current_price: f64,
     rsi: f64,
@@ -557,10 +571,12 @@ pub fn ensemble_signal_with_override(
     let signal = if !can_signal {
         "HOLD"
     } else {
+        let (base_buy, base_sell) = get_signal_threshold(symbol);
+        // Relax slightly when all models agree
         let (buy_thresh, sell_thresh) = if models_agree == n_models {
-            (0.55, 0.45)
+            (base_buy - 0.02, base_sell + 0.02)
         } else {
-            (0.60, 0.40)
+            (base_buy, base_sell)
         };
 
         if ensemble_prob > buy_thresh { "BUY" }

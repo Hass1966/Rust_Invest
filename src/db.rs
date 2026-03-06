@@ -176,7 +176,18 @@ impl Database {
                 created_at      TEXT DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_daily_portfolio_date
-                ON daily_portfolio(date);"
+                ON daily_portfolio(date);
+
+            CREATE TABLE IF NOT EXISTS earnings_dates (
+                symbol        TEXT NOT NULL,
+                earnings_date TEXT NOT NULL,
+                PRIMARY KEY (symbol, earnings_date)
+            );
+
+            CREATE TABLE IF NOT EXISTS fear_greed (
+                date  TEXT PRIMARY KEY,
+                value REAL NOT NULL
+            );"
         )?;
         Ok(())
     }
@@ -790,6 +801,46 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    // ── Earnings dates ──
+
+    pub fn insert_earnings_date(&self, symbol: &str, earnings_date: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO earnings_dates (symbol, earnings_date) VALUES (?1, ?2)",
+            params![symbol, earnings_date],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_earnings_dates(&self, symbol: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT earnings_date FROM earnings_dates WHERE symbol = ?1 ORDER BY earnings_date ASC"
+        )?;
+        let dates = stmt.query_map(params![symbol], |row| {
+            row.get::<_, String>(0)
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(dates)
+    }
+
+    // ── Fear & Greed index ──
+
+    pub fn insert_fear_greed(&self, date: &str, value: f64) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO fear_greed (date, value) VALUES (?1, ?2)",
+            params![date, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_fear_greed_history(&self) -> Result<Vec<(String, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, value FROM fear_greed ORDER BY date ASC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
     }
 }
 

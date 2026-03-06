@@ -69,15 +69,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Fetch stocks ──
-    println!("\n━━━ FETCHING STOCK DATA (5 years) ━━━\n");
+    println!("\n━━━ FETCHING STOCK DATA (7 years) ━━━\n");
     for stock in stocks::STOCK_LIST {
         let existing = database.count_stock_history(stock.symbol)?;
         if existing > 1000 {
             println!("  {} — already have {} records, skipping", stock.symbol, existing);
             continue;
         }
-        println!("  Fetching {} 5-year history...", stock.symbol);
-        match stocks::fetch_history(&client, stock.symbol, "5y").await {
+        println!("  Fetching {} 7-year history...", stock.symbol);
+        match stocks::fetch_history(&client, stock.symbol, "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -94,15 +94,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Fetch FX ──
-    println!("\n━━━ FETCHING FX DATA (5 years) ━━━\n");
+    println!("\n━━━ FETCHING FX DATA (7 years) ━━━\n");
     for fx in stocks::FX_LIST {
         let existing = database.count_fx_history(fx.symbol)?;
         if existing > 1000 {
             println!("  {} — already have {} records, skipping", fx.symbol, existing);
             continue;
         }
-        println!("  Fetching {} 5-year history...", fx.symbol);
-        match stocks::fetch_history(&client, fx.symbol, "5y").await {
+        println!("  Fetching {} 7-year history...", fx.symbol);
+        match stocks::fetch_history(&client, fx.symbol, "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -126,8 +126,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  {} — already have {} records, skipping", ticker, existing);
             continue;
         }
-        println!("  Fetching {} 5-year history...", ticker);
-        match stocks::fetch_history(&client, ticker, "5y").await {
+        println!("  Fetching {} 7-year history...", ticker);
+        match stocks::fetch_history(&client, ticker, "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol));
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None);
         if samples.len() < 100 { continue; }
 
         let n_feat = samples[0].features.len();
@@ -231,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", None);
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", None, None, None);
         if samples.len() < 100 { continue; }
 
         let n_feat = samples[0].features.len();
