@@ -44,6 +44,17 @@ export async function fetchDailyTracker(): Promise<DailyTrackerResult> {
   return res.json()
 }
 
+export async function fetchMorningBriefing(): Promise<string> {
+  const res = await fetch(`${BASE}/api/v1/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'morning_briefing', tab_context: 'overview' }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return data.response
+}
+
 export async function sendChat(message: string, tabContext: string): Promise<string> {
   const res = await fetch(`${BASE}/api/v1/chat`, {
     method: 'POST',

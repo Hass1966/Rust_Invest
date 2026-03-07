@@ -1,18 +1,35 @@
-import { useEffect, useState } from 'react'
-import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react'
-import { fetchSignals } from '../lib/api'
+import { useEffect, useState, useCallback } from 'react'
+import { TrendingUp, TrendingDown, Minus, Activity, RefreshCw } from 'lucide-react'
+import { fetchSignals, fetchMorningBriefing } from '../lib/api'
 import type { EnrichedSignal } from '../lib/types'
 
 export default function Overview() {
   const [signals, setSignals] = useState<EnrichedSignal[]>([])
   const [loading, setLoading] = useState(true)
+  const [briefing, setBriefing] = useState<string | null>(null)
+  const [briefingLoading, setBriefingLoading] = useState(true)
+  const [briefingTime, setBriefingTime] = useState<string | null>(null)
+  const [briefingError, setBriefingError] = useState(false)
+
+  const loadBriefing = useCallback(() => {
+    setBriefingLoading(true)
+    setBriefingError(false)
+    fetchMorningBriefing()
+      .then(text => {
+        setBriefing(text)
+        setBriefingTime(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
+      })
+      .catch(() => setBriefingError(true))
+      .finally(() => setBriefingLoading(false))
+  }, [])
 
   useEffect(() => {
     fetchSignals()
       .then(setSignals)
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+    loadBriefing()
+  }, [loadBriefing])
 
   const buys = signals.filter(s => s.signal === 'BUY')
   const sells = signals.filter(s => s.signal === 'SELL')
@@ -22,15 +39,35 @@ export default function Overview() {
     <div>
       {/* Morning briefing */}
       <div className="bg-[#111827] border border-[#1f2937] rounded-lg p-6 mb-6">
-        <h2 className="text-white text-lg font-semibold mb-2">Morning Briefing</h2>
-        <p className="text-gray-400 text-sm leading-relaxed">
-          Market overview and AI-generated briefing will appear here. The system monitors {signals.length} assets
-          across stocks, FX, and crypto, running inference through a 3-model ensemble (Linear Regression,
-          Logistic Regression, Gradient Boosted Trees) trained with walk-forward evaluation on 83+ features.
-        </p>
-        <p className="text-gray-500 text-xs mt-3 italic">
-          LLM-powered briefings coming in Phase 6. Use the Chat panel for interactive analysis.
-        </p>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-white text-lg font-semibold">Morning Briefing</h2>
+          <button
+            onClick={loadBriefing}
+            disabled={briefingLoading}
+            className="text-gray-500 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-white/5 disabled:opacity-30 cursor-pointer"
+            title="Refresh briefing"
+          >
+            <RefreshCw className={`w-4 h-4 ${briefingLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+        {briefingLoading ? (
+          <div className="space-y-3">
+            <div className="h-4 bg-gray-700/50 rounded w-full animate-pulse" />
+            <div className="h-4 bg-gray-700/50 rounded w-4/5 animate-pulse" />
+          </div>
+        ) : briefingError ? (
+          <div className="text-gray-500 text-sm">
+            <p>Couldn't load briefing. Is the LLM configured?</p>
+            <button onClick={loadBriefing} className="text-cyan-400 text-xs mt-1 hover:underline cursor-pointer">Retry</button>
+          </div>
+        ) : (
+          <>
+            <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-line">{briefing}</p>
+            {briefingTime && (
+              <p className="text-gray-600 text-xs mt-3">Generated at {briefingTime}</p>
+            )}
+          </>
+        )}
       </div>
 
       {/* Summary cards */}

@@ -550,6 +550,7 @@ async fn chat_handler(
     };
 
     let tab_context = req.tab_context.unwrap_or_else(|| "overview".to_string());
+    let is_morning_briefing = req.message.trim() == "morning_briefing";
 
     // Build portfolio context from daily tracker
     let portfolio_context = {
@@ -559,8 +560,8 @@ async fn chat_handler(
         }).await.unwrap_or_else(|_| serde_json::json!({"has_data": false}))
     };
 
-    // Build system prompt with full portfolio context
-    let system_prompt = {
+    // Build signals context (shared between briefing and general chat)
+    let (signals_table, portfolio_summary, accuracy_summary) = {
         let sigs = state.signals.read().await;
         let relevant: Vec<_> = match tab_context.as_str() {
             "stocks" => sigs.values().filter(|s| s.asset_class == "stock").cloned().collect(),
@@ -625,6 +626,27 @@ async fn chat_handler(
             ));
         }
 
+        (signals_table, portfolio_summary, accuracy_summary)
+    };
+
+    // Build system prompt — specialised for morning briefing vs generic chat
+    let system_prompt = if is_morning_briefing {
+        format!(
+            "You are a concise financial morning briefing generator for Rust Invest. \
+             Given today's signals, generate a 3-paragraph briefing in plain English \
+             (no jargon without explanation):\n\
+             Para 1: What markets are doing today in one sentence, then the overall mood \
+             (calm/cautious/fearful) based on signal distribution and any VIX data available.\n\
+             Para 2: The 2-3 strongest signals today and what they mean for someone with money to invest.\n\
+             Para 3: One 'watch out' — the biggest risk or caution signal visible in today's data.\n\
+             Keep total response under 150 words. No bullet points. \
+             Write as if speaking to someone new to investing.\n\n\
+             === TODAY'S SIGNALS ===\n{}\n\
+             === PORTFOLIO ===\n{}\n\
+             === MODEL ACCURACY ===\n{}",
+            signals_table, portfolio_summary, accuracy_summary,
+        )
+    } else {
         format!(
             "You are an AI analyst for a quantitative investment system (Rust_Invest).\n\
              Here is the current portfolio state:\n\n\
@@ -639,7 +661,13 @@ async fn chat_handler(
         )
     };
 
-    match llm::chat(&state.http_client, provider, &system_prompt, &req.message).await {
+    let user_message = if is_morning_briefing {
+        "Generate today's morning briefing."
+    } else {
+        &req.message
+    };
+
+    match llm::chat(&state.http_client, provider, &system_prompt, user_message).await {
         Ok(response) => Ok(Json(serde_json::json!({ "response": response }))),
         Err(e) => Ok(Json(serde_json::json!({ "response": format!("Error: {}", e) }))),
     }
