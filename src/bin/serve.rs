@@ -155,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/portfolio/daily-tracker", get(get_daily_tracker))
         .route("/api/v1/history/portfolio", get(get_portfolio_history))
         .route("/api/v1/history/signals", get(get_signals_history))
+        .route("/api/v1/hints", get(get_hints))
         .route("/api/v1/chat", post(chat_handler))
         .layer(cors.clone())
         .with_state(state);
@@ -185,6 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    GET  /api/v1/signals/history/:asset");
     println!("    GET  /api/v1/portfolio/simulate");
     println!("    GET  /api/v1/portfolio/daily-tracker");
+    println!("    GET  /api/v1/hints");
     println!("    POST /api/v1/chat\n");
 
     axum::serve(listener, app).await?;
@@ -524,6 +526,18 @@ async fn get_signals_history(
         "signals": deduped,
         "accuracy": accuracy,
     })))
+}
+
+// ════════════════════════════════════════
+// Hints Handler
+// ════════════════════════════════════════
+
+async fn get_hints(
+    State(state): State<AppState>,
+) -> Json<Vec<hints::Hint>> {
+    let sigs = state.signals.read().await;
+    let hints = hints::generate_hints(&sigs);
+    Json(hints)
 }
 
 // ════════════════════════════════════════

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { TrendingUp, TrendingDown, Minus, Activity, RefreshCw } from 'lucide-react'
-import { fetchSignals, fetchMorningBriefing } from '../lib/api'
-import type { EnrichedSignal } from '../lib/types'
+import { fetchSignals, fetchMorningBriefing, fetchHints } from '../lib/api'
+import type { EnrichedSignal, Hint } from '../lib/types'
 
 export default function Overview() {
   const [signals, setSignals] = useState<EnrichedSignal[]>([])
@@ -10,6 +10,7 @@ export default function Overview() {
   const [briefingLoading, setBriefingLoading] = useState(true)
   const [briefingTime, setBriefingTime] = useState<string | null>(null)
   const [briefingError, setBriefingError] = useState(false)
+  const [hints, setHints] = useState<Hint[]>([])
 
   const loadBriefing = useCallback(() => {
     setBriefingLoading(true)
@@ -29,6 +30,7 @@ export default function Overview() {
       .catch(() => {})
       .finally(() => setLoading(false))
     loadBriefing()
+    fetchHints().then(setHints).catch(() => {})
   }, [loadBriefing])
 
   const buys = signals.filter(s => s.signal === 'BUY')
@@ -69,6 +71,9 @@ export default function Overview() {
           </>
         )}
       </div>
+
+      {/* Hints panel */}
+      {hints.length > 0 && <HintsPanel hints={hints} />}
 
       {/* Summary cards */}
       <div className="grid grid-cols-4 gap-4 mb-6">
@@ -127,6 +132,50 @@ export default function Overview() {
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  )
+}
+
+function HintsPanel({ hints }: { hints: Hint[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null)
+  const urgencyColor: Record<string, string> = {
+    high: '#ef4444',
+    medium: '#f59e0b',
+    low: '#3b82f6',
+  }
+
+  return (
+    <div className="bg-[#111827] border border-[#1f2937] rounded-lg p-6 mb-6">
+      <h3 className="text-white font-semibold mb-4">Things worth knowing today</h3>
+      <div className="space-y-3">
+        {hints.map((hint, i) => (
+          <div key={i} className="bg-[#0a0e17] rounded-lg overflow-hidden flex">
+            <div className="w-1 flex-shrink-0" style={{ background: urgencyColor[hint.urgency] || '#6b7280' }} />
+            <div className="p-4 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-white text-sm font-medium">{hint.title}</h4>
+                  <p className="text-gray-400 text-sm mt-1">{hint.reason}</p>
+                </div>
+                {hint.suggested_pct > 0 && (
+                  <span className="text-xs px-2 py-1 rounded-full bg-white/5 text-gray-400 whitespace-nowrap flex-shrink-0">
+                    ~{hint.suggested_pct}% reduction
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); setExpanded(expanded === i ? null : i) }}
+                className="text-cyan-400 text-xs mt-2 hover:underline cursor-pointer"
+              >
+                {expanded === i ? 'Hide detail' : 'What this means'}
+              </button>
+              {expanded === i && (
+                <p className="text-gray-500 text-xs mt-2 leading-relaxed">{hint.what_it_means}</p>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

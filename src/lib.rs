@@ -23,3 +23,4 @@ pub mod config;
 pub mod enriched_signals;
 pub mod llm;
 pub mod daily_tracker;
+pub mod hints;

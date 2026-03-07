@@ -132,3 +132,13 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
 }
+
+export interface Hint {
+  asset: string
+  category: string
+  urgency: string
+  title: string
+  reason: string
+  what_it_means: string
+  suggested_pct: number
+}
