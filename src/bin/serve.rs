@@ -173,8 +173,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app
     };
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    println!("\n  Server listening on http://0.0.0.0:8080");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8081").await?;
+    println!("\n  Server listening on http://0.0.0.0:8081");
     println!("  Endpoints:");
     println!("    GET  /health");
     println!("    GET  /api/v1/config/assets");
