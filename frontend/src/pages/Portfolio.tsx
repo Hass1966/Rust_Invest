@@ -4,6 +4,7 @@ import {
   Cell, Legend, LineChart, Line, ReferenceLine,
 } from 'recharts'
 import { fetchPortfolio, fetchDailyTracker } from '../lib/api'
+import UserHoldings from '../components/UserHoldings'
 import type { PortfolioResult, StrategyResult, AssetBacktest, DailyTrackerResult } from '../lib/types'
 
 const STRATEGY_LABELS: Record<string, string> = {
@@ -90,6 +91,9 @@ export default function Portfolio() {
 
       {/* Part 2 — Daily live tracker */}
       <DailyTracker tracker={tracker} />
+
+      {/* User holdings */}
+      <UserHoldings />
 
       {/* Allocation table + bar chart */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
