@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Loader2, Copy, Check, ChevronDown } from 'lucide-react'
+import { Send, Copy, Check, ChevronDown } from 'lucide-react'
 import { sendChat, fetchDailyTracker, fetchSignals } from '../lib/api'
 import type { ChatMessage, EnrichedSignal, DailyTrackerResult } from '../lib/types'
 
@@ -48,14 +48,6 @@ export default function Advisor() {
     ? 'Our models are flagging more caution than usual. Consider holding off on new positions until signals improve.'
     : 'Some assets look attractive while others show caution. Focus on the highest-quality signals if acting today.'
 
-  // Load user holdings from localStorage for context
-  function getHoldings(): string {
-    try {
-      const raw = localStorage.getItem('rust_invest_holdings')
-      return raw || '[]'
-    } catch { return '[]' }
-  }
-
   async function handleSend(text?: string) {
     const msg = (text || input).trim()
     if (!msg || loading) return
@@ -77,8 +69,6 @@ export default function Advisor() {
     setCopiedIdx(idx)
     setTimeout(() => setCopiedIdx(null), 2000)
   }
-
-  const _ = getHoldings() // ensure it's called for lint
 
   return (
     <div className="flex gap-6 h-[calc(100vh-80px)]">

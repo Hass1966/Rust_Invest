@@ -174,7 +174,7 @@ export default function Simulate() {
                   <Tooltip
                     contentStyle={{ background: '#111827', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
                     labelStyle={{ color: '#e5e7eb' }}
-                    formatter={(v: number) => [fmtGBP(v), 'Value']}
+                    formatter={(v: number | undefined) => [v != null ? fmtGBP(v) : '', 'Value']}
                   />
                   <ReferenceLine
                     y={result.starting_capital}
