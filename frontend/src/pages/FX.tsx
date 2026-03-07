@@ -6,15 +6,33 @@ import SignalCard from '../components/SignalCard'
 export default function FX() {
   const [signals, setSignals] = useState<EnrichedSignal[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     fetchFxSignals()
       .then(setSignals)
-      .catch(() => {})
+      .catch(() => setError(true))
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <div className="text-gray-500 p-8">Loading FX signals...</div>
+  if (loading) return (
+    <div className="space-y-4 p-8">
+      {[1, 2, 3].map(i => (
+        <div key={i} className="bg-[#111827] border border-[#1f2937] rounded-lg p-4 space-y-3">
+          <div className="h-5 bg-gray-700/50 rounded w-32 skeleton-pulse" />
+          <div className="h-4 bg-gray-700/50 rounded w-full skeleton-pulse" />
+          <div className="h-4 bg-gray-700/50 rounded w-3/4 skeleton-pulse" />
+        </div>
+      ))}
+    </div>
+  )
+
+  if (error) return (
+    <div className="text-gray-500 p-8 text-center">
+      <p>Couldn't load this data. Is the server running?</p>
+      <button onClick={() => window.location.reload()} className="text-cyan-400 text-xs mt-2 hover:underline cursor-pointer">Retry</button>
+    </div>
+  )
 
   return (
     <div>

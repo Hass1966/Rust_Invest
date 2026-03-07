@@ -39,7 +39,7 @@ export default function App() {
           <h1 className="text-lg font-semibold text-white">Rust Invest</h1>
         </div>
 
-        <nav className="flex gap-1">
+        <nav className="flex gap-1 overflow-x-auto scrollbar-hide">
           {tabs.map(({ path, label, icon: Icon }) => (
             <NavLink
               key={path}

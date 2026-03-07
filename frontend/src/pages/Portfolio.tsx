@@ -54,7 +54,17 @@ export default function Portfolio() {
     }).finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <div className="text-gray-500 p-8">Loading portfolio data...</div>
+  if (loading) return (
+    <div className="space-y-4 p-8">
+      {[1, 2, 3].map(i => (
+        <div key={i} className="bg-[#111827] border border-[#1f2937] rounded-lg p-6 space-y-3">
+          <div className="h-5 bg-gray-700/50 rounded w-40 skeleton-pulse" />
+          <div className="h-8 bg-gray-700/50 rounded w-48 skeleton-pulse" />
+          <div className="h-4 bg-gray-700/50 rounded w-full skeleton-pulse" />
+        </div>
+      ))}
+    </div>
+  )
   if (!data) return <div className="text-gray-500 p-8">Failed to load portfolio data.</div>
 
   if (!data.has_data || !data.strategies) {

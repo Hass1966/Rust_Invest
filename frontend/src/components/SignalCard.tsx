@@ -74,7 +74,7 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
 
       {/* Price + confidence */}
       <div className="flex items-center gap-4 text-sm mb-2">
-        <span className="text-gray-400">Price: <span className="text-white font-mono">${s.price.toFixed(2)}</span></span>
+        <span className="text-gray-400">Price: <span className="text-white font-mono">${s.price.toFixed(2)}</span> <span className="text-gray-600 text-xs">(USD)</span></span>
         <span className={conf.color} title={`${s.technical.confidence.toFixed(1)}%`}>
           {conf.text}
         </span>
