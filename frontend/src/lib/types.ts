@@ -133,6 +133,32 @@ export interface ChatMessage {
   content: string
 }
 
+export interface SimDay {
+  date: string
+  value: number
+  daily_return_pct: number
+  correct: number
+  total: number
+}
+
+export interface SimAsset {
+  asset: string
+  signal_accuracy_pct: number
+  contribution_pct: number
+}
+
+export interface SimResult {
+  days: number
+  starting_capital: number
+  final_value: number
+  total_return_pct: number
+  vs_buy_and_hold_pct: number
+  signal_accuracy_pct: number
+  inception_date: string
+  daily: SimDay[]
+  per_asset: SimAsset[]
+}
+
 export interface Hint {
   asset: string
   category: string

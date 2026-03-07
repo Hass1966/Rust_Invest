@@ -1,6 +1,6 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import { useState } from 'react'
-import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X, Clock, Bot } from 'lucide-react'
+import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X, Clock, Bot, PlayCircle } from 'lucide-react'
 import Overview from './pages/Overview'
 import Stocks from './pages/Stocks'
 import FX from './pages/FX'
@@ -8,6 +8,7 @@ import Portfolio from './pages/Portfolio'
 import History from './pages/History'
 import Diagnostics from './pages/Diagnostics'
 import Advisor from './pages/Advisor'
+import Simulate from './pages/Simulate'
 import ChatPanel from './components/ChatPanel'
 
 const tabs = [
@@ -16,6 +17,7 @@ const tabs = [
   { path: '/fx', label: 'FX', icon: DollarSign },
   { path: '/portfolio', label: 'Portfolio', icon: Briefcase },
   { path: '/history', label: 'History', icon: Clock },
+  { path: '/simulate', label: 'Simulate', icon: PlayCircle },
   { path: '/advisor', label: 'Advisor', icon: Bot },
   { path: '/diagnostics', label: 'Diagnostics', icon: Cpu },
 ]
@@ -79,6 +81,7 @@ export default function App() {
             <Route path="/fx" element={<FX />} />
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/history" element={<History />} />
+            <Route path="/simulate" element={<Simulate />} />
             <Route path="/advisor" element={<Advisor />} />
             <Route path="/diagnostics" element={<Diagnostics />} />
           </Routes>

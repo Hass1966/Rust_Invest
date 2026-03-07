@@ -156,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/history/portfolio", get(get_portfolio_history))
         .route("/api/v1/history/signals", get(get_signals_history))
         .route("/api/v1/hints", get(get_hints))
+        .route("/api/v1/simulate", post(simulate_signals))
         .route("/api/v1/chat", post(chat_handler))
         .layer(cors.clone())
         .with_state(state);
@@ -187,6 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    GET  /api/v1/portfolio/simulate");
     println!("    GET  /api/v1/portfolio/daily-tracker");
     println!("    GET  /api/v1/hints");
+    println!("    POST /api/v1/simulate");
     println!("    POST /api/v1/chat\n");
 
     axum::serve(listener, app).await?;
@@ -538,6 +540,34 @@ async fn get_hints(
     let sigs = state.signals.read().await;
     let hints = hints::generate_hints(&sigs);
     Json(hints)
+}
+
+// ════════════════════════════════════════
+// Simulate Handler
+// ════════════════════════════════════════
+
+#[derive(serde::Deserialize)]
+struct SimulateRequest {
+    days: Option<usize>,
+    capital: Option<f64>,
+}
+
+async fn simulate_signals(
+    State(state): State<AppState>,
+    Json(req): Json<SimulateRequest>,
+) -> Result<Json<simulator::SimResult>, StatusCode> {
+    let days = req.days.unwrap_or(14);
+    let capital = req.capital.unwrap_or(10_000.0);
+    let db_path = state.db_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        simulator::run_simulation(days, capital, &db_path)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    match result {
+        Ok(sim) => Ok(Json(sim)),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }
 
 // ════════════════════════════════════════

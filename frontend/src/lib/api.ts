@@ -1,4 +1,4 @@
-import type { EnrichedSignal, ModelManifest, PortfolioResult, DailyTrackerResult, Hint } from './types'
+import type { EnrichedSignal, ModelManifest, PortfolioResult, DailyTrackerResult, Hint, SimResult } from './types'
 
 const BASE = ''
 
@@ -40,6 +40,16 @@ export async function fetchPortfolio(): Promise<PortfolioResult> {
 
 export async function fetchDailyTracker(): Promise<DailyTrackerResult> {
   const res = await fetch(`${BASE}/api/v1/portfolio/daily-tracker`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchSimulation(days: number, capital: number): Promise<SimResult> {
+  const res = await fetch(`${BASE}/api/v1/simulate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days, capital }),
+  })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
