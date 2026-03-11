@@ -83,6 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client: reqwest::Client::new(),
     };
 
+    // ── Startup database migrations ──
+    run_startup_migrations(&state.db_path);
+
     // Generate signals on startup (inference only — loads saved weights)
     println!("\n━━━ GENERATING INITIAL SIGNALS (inference only) ━━━\n");
     if let Err(e) = refresh_signals(&state).await {
@@ -157,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/history/signals", get(get_signals_history))
         .route("/api/v1/hints", get(get_hints))
         .route("/api/v1/simulate", post(simulate_signals))
+        .route("/api/v1/training/results", get(get_training_results))
         .route("/api/v1/chat", post(chat_handler))
         .layer(cors.clone())
         .with_state(state);
@@ -238,6 +242,23 @@ async fn reload_models() -> Json<serde_json::Value> {
         "assets_found": manifest.assets.len(),
         "generated_at": manifest.generated_at,
     }))
+}
+
+/// Training results endpoint — serves reports/improved.json with all 6-model accuracies
+async fn get_training_results() -> Result<Json<serde_json::Value>, StatusCode> {
+    match std::fs::read_to_string("reports/improved.json") {
+        Ok(contents) => {
+            match serde_json::from_str::<serde_json::Value>(&contents) {
+                Ok(val) => Ok(Json(val)),
+                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            }
+        }
+        Err(_) => Ok(Json(serde_json::json!({
+            "version": "no_data",
+            "note": "No training results found. Run `cargo run --release --bin train` first.",
+            "assets": {}
+        }))),
+    }
 }
 
 async fn get_all_signals(
@@ -1074,7 +1095,7 @@ fn infer_fx_signal(
     let samples = features::build_rich_features(
         &prices, &volumes, &timestamps,
         Some(market_context), "fx",
-        None, None, None,
+        Some(symbol), None, None,
     );
     if samples.is_empty() { return None; }
 
@@ -1178,6 +1199,52 @@ fn extract_bb_position(samples: &[ml::Sample]) -> Option<f64> {
             0.5
         }
     })
+}
+
+// ════════════════════════════════════════
+// Startup Database Migrations
+// ════════════════════════════════════════
+
+fn run_startup_migrations(db_path: &str) {
+    let database = match db::Database::new(db_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("  [Migration] Cannot open DB: {}", e);
+            return;
+        }
+    };
+
+    // FIX 1: Restore correct seed value (£133,993.00)
+    match database.execute_raw(
+        "UPDATE daily_portfolio
+         SET seed_value = 133993.00,
+             cumulative_return = ROUND((portfolio_value - 133993.00) / 133993.00 * 100, 2)
+         WHERE seed_value != 133993.00"
+    ) {
+        Ok(n) if n > 0 => println!("  [Migration] Fixed seed value in {} rows", n),
+        Ok(_) => {},
+        Err(e) => eprintln!("  [Migration] Seed fix error: {}", e),
+    }
+
+    // FIX 2: Restore historical portfolio entries (March 6-9)
+    let historical_rows = [
+        ("2026-03-06", 133993.00, 153797.00, 1.09, 14.78),
+        ("2026-03-07", 133993.00, 175241.00, 14.63, 30.78),
+        ("2026-03-08", 133993.00, 175241.00, 0.00, 30.78),
+        ("2026-03-09", 133993.00, 175241.00, 0.00, 30.78),
+    ];
+    for (date, seed, value, daily, cumulative) in &historical_rows {
+        match database.execute_raw(&format!(
+            "INSERT OR IGNORE INTO daily_portfolio \
+             (date, seed_value, portfolio_value, daily_return, cumulative_return, signals_json, model_version) \
+             VALUES ('{}', {}, {}, {}, {}, '[]', 1)",
+            date, seed, value, daily, cumulative
+        )) {
+            Ok(1) => println!("  [Migration] Inserted historical row: {}", date),
+            Ok(_) => {},
+            Err(e) => eprintln!("  [Migration] Insert {} error: {}", date, e),
+        }
+    }
 }
 
 /// Build a default asset config from the existing STOCK_LIST/FX_LIST

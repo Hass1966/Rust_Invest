@@ -842,6 +842,11 @@ impl Database {
         })?.filter_map(|r| r.ok()).collect();
         Ok(rows)
     }
+
+    /// Execute a raw SQL statement and return the number of rows affected
+    pub fn execute_raw(&self, sql: &str) -> Result<usize> {
+        Ok(self.conn.execute(sql, [])?)
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
