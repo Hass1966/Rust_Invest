@@ -11,7 +11,7 @@
 use rust_invest::*;
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, post, patch},
     extract::{Path, Query, State},
     Json,
     http::StatusCode,
@@ -162,6 +162,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/simulate", post(simulate_signals))
         .route("/api/v1/training/results", get(get_training_results))
         .route("/api/v1/chat", post(chat_handler))
+        .route("/api/v1/admin/assets", post(add_asset))
+        .route("/api/v1/admin/assets/{symbol}", patch(toggle_asset))
         .layer(cors.clone())
         .with_state(state);
 
@@ -193,7 +195,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    GET  /api/v1/portfolio/daily-tracker");
     println!("    GET  /api/v1/hints");
     println!("    POST /api/v1/simulate");
-    println!("    POST /api/v1/chat\n");
+    println!("    POST /api/v1/chat");
+    println!("    POST /api/v1/admin/assets");
+    println!("    PATCH /api/v1/admin/assets/:symbol\n");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -739,6 +743,110 @@ async fn chat_handler(
 }
 
 // ════════════════════════════════════════
+// Admin Asset Management Handlers
+// ════════════════════════════════════════
+
+#[derive(serde::Deserialize)]
+struct AddAssetRequest {
+    symbol: String,
+    name: String,
+    class: String,
+    enabled: Option<bool>,
+}
+
+async fn add_asset(
+    State(state): State<AppState>,
+    Json(req): Json<AddAssetRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let symbol = req.symbol.trim().to_uppercase();
+    let name = req.name.trim().to_string();
+    let class = req.class.trim().to_lowercase();
+    let enabled = req.enabled.unwrap_or(true);
+
+    if symbol.is_empty() || name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "symbol and name required"}))));
+    }
+    if !["stock", "fx", "crypto", "etf"].contains(&class.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "class must be stock, fx, crypto, or etf"}))));
+    }
+
+    let entry = config::AssetEntry {
+        symbol: symbol.clone(),
+        name: name.clone(),
+        enabled,
+    };
+
+    // Update in-memory config
+    {
+        let mut cfg = state.asset_config.write().await;
+        let list = match class.as_str() {
+            "fx" => &mut cfg.fx,
+            "crypto" => &mut cfg.crypto,
+            _ => &mut cfg.stocks, // stock and etf both go in stocks
+        };
+        if list.iter().any(|a| a.symbol == symbol) {
+            return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("{} already exists", symbol)}))));
+        }
+        list.push(entry);
+
+        // Write to disk atomically
+        if let Err(e) = save_asset_config(&cfg) {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save: {}", e)}))));
+        }
+    }
+
+    Ok(Json(serde_json::json!({"status": "ok", "symbol": symbol, "class": class})))
+}
+
+#[derive(serde::Deserialize)]
+struct ToggleAssetRequest {
+    enabled: bool,
+}
+
+async fn toggle_asset(
+    State(state): State<AppState>,
+    Path(symbol): Path<String>,
+    Json(req): Json<ToggleAssetRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let mut cfg = state.asset_config.write().await;
+
+    // Find which list contains this symbol, then update
+    let target: Option<&mut config::AssetEntry> =
+        if let Some(pos) = cfg.stocks.iter().position(|a| a.symbol == symbol) {
+            Some(&mut cfg.stocks[pos])
+        } else if let Some(pos) = cfg.fx.iter().position(|a| a.symbol == symbol) {
+            Some(&mut cfg.fx[pos])
+        } else if let Some(pos) = cfg.crypto.iter().position(|a| a.symbol == symbol) {
+            Some(&mut cfg.crypto[pos])
+        } else {
+            None
+        };
+
+    match target {
+        Some(entry) => entry.enabled = req.enabled,
+        None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("{} not found", symbol)})))),
+    }
+
+    if let Err(e) = save_asset_config(&cfg) {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save: {}", e)}))));
+    }
+
+    Ok(Json(serde_json::json!({"status": "ok", "symbol": symbol, "enabled": req.enabled})))
+}
+
+/// Save AssetConfig to config/assets.json atomically (write to temp, then rename)
+fn save_asset_config(cfg: &config::AssetConfig) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(cfg)
+        .map_err(|e| format!("Serialize error: {}", e))?;
+    let tmp_path = "config/assets.json.tmp";
+    std::fs::write(tmp_path, &json)
+        .map_err(|e| format!("Write error: {}", e))?;
+    std::fs::rename(tmp_path, "config/assets.json")
+        .map_err(|e| format!("Rename error: {}", e))?;
+    Ok(())
+}
+
+// ════════════════════════════════════════
 // Signal Generation Pipeline (INFERENCE ONLY)
 // ════════════════════════════════════════
 
@@ -850,6 +958,14 @@ fn generate_signals_filtered(
     }
     let market_context = features::build_market_context(&market_histories);
 
+    // Load Fear & Greed history once — used by stocks, FX, and crypto
+    let fear_greed_history = database.get_fear_greed_history().unwrap_or_default();
+    let fg_ref: Option<&[(String, f64)]> = if fear_greed_history.is_empty() {
+        None
+    } else {
+        Some(&fear_greed_history)
+    };
+
     let mut enriched_signals = Vec::new();
 
     // ── Stock signals (inference only) ──
@@ -862,7 +978,7 @@ fn generate_signals_filtered(
             };
             if points.len() < 300 { continue; }
 
-            if let Some(sig) = infer_stock_signal(&asset_entry.symbol, &points, &market_context) {
+            if let Some(sig) = infer_stock_signal(&asset_entry.symbol, &points, &market_context, fg_ref) {
                 enriched_signals.push(sig);
             }
         }
@@ -878,7 +994,7 @@ fn generate_signals_filtered(
             };
             if points.len() < 300 { continue; }
 
-            if let Some(sig) = infer_fx_signal(&asset_entry.symbol, &points, &market_context) {
+            if let Some(sig) = infer_fx_signal(&asset_entry.symbol, &points, &market_context, fg_ref) {
                 enriched_signals.push(sig);
             }
         }
@@ -1045,6 +1161,7 @@ fn infer_stock_signal(
     symbol: &str,
     points: &[analysis::PricePoint],
     market_context: &features::MarketContext,
+    fear_greed: Option<&[(String, f64)]>,
 ) -> Option<enriched_signals::EnrichedSignal> {
     let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
     let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
@@ -1054,7 +1171,7 @@ fn infer_stock_signal(
         &prices, &volumes, &timestamps,
         Some(market_context), "stock",
         features::sector_etf_for(symbol),
-        None, None,
+        None, fear_greed,
     );
     if samples.is_empty() { return None; }
 
@@ -1087,6 +1204,7 @@ fn infer_fx_signal(
     symbol: &str,
     points: &[analysis::PricePoint],
     market_context: &features::MarketContext,
+    fear_greed: Option<&[(String, f64)]>,
 ) -> Option<enriched_signals::EnrichedSignal> {
     let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
     let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
@@ -1095,7 +1213,7 @@ fn infer_fx_signal(
     let samples = features::build_rich_features(
         &prices, &volumes, &timestamps,
         Some(market_context), "fx",
-        Some(symbol), None, None,
+        Some(symbol), None, fear_greed,
     );
     if samples.is_empty() { return None; }
 
