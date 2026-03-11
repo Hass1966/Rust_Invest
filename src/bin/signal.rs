@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", None, None, None);
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None);
         if samples.len() < 100 { continue; }
 
         let train_window = (samples.len() as f64 * 0.6) as usize;

@@ -488,7 +488,7 @@ pub fn get_signal_threshold(symbol: &str) -> (f64, f64) {
         "QQQ" | "AMZN" | "GOOGL" => (0.60, 0.40),
         "MSFT" => (0.58, 0.42),
         "META" | "NVDA" | "AAPL" | "SPY" => (0.57, 0.43),
-        "JPY=X" | "AUDUSD=X" | "EURUSD=X" | "GBPUSD=X" | "CHF=X" => (0.55, 0.45),
+        "USDJPY=X" | "AUDUSD=X" | "EURUSD=X" | "GBPUSD=X" | "USDCHF=X" => (0.55, 0.45),
         _ => (0.57, 0.43),
     }
 }

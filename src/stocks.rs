@@ -6,25 +6,92 @@ pub struct StockInfo {
 }
 
 pub const STOCK_LIST: &[StockInfo] = &[
+    // Indices
     StockInfo { symbol: "SPY", name: "S&P 500 ETF" },
     StockInfo { symbol: "QQQ", name: "Nasdaq 100 ETF" },
     StockInfo { symbol: "DIA", name: "Dow Jones ETF" },
+    StockInfo { symbol: "XLF", name: "Financial Select ETF" },
+    StockInfo { symbol: "XLE", name: "Energy Select ETF" },
+    StockInfo { symbol: "XLV", name: "Healthcare Select ETF" },
+    StockInfo { symbol: "XLI", name: "Industrial Select ETF" },
+    // Big Tech
     StockInfo { symbol: "AAPL", name: "Apple" },
     StockInfo { symbol: "MSFT", name: "Microsoft" },
-    StockInfo { symbol: "GOOGL", name: "Google" },
+    StockInfo { symbol: "GOOGL", name: "Alphabet" },
     StockInfo { symbol: "AMZN", name: "Amazon" },
-    StockInfo { symbol: "NVDA", name: "Nvidia" },
+    StockInfo { symbol: "NVDA", name: "NVIDIA" },
     StockInfo { symbol: "META", name: "Meta" },
     StockInfo { symbol: "TSLA", name: "Tesla" },
+    StockInfo { symbol: "AMD", name: "AMD" },
+    StockInfo { symbol: "AVGO", name: "Broadcom" },
+    StockInfo { symbol: "NFLX", name: "Netflix" },
+    StockInfo { symbol: "CRM", name: "Salesforce" },
+    StockInfo { symbol: "ARM", name: "ARM Holdings" },
+    StockInfo { symbol: "INTC", name: "Intel" },
+    StockInfo { symbol: "QCOM", name: "Qualcomm" },
+    StockInfo { symbol: "TSM", name: "Taiwan Semiconductor" },
+    // Finance
+    StockInfo { symbol: "JPM", name: "JPMorgan Chase" },
+    StockInfo { symbol: "GS", name: "Goldman Sachs" },
+    StockInfo { symbol: "BAC", name: "Bank of America" },
+    StockInfo { symbol: "WFC", name: "Wells Fargo" },
+    StockInfo { symbol: "V", name: "Visa" },
+    StockInfo { symbol: "MA", name: "Mastercard" },
+    // Healthcare & Pharma
+    StockInfo { symbol: "JNJ", name: "Johnson & Johnson" },
+    StockInfo { symbol: "UNH", name: "UnitedHealth" },
+    StockInfo { symbol: "LLY", name: "Eli Lilly" },
+    StockInfo { symbol: "PFE", name: "Pfizer" },
+    StockInfo { symbol: "MRNA", name: "Moderna" },
+    StockInfo { symbol: "ABBV", name: "AbbVie" },
+    // Defense
+    StockInfo { symbol: "LMT", name: "Lockheed Martin" },
+    StockInfo { symbol: "RTX", name: "Raytheon" },
+    StockInfo { symbol: "NOC", name: "Northrop Grumman" },
+    StockInfo { symbol: "BA", name: "Boeing" },
+    StockInfo { symbol: "GD", name: "General Dynamics" },
+    // Manufacturing & Industrial
+    StockInfo { symbol: "CAT", name: "Caterpillar" },
+    StockInfo { symbol: "DE", name: "John Deere" },
+    StockInfo { symbol: "MMM", name: "3M" },
+    StockInfo { symbol: "HON", name: "Honeywell" },
+    StockInfo { symbol: "GE", name: "GE Aerospace" },
+    StockInfo { symbol: "EMR", name: "Emerson Electric" },
+    // Retail & Consumer
+    StockInfo { symbol: "WMT", name: "Walmart" },
+    StockInfo { symbol: "TGT", name: "Target" },
+    StockInfo { symbol: "COST", name: "Costco" },
+    StockInfo { symbol: "HD", name: "Home Depot" },
+    StockInfo { symbol: "NKE", name: "Nike" },
+    StockInfo { symbol: "MCD", name: "McDonald's" },
+    // Energy
+    StockInfo { symbol: "XOM", name: "ExxonMobil" },
+    StockInfo { symbol: "CVX", name: "Chevron" },
+    StockInfo { symbol: "COP", name: "ConocoPhillips" },
 ];
 
-/// FX currency pairs — fetched from Yahoo Finance (ticker format: EURUSD=X)
 pub const FX_LIST: &[StockInfo] = &[
+    // Major pairs
     StockInfo { symbol: "EURUSD=X", name: "EUR/USD" },
     StockInfo { symbol: "GBPUSD=X", name: "GBP/USD" },
-    StockInfo { symbol: "JPY=X",    name: "USD/JPY" },
+    StockInfo { symbol: "USDJPY=X", name: "USD/JPY" },
     StockInfo { symbol: "AUDUSD=X", name: "AUD/USD" },
-    StockInfo { symbol: "CHF=X",    name: "USD/CHF" },
+    StockInfo { symbol: "USDCHF=X", name: "USD/CHF" },
+    StockInfo { symbol: "USDCAD=X", name: "USD/CAD" },
+    StockInfo { symbol: "NZDUSD=X", name: "NZD/USD" },
+    StockInfo { symbol: "EURGBP=X", name: "EUR/GBP" },
+    StockInfo { symbol: "USDSGD=X", name: "USD/SGD" },
+    StockInfo { symbol: "USDMXN=X", name: "USD/MXN" },
+    // Far East
+    StockInfo { symbol: "USDCNH=X", name: "USD/CNH" },
+    StockInfo { symbol: "USDKRW=X", name: "USD/KRW" },
+    StockInfo { symbol: "USDHKD=X", name: "USD/HKD" },
+    StockInfo { symbol: "USDTWD=X", name: "USD/TWD" },
+    StockInfo { symbol: "USDTHB=X", name: "USD/THB" },
+    StockInfo { symbol: "USDIDR=X", name: "USD/IDR" },
+    StockInfo { symbol: "USDMYR=X", name: "USD/MYR" },
+    StockInfo { symbol: "USDPHP=X", name: "USD/PHP" },
+    StockInfo { symbol: "USDINR=X", name: "USD/INR" },
 ];
 
 // ── Yahoo Finance response types ──
@@ -72,8 +139,6 @@ pub struct QuoteData {
     pub volume: Option<Vec<Option<u64>>>,
 }
 
-// ── Simplified quote for display ──
-
 pub struct StockQuoteResult {
     pub symbol: String,
     pub price: f64,
@@ -83,8 +148,6 @@ pub struct StockQuoteResult {
     pub low: f64,
     pub volume: u64,
 }
-
-// ── API functions ──
 
 pub async fn fetch_quote(
     client: &reqwest::Client,
@@ -134,7 +197,7 @@ pub async fn fetch_quote(
 pub async fn fetch_history(
     client: &reqwest::Client,
     symbol: &str,
-    range: &str,  // "1y", "6mo", "3mo", etc.
+    range: &str,
 ) -> Result<Vec<(i64, f64, Option<u64>)>, Box<dyn std::error::Error>> {
     let url = format!(
         "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range={}",

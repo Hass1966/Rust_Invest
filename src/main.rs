@@ -629,7 +629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "fx",
-            None, None, None,
+            Some(fx.symbol), None, None,
         );
 
         if samples.len() < 100 {
@@ -831,7 +831,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(
             &prices, &volumes, &timestamps,
             Some(&market_context), "fx",
-            None, None, None,
+            Some(fx.symbol), None, None,
         );
 
         if samples.len() < 100 { continue; }

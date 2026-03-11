@@ -139,45 +139,33 @@ pub fn run_daily_update(
 /// stored in stock_history (or fx_history / crypto_history).
 /// Falls back to 0.0 if history is unavailable.
 fn compute_price_return(database: &db::Database, asset: &str, current_price: f64) -> f64 {
-    // Try stock history first
-    if let Ok(points) = database.get_stock_history(asset) {
-        if points.len() >= 2 {
-            let prev = points[points.len() - 2].price;
-            let last = points[points.len() - 1].price;
-            if prev > 0.0 {
-                return (last - prev) / prev;
+    // If we have a live current_price, use it against yesterday's stored price
+    if current_price > 0.0 {
+        // Try stock history
+        if let Ok(points) = database.get_stock_history(asset) {
+            if let Some(last) = points.last() {
+                if last.price > 0.0 {
+                    return (current_price - last.price) / last.price;
+                }
             }
         }
-        // Only one point — use current_price vs stored
-        if let Some(last) = points.last() {
-            if last.price > 0.0 && current_price > 0.0 {
-                return (current_price - last.price) / last.price;
+        // Try FX history
+        if let Ok(points) = database.get_fx_history(asset) {
+            if let Some(last) = points.last() {
+                if last.price > 0.0 {
+                    return (current_price - last.price) / last.price;
+                }
             }
         }
-    }
-
-    // Try FX history
-    if let Ok(points) = database.get_fx_history(asset) {
-        if points.len() >= 2 {
-            let prev = points[points.len() - 2].price;
-            let last = points[points.len() - 1].price;
-            if prev > 0.0 {
-                return (last - prev) / prev;
-            }
-        }
-    }
-
-    // Try crypto history
-    if let Ok(points) = database.get_coin_history(asset) {
-        if points.len() >= 2 {
-            let prev = points[points.len() - 2].price;
-            let last = points[points.len() - 1].price;
-            if prev > 0.0 {
-                return (last - prev) / prev;
+        // Try crypto history
+        if let Ok(points) = database.get_coin_history(asset) {
+            if let Some(last) = points.last() {
+                if last.price > 0.0 {
+                    return (current_price - last.price) / last.price;
+                }
             }
         }
     }
-
     0.0
 }
 

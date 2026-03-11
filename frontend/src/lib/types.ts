@@ -39,9 +39,30 @@ export interface ManifestAsset {
   linreg_accuracy: number | null
   logreg_accuracy: number | null
   gbt_accuracy: number | null
+  lstm_accuracy: number | null
+  regime_accuracy: number | null
+  tft_accuracy: number | null
   ensemble_accuracy: number | null
   last_trained: string | null
   weights_present: boolean
+}
+
+export interface TrainingAsset {
+  linreg: number
+  logreg: number
+  gbt: number
+  lstm: number
+  regime: number
+  tft: number
+  ensemble: number
+}
+
+export interface TrainingResults {
+  version: string
+  date: string
+  features: number
+  models?: string[]
+  assets: Record<string, TrainingAsset>
 }
 
 export interface ModelManifest {

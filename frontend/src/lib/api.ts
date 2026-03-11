@@ -1,4 +1,4 @@
-import type { EnrichedSignal, ModelManifest, PortfolioResult, DailyTrackerResult, Hint, SimResult } from './types'
+import type { EnrichedSignal, ModelManifest, PortfolioResult, DailyTrackerResult, Hint, SimResult, TrainingResults } from './types'
 
 const BASE = ''
 
@@ -56,6 +56,18 @@ export async function fetchSimulation(days: number, capital: number): Promise<Si
 
 export async function fetchHints(): Promise<Hint[]> {
   const res = await fetch(`${BASE}/api/v1/hints`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchCryptoSignals(): Promise<EnrichedSignal[]> {
+  const res = await fetch(`${BASE}/api/v1/signals/current/crypto`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchTrainingResults(): Promise<TrainingResults> {
+  const res = await fetch(`${BASE}/api/v1/training/results`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }

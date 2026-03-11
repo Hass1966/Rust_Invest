@@ -238,6 +238,28 @@ pub fn feature_names() -> Vec<String> {
     names.push("bid_ask_proxy".into());
     names.push("smart_money_flow".into());
 
+    // K. NEW: Extended Macro features (5 features) — added for all assets
+    names.push("dxy_level".into());            // US Dollar Index
+    names.push("dxy_delta_5d".into());         // DXY 5-day change
+    names.push("yield_spread_10y2y".into());   // 10Y-2Y yield spread (recession signal)
+    names.push("fed_funds_rate".into());       // Federal funds rate level
+    names.push("yield_curve_slope".into());    // Slope of yield curve (positive=normal)
+
+    // L. NEW: Crypto-specific on-chain & sentiment (8 features) — crypto assets only
+    names.push("btc_funding_rate".into());     // Binance BTC funding rate (contrarian)
+    names.push("eth_funding_rate".into());     // Binance ETH funding rate (contrarian)
+    names.push("btc_active_addrs".into());     // BTC active addresses (on-chain activity)
+    names.push("btc_tx_volume".into());        // BTC transaction volume (on-chain flow)
+    names.push("social_galaxy_score".into());  // LunarCrush galaxy score per coin
+    names.push("social_volume".into());        // Social media mention volume
+    names.push("social_dominance".into());     // % of total crypto social volume
+    names.push("social_score".into());         // Overall sentiment score
+
+    // M. NEW: Forex-specific features (3 features) — FX pairs only
+    names.push("fx_rate_differential".into()); // Interest rate differential (carry direction)
+    names.push("fx_carry_score".into());       // Carry trade attractiveness (0-1)
+    names.push("fx_days_to_cb_meeting".into()); // Days to next central bank meeting
+
     names
 }
 
@@ -337,6 +359,32 @@ fn returns_vec(prices: &[f64]) -> Vec<f64> {
 /// asset_type: "stock" or "crypto" — affects which features are available
 ///
 /// Returns: Vec<Sample> where each sample has label = next day's return (>0 = up)
+/// Extended macro data for new features (DXY, yield spread, fed funds)
+#[derive(Clone, Debug, Default)]
+pub struct ExtendedMacro {
+    /// DXY (US Dollar Index) daily values
+    pub dxy: Vec<f64>,
+    /// 10Y-2Y yield spread (from FRED)
+    pub yield_spread: Vec<f64>,
+    /// Fed funds rate
+    pub fed_funds: Vec<f64>,
+}
+
+/// Crypto enrichment data for new features
+#[derive(Clone, Debug, Default)]
+pub struct CryptoEnrichmentFeatures {
+    /// BTC funding rate values
+    pub btc_funding_rate: Vec<f64>,
+    /// ETH funding rate values
+    pub eth_funding_rate: Vec<f64>,
+    /// BTC active addresses (single current value, used as-is)
+    pub btc_active_addrs: f64,
+    /// BTC transaction volume
+    pub btc_tx_volume: f64,
+    /// Per-coin social sentiment: (galaxy_score, social_volume, social_dominance, social_score)
+    pub social: Option<(f64, f64, f64, f64)>,
+}
+
 pub fn build_rich_features(
     prices: &[f64],
     volumes: &[Option<f64>],
@@ -346,6 +394,23 @@ pub fn build_rich_features(
     sector_etf: Option<&str>,
     earnings_dates: Option<&[String]>,
     fear_greed: Option<&[(String, f64)]>,
+) -> Vec<Sample> {
+    build_rich_features_ext(prices, volumes, timestamps, market, asset_type,
+        sector_etf, earnings_dates, fear_greed, None, None)
+}
+
+/// Extended version with new data sources
+pub fn build_rich_features_ext(
+    prices: &[f64],
+    volumes: &[Option<f64>],
+    timestamps: &[String],
+    market: Option<&MarketContext>,
+    asset_type: &str,
+    sector_etf: Option<&str>,
+    earnings_dates: Option<&[String]>,
+    fear_greed: Option<&[(String, f64)]>,
+    ext_macro: Option<&ExtendedMacro>,
+    crypto_enrich: Option<&CryptoEnrichmentFeatures>,
 ) -> Vec<Sample> {
     let min_lookback = 260; // need 252 trading days + buffer for SMA200
     if prices.len() < min_lookback {
@@ -773,6 +838,100 @@ pub fn build_rich_features(
         let smart_money = if obv_sign == 0.0 || price_sign == 0.0 { 0.0 }
             else if obv_sign == price_sign { 1.0 } else { -1.0 };
         f.push(smart_money);                                         // smart_money_flow
+
+        // ══ K. Extended Macro features (5) ══
+
+        // DXY level and delta
+        let dxy_val = ext_macro.and_then(|m| {
+            if i < m.dxy.len() { Some(m.dxy[i]) }
+            else if !m.dxy.is_empty() { Some(*m.dxy.last().unwrap()) }
+            else { None }
+        }).unwrap_or(100.0);
+        let dxy_5d = ext_macro.and_then(|m| {
+            if i >= 5 && i < m.dxy.len() { Some(m.dxy[i] - m.dxy[i-5]) }
+            else { None }
+        }).unwrap_or(0.0);
+
+        f.push(dxy_val / 100.0);                                    // dxy_level (normalised ~1.0)
+        f.push(dxy_5d / 100.0);                                     // dxy_delta_5d
+
+        // Yield spread (10Y-2Y): positive = normal, negative = inverted
+        let ys_val = ext_macro.and_then(|m| {
+            if i < m.yield_spread.len() { Some(m.yield_spread[i]) }
+            else if !m.yield_spread.is_empty() { Some(*m.yield_spread.last().unwrap()) }
+            else { None }
+        }).unwrap_or(0.0);
+        f.push(ys_val / 3.0);                                       // yield_spread_10y2y (normalised)
+
+        // Fed funds rate level
+        let ffr_val = ext_macro.and_then(|m| {
+            if i < m.fed_funds.len() { Some(m.fed_funds[i]) }
+            else if !m.fed_funds.is_empty() { Some(*m.fed_funds.last().unwrap()) }
+            else { None }
+        }).unwrap_or(5.0);
+        f.push(ffr_val / 10.0);                                     // fed_funds_rate (normalised)
+
+        // Yield curve slope: derivative of yield spread (positive = steepening)
+        let ys_prev = ext_macro.and_then(|m| {
+            if i >= 5 && i < m.yield_spread.len() { Some(m.yield_spread[i] - m.yield_spread[i-5]) }
+            else { None }
+        }).unwrap_or(0.0);
+        f.push(ys_prev / 3.0);                                      // yield_curve_slope
+
+        // ══ L. Crypto on-chain & sentiment (8) ══
+
+        if asset_type == "crypto" {
+            let btc_fr = crypto_enrich.and_then(|c| {
+                if i < c.btc_funding_rate.len() { Some(c.btc_funding_rate[i]) }
+                else if !c.btc_funding_rate.is_empty() { Some(*c.btc_funding_rate.last().unwrap()) }
+                else { None }
+            }).unwrap_or(0.0);
+            f.push(btc_fr * 100.0);                                 // btc_funding_rate (scaled up)
+
+            let eth_fr = crypto_enrich.and_then(|c| {
+                if i < c.eth_funding_rate.len() { Some(c.eth_funding_rate[i]) }
+                else if !c.eth_funding_rate.is_empty() { Some(*c.eth_funding_rate.last().unwrap()) }
+                else { None }
+            }).unwrap_or(0.0);
+            f.push(eth_fr * 100.0);                                 // eth_funding_rate (scaled up)
+
+            let btc_addrs = crypto_enrich.map(|c| c.btc_active_addrs).unwrap_or(800_000.0);
+            f.push(btc_addrs / 1_000_000.0);                        // btc_active_addrs (normalised to millions)
+
+            let btc_txvol = crypto_enrich.map(|c| c.btc_tx_volume).unwrap_or(0.0);
+            f.push((btc_txvol / 1e9).min(50.0));                    // btc_tx_volume (billions)
+
+            let (galaxy, svol, sdom, sscore) = crypto_enrich
+                .and_then(|c| c.social)
+                .unwrap_or((50.0, 0.0, 0.0, 50.0));
+            f.push(galaxy / 100.0);                                  // social_galaxy_score (0-1)
+            f.push((svol / 10000.0).min(10.0));                      // social_volume (scaled)
+            f.push(sdom / 100.0);                                    // social_dominance (0-1)
+            f.push(sscore / 100.0);                                  // social_score (0-1)
+        } else {
+            // Non-crypto assets: pad with zeros (8 features)
+            for _ in 0..8 {
+                f.push(0.0);
+            }
+        }
+
+        // ══ M. Forex-specific features (3) ══
+        if asset_type == "fx" {
+            // symbol is not directly available here, but we can pass it
+            // through the asset_type field. For now, use the sector_etf
+            // param repurposed: when asset_type=="fx", sector_etf carries the pair symbol.
+            let pair_sym = sector_etf.unwrap_or("EURUSD=X");
+            let (rate_diff, carry, days_meet) =
+                crate::forex_features::forex_feature_vector(pair_sym, &timestamps[i]);
+            f.push(rate_diff);                                       // fx_rate_differential
+            f.push(carry);                                            // fx_carry_score
+            f.push(days_meet);                                        // fx_days_to_cb_meeting
+        } else {
+            // Non-FX assets: pad with zeros (3 features)
+            for _ in 0..3 {
+                f.push(0.0);
+            }
+        }
 
         // ══ Label: next day return ══
         let label = prices[i+1] - prices[i]; // positive = up
