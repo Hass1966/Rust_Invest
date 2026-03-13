@@ -83,6 +83,61 @@ export async function fetchMorningBriefing(): Promise<string> {
   return data.response
 }
 
+export async function fetchPredictions(): Promise<PredictionsData> {
+  const res = await fetch(`${BASE}/api/v1/predictions/history?limit=500`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export interface PredictionsData {
+  predictions: PredictionRecord[]
+  stats: {
+    total_predictions: number
+    total_resolved: number
+    total_correct: number
+    overall_accuracy: number
+    last_24h: AccuracyStats
+    last_7d: AccuracyStats
+    last_30d: AccuracyStats
+  }
+  per_asset: AssetAccuracy[]
+  confidence_bands: ConfidenceBand[]
+}
+
+export interface PredictionRecord {
+  id: number
+  timestamp: string
+  asset: string
+  signal: string
+  confidence: number
+  price_at_prediction: number
+  actual_direction: string | null
+  was_correct: boolean | null
+  price_at_outcome: number | null
+  outcome_timestamp: string | null
+}
+
+export interface AccuracyStats {
+  predictions: number
+  resolved: number
+  correct: number
+  accuracy: number
+}
+
+export interface AssetAccuracy {
+  asset: string
+  correct: number
+  total: number
+  accuracy: number
+}
+
+export interface ConfidenceBand {
+  band: string
+  predictions: number
+  correct: number
+  accuracy: number
+}
+
 export async function sendChat(message: string, tabContext: string): Promise<string> {
   const res = await fetch(`${BASE}/api/v1/chat`, {
     method: 'POST',

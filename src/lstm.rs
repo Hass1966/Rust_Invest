@@ -12,34 +12,38 @@
 /// Training uses AdamW optimizer with binary cross-entropy loss.
 /// Model weights serialised via VarMap save/load for persistence.
 
-use candle_core::{DType, Device, Tensor, D};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarMap, VarBuilder, Optimizer, Module};
 use candle_nn::rnn::{LSTM, LSTMConfig, LSTMState, RNN};
 use candle_nn::linear;
-use crate::ml::Sample;
+use crate::ml::{self, Sample};
 
-/// Select the best available device: Metal GPU if on Apple Silicon, else CPU.
-/// Called once at startup, cached for all LSTM operations.
+/// Sanitise a float: replace NaN/Inf with 0.0
+fn sanitise_f32(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
+/// Sanitise a vector of f64 values for tensor creation
+fn sanitise_vec(data: &[f64]) -> Vec<f32> {
+    data.iter().map(|&x| sanitise_f32(x as f32)).collect()
+}
+
+/// Count NaN/Inf values in a slice
+fn count_bad_values(data: &[f64]) -> usize {
+    data.iter().filter(|x| !x.is_finite()).count()
+}
+
+/// Select device for LSTM operations.
+/// NOTE: candle 0.9 Metal backend is missing sigmoid/tanh kernels which LSTM
+/// gates require, so we force CPU. The Metal feature is still useful for other
+/// modules (e.g. matrix multiplications in GBT/TFT) but not LSTM.
 fn select_device() -> Device {
-    // Try Metal GPU first (Apple Silicon M1/M2/M3/M4)
-    #[cfg(feature = "metal")]
-    {
-        match Device::new_metal(0) {
-            Ok(device) => {
-                println!("    [LSTM] Using Metal GPU acceleration");
-                return device;
-            }
-            Err(e) => {
-                println!("    [LSTM] Metal GPU unavailable ({}), falling back to CPU", e);
-            }
-        }
-    }
-    println!("    [LSTM] Using CPU");
+    println!("    [LSTM] Using CPU (Metal lacks sigmoid/tanh kernels for LSTM gates)");
     Device::Cpu
 }
 
-/// Lazy-initialised device — Metal GPU if available, else CPU.
-/// Using std::sync::OnceLock so we only probe Metal once.
+/// Lazy-initialised device — CPU for LSTM (see select_device comment).
+/// Using std::sync::OnceLock so we only probe once.
 fn get_device() -> &'static Device {
     use std::sync::OnceLock;
     static DEVICE: OnceLock<Device> = OnceLock::new();
@@ -60,10 +64,10 @@ pub struct LSTMModelConfig {
 impl Default for LSTMModelConfig {
     fn default() -> Self {
         Self {
-            input_size: 83,
-            hidden_size: 32,
-            seq_length: 20,
-            learning_rate: 0.001,
+            input_size: 30,
+            hidden_size: 64,
+            seq_length: 10,
+            learning_rate: 0.0005,
             epochs: 50,
             batch_size: 32,
         }
@@ -98,15 +102,33 @@ impl LSTMModel {
     }
 
     /// Train on sequences built from samples
-    pub fn train(&mut self, samples: &[Sample], val_samples: &[Sample]) -> Result<TrainResult, candle_core::Error> {
+    /// If `feature_indices` is provided, only those feature columns are used
+    pub fn train(&mut self, samples: &[Sample], val_samples: &[Sample], feature_indices: Option<&[usize]>) -> Result<TrainResult, candle_core::Error> {
         let seq_len = self.config.seq_length;
         let n_features = self.config.input_size;
 
+        // Validate input data
+        let train_bad = samples.iter()
+            .flat_map(|s| s.features.iter())
+            .filter(|x| !x.is_finite())
+            .count();
+        let val_bad = val_samples.iter()
+            .flat_map(|s| s.features.iter())
+            .filter(|x| !x.is_finite())
+            .count();
+        if train_bad > 0 || val_bad > 0 {
+            println!("    [LSTM] WARNING: {} NaN/Inf in train, {} in val — sanitising", train_bad, val_bad);
+        }
+
         // Build sequences: each sequence is seq_len consecutive samples
-        let train_seqs = build_sequences(samples, seq_len);
-        let val_seqs = build_sequences(val_samples, seq_len);
+        let train_seqs = build_sequences_with_subset(samples, seq_len, feature_indices);
+        let val_seqs = build_sequences_with_subset(val_samples, seq_len, feature_indices);
+
+        println!("    [LSTM] Samples: {} train, {} val → {} train seqs, {} val seqs (seq_len={})",
+            samples.len(), val_samples.len(), train_seqs.len(), val_seqs.len(), seq_len);
 
         if train_seqs.is_empty() || val_seqs.is_empty() {
+            println!("    [LSTM] ERROR: empty sequences (need >{} samples per split)", seq_len + 1);
             return Ok(TrainResult {
                 final_train_loss: f64::NAN,
                 final_val_loss: f64::NAN,
@@ -115,6 +137,12 @@ impl LSTMModel {
                 val_accuracy: 0.0,
             });
         }
+
+        // Check label distribution
+        let n_up = train_seqs.iter().filter(|s| s.label > 0.5).count();
+        println!("    [LSTM] Label distribution: {:.1}% up, {:.1}% down",
+            n_up as f64 / train_seqs.len() as f64 * 100.0,
+            (train_seqs.len() - n_up) as f64 / train_seqs.len() as f64 * 100.0);
 
         let optim_config = candle_nn::ParamsAdamW {
             lr: self.config.learning_rate,
@@ -129,6 +157,7 @@ impl LSTMModel {
         let mut final_train_loss = 0.0;
         let mut final_val_loss = 0.0;
         let mut epochs_trained = 0;
+        let mut nan_loss_count = 0_usize;
 
         println!("    [LSTM] Training on {} sequences, validating on {}", train_seqs.len(), val_seqs.len());
 
@@ -142,24 +171,24 @@ impl LSTMModel {
                 let batch = &train_seqs[batch_start..batch_end];
                 let batch_size = batch.len();
 
-                // Build input tensor [batch_size, seq_len, n_features]
+                // Build input tensor [batch_size, seq_len, n_features] with NaN sanitisation
                 let mut input_data = Vec::with_capacity(batch_size * seq_len * n_features);
                 let mut labels_data = Vec::with_capacity(batch_size);
 
                 for seq in batch {
                     for step in &seq.features {
-                        input_data.extend_from_slice(step);
+                        input_data.extend(sanitise_vec(step));
                     }
-                    labels_data.push(seq.label);
+                    labels_data.push(sanitise_f32(seq.label as f32));
                 }
 
                 let input = Tensor::from_vec(
-                    input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
+                    input_data,
                     (batch_size, seq_len, n_features),
                     get_device(),
                 )?;
                 let labels = Tensor::from_vec(
-                    labels_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
+                    labels_data,
                     (batch_size, 1),
                     get_device(),
                 )?;
@@ -167,31 +196,62 @@ impl LSTMModel {
                 // Forward pass: process each timestep through LSTM
                 let logits = self.forward_batch(&input)?;
 
+                // Check for NaN in logits (indicates Metal GPU issue)
+                let logits_vec = logits.flatten_all()?.to_vec1::<f32>()?;
+                let logit_nans = logits_vec.iter().filter(|x| !x.is_finite()).count();
+                if logit_nans > 0 {
+                    if epoch == 0 && n_batches == 0 {
+                        println!("    [LSTM] ERROR: {} NaN/Inf in logits — GPU/Metal issue likely", logit_nans);
+                        println!("    [LSTM] Logit sample: {:?}", &logits_vec[..logits_vec.len().min(5)]);
+                    }
+                    nan_loss_count += 1;
+                    continue; // skip this batch
+                }
+
                 // Binary cross-entropy with logits
                 let loss = candle_nn::loss::binary_cross_entropy_with_logit(&logits, &labels)?;
+                let loss_val = loss.to_scalar::<f32>()? as f64;
+
+                // Validate loss
+                if !loss_val.is_finite() {
+                    nan_loss_count += 1;
+                    if nan_loss_count <= 3 {
+                        println!("    [LSTM] WARNING: NaN/Inf loss at epoch {} batch {} (loss={})",
+                            epoch + 1, n_batches, loss_val);
+                    }
+                    continue; // skip this batch, don't update weights
+                }
 
                 // Backward + step
                 optimizer.backward_step(&loss)?;
 
-                epoch_loss += loss.to_scalar::<f32>()? as f64;
+                epoch_loss += loss_val;
                 n_batches += 1;
             }
 
-            final_train_loss = epoch_loss / n_batches.max(1) as f64;
+            if n_batches == 0 {
+                if epoch == 0 {
+                    println!("    [LSTM] ERROR: no valid batches in epoch 1 — all produced NaN");
+                }
+                continue;
+            }
+
+            final_train_loss = epoch_loss / n_batches as f64;
 
             // Validation loss
             let val_loss = self.evaluate_loss(&val_seqs)?;
             final_val_loss = val_loss;
 
             if epoch == 0 || (epoch + 1) % 10 == 0 || epoch == self.config.epochs - 1 {
-                println!("    [LSTM] Epoch {:>3}/{}: train_loss={:.4}, val_loss={:.4}",
-                    epoch + 1, self.config.epochs, final_train_loss, val_loss);
+                println!("    [LSTM] Epoch {:>3}/{}: train_loss={:.4}, val_loss={:.4}{}",
+                    epoch + 1, self.config.epochs, final_train_loss, val_loss,
+                    if nan_loss_count > 0 { format!(" (nan_batches={})", nan_loss_count) } else { String::new() });
             }
 
             epochs_trained = epoch + 1;
 
-            // Early stopping
-            if val_loss < best_val_loss - 0.001 {
+            // Early stopping (only on valid loss)
+            if val_loss.is_finite() && val_loss < best_val_loss - 0.001 {
                 best_val_loss = val_loss;
                 patience = 0;
             } else {
@@ -203,9 +263,21 @@ impl LSTMModel {
             }
         }
 
+        if nan_loss_count > 0 {
+            println!("    [LSTM] Total NaN/Inf batches: {} out of ~{}", nan_loss_count,
+                (train_seqs.len() / self.config.batch_size + 1) * epochs_trained);
+        }
+
         // Compute validation accuracy
         let val_accuracy = self.evaluate_accuracy(&val_seqs)?;
-        println!("    [LSTM] Validation accuracy: {:.1}%", val_accuracy * 100.0);
+        println!("    [LSTM] Validation accuracy: {:.1}% ({} val sequences)", val_accuracy * 100.0, val_seqs.len());
+
+        // Log prediction distribution
+        let val_probs = self.predict_probs_batch(&val_seqs)?;
+        let n_pred_up = val_probs.iter().filter(|&&p| p > 0.5).count();
+        let avg_prob = val_probs.iter().sum::<f64>() / val_probs.len().max(1) as f64;
+        println!("    [LSTM] Val predictions: {:.1}% predict UP, avg_prob={:.3}",
+            n_pred_up as f64 / val_probs.len().max(1) as f64 * 100.0, avg_prob);
 
         Ok(TrainResult {
             final_train_loss,
@@ -260,18 +332,18 @@ impl LSTMModel {
 
         for seq in seqs {
             for step in &seq.features {
-                input_data.extend_from_slice(step);
+                input_data.extend(sanitise_vec(step));
             }
-            labels_data.push(seq.label);
+            labels_data.push(sanitise_f32(seq.label as f32));
         }
 
         let input = Tensor::from_vec(
-            input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
+            input_data,
             (batch_size, seq_len, n_features),
             get_device(),
         )?;
         let labels = Tensor::from_vec(
-            labels_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
+            labels_data,
             (batch_size, 1),
             get_device(),
         )?;
@@ -284,27 +356,7 @@ impl LSTMModel {
     /// Evaluate accuracy on a set of sequences
     fn evaluate_accuracy(&self, seqs: &[Sequence]) -> Result<f64, candle_core::Error> {
         if seqs.is_empty() { return Ok(0.0); }
-
-        let n_features = self.config.input_size;
-        let seq_len = self.config.seq_length;
-        let batch_size = seqs.len();
-
-        let mut input_data = Vec::with_capacity(batch_size * seq_len * n_features);
-        for seq in seqs {
-            for step in &seq.features {
-                input_data.extend_from_slice(step);
-            }
-        }
-
-        let input = Tensor::from_vec(
-            input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
-            (batch_size, seq_len, n_features),
-            get_device(),
-        )?;
-
-        let logits = self.forward_batch(&input)?;
-        let probs = candle_nn::ops::sigmoid(&logits)?;
-        let probs_vec = probs.flatten_all()?.to_vec1::<f32>()?;
+        let probs_vec = self.predict_probs_batch(seqs)?;
 
         let mut correct = 0;
         for (i, seq) in seqs.iter().enumerate() {
@@ -316,6 +368,33 @@ impl LSTMModel {
         Ok(correct as f64 / seqs.len() as f64)
     }
 
+    /// Get prediction probabilities for a batch of sequences
+    fn predict_probs_batch(&self, seqs: &[Sequence]) -> Result<Vec<f64>, candle_core::Error> {
+        if seqs.is_empty() { return Ok(vec![]); }
+
+        let n_features = self.config.input_size;
+        let seq_len = self.config.seq_length;
+        let batch_size = seqs.len();
+
+        let mut input_data = Vec::with_capacity(batch_size * seq_len * n_features);
+        for seq in seqs {
+            for step in &seq.features {
+                input_data.extend(sanitise_vec(step));
+            }
+        }
+
+        let input = Tensor::from_vec(
+            input_data,
+            (batch_size, seq_len, n_features),
+            get_device(),
+        )?;
+
+        let logits = self.forward_batch(&input)?;
+        let probs = candle_nn::ops::sigmoid(&logits)?;
+        let probs_vec = probs.flatten_all()?.to_vec1::<f32>()?;
+        Ok(probs_vec.iter().map(|&p| p as f64).collect())
+    }
+
     /// Predict P(up) for a single sequence of features
     pub fn predict_proba(&self, sequence: &[Vec<f64>]) -> Result<f64, candle_core::Error> {
         let seq_len = sequence.len();
@@ -323,11 +402,11 @@ impl LSTMModel {
 
         let mut input_data = Vec::with_capacity(seq_len * n_features);
         for step in sequence {
-            input_data.extend_from_slice(step);
+            input_data.extend(sanitise_vec(step));
         }
 
         let input = Tensor::from_vec(
-            input_data.iter().map(|&x| x as f32).collect::<Vec<f32>>(),
+            input_data,
             (1, seq_len, n_features),
             get_device(),
         )?;
@@ -336,7 +415,7 @@ impl LSTMModel {
         let prob = candle_nn::ops::sigmoid(&logits)?;
         let val = prob.flatten_all()?.to_vec1::<f32>()?[0];
 
-        Ok(val as f64)
+        Ok(sanitise_f32(val) as f64)
     }
 
     /// Predict direction for a single sequence
@@ -378,7 +457,13 @@ pub struct Sequence {
 
 /// Build sequences from flat samples
 /// Each sequence is `seq_len` consecutive samples, label is from the last sample
+/// If `feature_indices` is provided, only those feature columns are kept
 pub fn build_sequences(samples: &[Sample], seq_len: usize) -> Vec<Sequence> {
+    build_sequences_with_subset(samples, seq_len, None)
+}
+
+/// Build sequences with optional feature subsetting
+pub fn build_sequences_with_subset(samples: &[Sample], seq_len: usize, feature_indices: Option<&[usize]>) -> Vec<Sequence> {
     if samples.len() < seq_len + 1 {
         return Vec::new();
     }
@@ -388,7 +473,15 @@ pub fn build_sequences(samples: &[Sample], seq_len: usize) -> Vec<Sequence> {
     for i in seq_len..samples.len() {
         let features: Vec<Vec<f64>> = samples[i - seq_len..i]
             .iter()
-            .map(|s| s.features.clone())
+            .map(|s| {
+                if let Some(indices) = feature_indices {
+                    indices.iter().map(|&idx| {
+                        if idx < s.features.len() { s.features[idx] } else { 0.0 }
+                    }).collect()
+                } else {
+                    s.features.clone()
+                }
+            })
             .collect();
 
         let label = if samples[i].label > 0.0 { 1.0 } else { 0.0 };
@@ -401,6 +494,7 @@ pub fn build_sequences(samples: &[Sample], seq_len: usize) -> Vec<Sequence> {
 
 /// Run LSTM walk-forward evaluation on pre-built samples
 /// Returns (overall_accuracy, recent_accuracy, final_prob)
+/// If `feature_indices` is provided, only those feature columns are fed to the LSTM
 pub fn walk_forward_lstm(
     symbol: &str,
     samples: &[Sample],
@@ -408,20 +502,31 @@ pub fn walk_forward_lstm(
     train_window: usize,
     test_window: usize,
     step: usize,
+    feature_indices: Option<&[usize]>,
 ) -> Option<LSTMWalkForwardResult> {
     let seq_len = config.seq_length;
 
+    // Check NaN/Inf in input samples
+    let bad_features: usize = samples.iter()
+        .map(|s| count_bad_values(&s.features))
+        .sum();
+    if bad_features > 0 {
+        println!("  {} — [LSTM] WARNING: {} NaN/Inf values in input features", symbol, bad_features);
+    }
+
     if samples.len() < train_window + test_window + seq_len {
-        println!("  {} — not enough samples for LSTM walk-forward", symbol);
+        println!("  {} — not enough samples for LSTM walk-forward ({} samples, need {})",
+            symbol, samples.len(), train_window + test_window + seq_len);
         return None;
     }
 
-    println!("  {} — LSTM walk-forward on {} samples × {} features (seq_len={})",
-        symbol, samples.len(), config.input_size, seq_len);
+    println!("  {} — LSTM walk-forward on {} samples × {} features (seq_len={}, train_win={}, test_win={}, step={})",
+        symbol, samples.len(), config.input_size, seq_len, train_window, test_window, step);
 
     let mut total_correct = 0_usize;
     let mut total_tested = 0_usize;
     let mut n_folds = 0_usize;
+    let mut n_failed_folds = 0_usize;
     let mut last_fold_correct = 0_usize;
     let mut last_fold_size = 0_usize;
     let mut last_prob = 0.5_f64;
@@ -431,12 +536,22 @@ pub fn walk_forward_lstm(
         let train_end = start + train_window;
         let test_end = (train_end + test_window).min(samples.len());
 
-        let train_samples = &samples[start..train_end];
-        let test_samples = &samples[train_end..test_end];
+        // Clone and normalise this fold's data (same as pointwise models)
+        let mut fold_samples: Vec<Sample> = samples[start..test_end].to_vec();
+        let train_len = train_window;
+        let (train_data, test_data) = fold_samples.split_at_mut(train_len);
+        let (_means, _stds) = ml::normalise(train_data);
+        ml::apply_normalisation(test_data, &_means, &_stds);
 
         // Split train into train/val (85/15)
-        let val_split = (train_samples.len() as f64 * 0.85) as usize;
-        let (train_part, val_part) = train_samples.split_at(val_split);
+        let val_split = (train_data.len() as f64 * 0.85) as usize;
+        let (train_part, val_part) = train_data.split_at(val_split);
+
+        let fold_num = n_folds + n_failed_folds + 1;
+        if fold_num <= 2 {
+            println!("    [LSTM] Fold {}: train={}, val={}, test={} (start={})",
+                fold_num, train_part.len(), val_part.len(), test_data.len(), start);
+        }
 
         // Train LSTM
         let mut model = match LSTMModel::new(config.clone()) {
@@ -447,23 +562,46 @@ pub fn walk_forward_lstm(
             }
         };
 
-        match model.train(train_part, val_part) {
-            Ok(_) => {},
+        match model.train(train_part, val_part, feature_indices) {
+            Ok(result) => {
+                if result.epochs_trained == 0 {
+                    println!("    [LSTM] WARNING: 0 epochs trained (empty sequences?)");
+                    n_failed_folds += 1;
+                    start += step;
+                    continue;
+                }
+            },
             Err(e) => {
                 println!("    [LSTM] Training failed: {}", e);
+                n_failed_folds += 1;
                 start += step;
                 continue;
             }
         }
 
-        // Evaluate on test set
-        let test_seqs = build_sequences(test_samples, seq_len);
+        // Evaluate on test set (using normalised test data)
+        let test_seqs = build_sequences_with_subset(test_data, seq_len, feature_indices);
+        if test_seqs.is_empty() {
+            println!("    [LSTM] WARNING: no test sequences (test_data={} < seq_len+1={})",
+                test_data.len(), seq_len + 1);
+            n_failed_folds += 1;
+            start += step;
+            continue;
+        }
+
         let mut fold_correct = 0;
 
         for seq in &test_seqs {
             let prob = match model.predict_proba(&seq.features) {
-                Ok(p) => p,
-                Err(_) => 0.5,
+                Ok(p) => {
+                    if !p.is_finite() { 0.5 } else { p }
+                },
+                Err(e) => {
+                    if fold_correct == 0 {
+                        println!("    [LSTM] Prediction error: {}", e);
+                    }
+                    0.5
+                },
             };
             let predicted_up = prob > 0.5;
             let actual_up = seq.label > 0.5;
@@ -471,6 +609,9 @@ pub fn walk_forward_lstm(
         }
 
         let fold_size = test_seqs.len();
+        let fold_acc = fold_correct as f64 / fold_size.max(1) as f64 * 100.0;
+        println!("    [LSTM] Fold test: {}/{} correct ({:.1}%)", fold_correct, fold_size, fold_acc);
+
         total_correct += fold_correct;
         total_tested += fold_size;
         n_folds += 1;
@@ -486,13 +627,15 @@ pub fn walk_forward_lstm(
     }
 
     if n_folds == 0 || total_tested == 0 {
+        println!("    [LSTM] FAILED: {} folds attempted, {} succeeded, {} total test sequences",
+            n_folds + n_failed_folds, n_folds, total_tested);
         return None;
     }
 
     let overall_acc = total_correct as f64 / total_tested as f64 * 100.0;
     let recent_acc = last_fold_correct as f64 / last_fold_size.max(1) as f64 * 100.0;
 
-    println!("    LSTM walk-forward: {} folds, {} test sequences", n_folds, total_tested);
+    println!("    LSTM walk-forward: {} folds ({} failed), {} test sequences", n_folds, n_failed_folds, total_tested);
     println!("      LSTM: {:.1}% (recent: {:.1}%)", overall_acc, recent_acc);
 
     Some(LSTMWalkForwardResult {

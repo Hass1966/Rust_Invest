@@ -299,7 +299,7 @@ pub fn run_diagnostics(
             let (lstm_train, lstm_val) = fold_train_samples.split_at(val_split);
 
             if let Ok(mut lstm_model) = LSTMModel::new(lstm_config.clone()) {
-                if lstm_model.train(lstm_train, lstm_val).is_ok() {
+                if lstm_model.train(lstm_train, lstm_val, None).is_ok() {
                     has_lstm = true;
                     let test_seqs = build_sequences(fold_test_samples, seq_len);
                     for seq in &test_seqs {

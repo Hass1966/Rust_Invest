@@ -38,7 +38,7 @@ dotenvy = "0.15"
 # through Apple's Metal GPU shaders instead of CPU.
 # The "accelerate" feature uses Apple's Accelerate framework (vecLib/BLAS)
 # for optimised CPU linear algebra when tensors are on CPU.
-candle-core = { version = "0.9"}
+candle-core = { version = "0.9" }
 candle-nn = { version = "0.9" }
 safetensors = "0.4"
 
@@ -50,3 +50,11 @@ rayon = "1.10"
 # Axum web framework for the serve binary (API server)
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
+
+[features]
+default = ["metal"]
+# Metal GPU acceleration for Apple Silicon (M1/M2/M3/M4).
+# Enabled by default on macOS. Disable with --no-default-features on Linux/CI.
+metal = ["candle-core/metal"]
+# Apple Accelerate BLAS for optimised CPU fallback
+accelerate = ["candle-core/accelerate"]

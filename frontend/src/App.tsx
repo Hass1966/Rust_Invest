@@ -1,6 +1,6 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import { useState } from 'react'
-import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X, Clock, Bot, PlayCircle, Bitcoin, GraduationCap } from 'lucide-react'
+import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X, Clock, Bot, PlayCircle, Bitcoin, GraduationCap, Target } from 'lucide-react'
 import Overview from './pages/Overview'
 import Stocks from './pages/Stocks'
 import FX from './pages/FX'
@@ -12,6 +12,7 @@ import Diagnostics from './pages/Diagnostics'
 import Advisor from './pages/Advisor'
 import Simulate from './pages/Simulate'
 import Admin from './pages/Admin'
+import Predictions from './pages/Predictions'
 import ChatPanel from './components/ChatPanel'
 
 const tabs = [
@@ -23,6 +24,7 @@ const tabs = [
   { path: '/history', label: 'History', icon: Clock },
   { path: '/simulate', label: 'Simulate', icon: PlayCircle },
   { path: '/advisor', label: 'Advisor', icon: Bot },
+  { path: '/predictions', label: 'Predictions', icon: Target },
   { path: '/training', label: 'Training', icon: GraduationCap },
   { path: '/diagnostics', label: 'Diagnostics', icon: Cpu },
 ]
@@ -89,6 +91,7 @@ export default function App() {
             <Route path="/history" element={<History />} />
             <Route path="/simulate" element={<Simulate />} />
             <Route path="/advisor" element={<Advisor />} />
+            <Route path="/predictions" element={<Predictions />} />
             <Route path="/training" element={<Training />} />
             <Route path="/diagnostics" element={<Diagnostics />} />
             <Route path="/admin" element={<Admin />} />

@@ -187,7 +187,24 @@ impl Database {
             CREATE TABLE IF NOT EXISTS fear_greed (
                 date  TEXT PRIMARY KEY,
                 value REAL NOT NULL
-            );"
+            );
+
+            CREATE TABLE IF NOT EXISTS predictions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                asset           TEXT NOT NULL,
+                signal          TEXT NOT NULL,
+                confidence      REAL NOT NULL,
+                price_at_prediction REAL NOT NULL,
+                actual_direction TEXT,
+                was_correct     INTEGER,
+                price_at_outcome REAL,
+                outcome_timestamp TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_predictions_asset_time
+                ON predictions(asset, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_predictions_pending
+                ON predictions(outcome_timestamp);"
         )?;
         Ok(())
     }
@@ -847,6 +864,69 @@ impl Database {
     pub fn execute_raw(&self, sql: &str) -> Result<usize> {
         Ok(self.conn.execute(sql, [])?)
     }
+
+    // ── Predictions tracking ──
+
+    pub fn insert_prediction(&self, timestamp: &str, asset: &str, signal: &str, confidence: f64, price_at_prediction: f64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO predictions (timestamp, asset, signal, confidence, price_at_prediction)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![timestamp, asset, signal, confidence, price_at_prediction],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_pending_predictions(&self) -> Result<Vec<PendingPrediction>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, asset, signal, price_at_prediction
+             FROM predictions WHERE outcome_timestamp IS NULL"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PendingPrediction {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                asset: row.get(2)?,
+                signal: row.get(3)?,
+                price_at_prediction: row.get(4)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows { results.push(row?); }
+        Ok(results)
+    }
+
+    pub fn update_prediction_outcome(&self, id: i64, actual_direction: &str, was_correct: bool, price_at_outcome: f64, outcome_timestamp: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE predictions SET actual_direction = ?1, was_correct = ?2, price_at_outcome = ?3, outcome_timestamp = ?4 WHERE id = ?5",
+            rusqlite::params![actual_direction, was_correct as i32, price_at_outcome, outcome_timestamp, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_predictions_history(&self, limit: usize) -> Result<Vec<PredictionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, asset, signal, confidence, price_at_prediction,
+                    actual_direction, was_correct, price_at_outcome, outcome_timestamp
+             FROM predictions ORDER BY timestamp DESC LIMIT ?1"
+        )?;
+        let rows = stmt.query_map([limit as i64], |row| {
+            Ok(PredictionRecord {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                asset: row.get(2)?,
+                signal: row.get(3)?,
+                confidence: row.get(4)?,
+                price_at_prediction: row.get(5)?,
+                actual_direction: row.get(6)?,
+                was_correct: row.get::<_, Option<i32>>(7)?.map(|v| v != 0),
+                price_at_outcome: row.get(8)?,
+                outcome_timestamp: row.get(9)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows { results.push(row?); }
+        Ok(results)
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -918,4 +998,27 @@ pub struct DailyPortfolioRow {
     pub cumulative_return: f64,
     pub signals_json: Option<String>,
     pub model_version: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPrediction {
+    pub id: i64,
+    pub timestamp: String,
+    pub asset: String,
+    pub signal: String,
+    pub price_at_prediction: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PredictionRecord {
+    pub id: i64,
+    pub timestamp: String,
+    pub asset: String,
+    pub signal: String,
+    pub confidence: f64,
+    pub price_at_prediction: f64,
+    pub actual_direction: Option<String>,
+    pub was_correct: Option<bool>,
+    pub price_at_outcome: Option<f64>,
+    pub outcome_timestamp: Option<String>,
 }

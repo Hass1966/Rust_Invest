@@ -16,14 +16,23 @@ struct AssetAccuracy {
     gbt: f64,
     lstm: f64,
     regime: f64,
-    tft: f64,
     ensemble: f64,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let test_lstm = args.iter().any(|a| a == "--test-lstm");
+
     let client = reqwest::Client::new();
     let database = db::Database::new("rust_invest.db")?;
+
+    if test_lstm {
+        println!("╔══════════════════════════════════════════════════════════════════╗");
+        println!("║    RUST INVEST — LSTM TEST MODE (SPY + MSFT only)              ║");
+        println!("╚══════════════════════════════════════════════════════════════════╝\n");
+        return run_lstm_test(&database).await;
+    }
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║         RUST INVEST — TRAIN MODE (Weekly Heavy Job)            ║");
@@ -188,7 +197,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Model 1-4: Core ensemble (LinReg, LogReg, GBT, LSTM)
         let mut lstm_acc = 0.0;
         let mut regime_acc = 0.0;
-        let mut tft_acc = 0.0;
 
         if let Some(wf) = ensemble::walk_forward_samples(stock.symbol, &samples, train_window, test_window, step) {
             lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
@@ -197,11 +205,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(rw) = regime::walk_forward_regime(stock.symbol, &samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
-
-            // Model 6: TFT
-            // if let Some(tw) = tft::walk_forward_tft(stock.symbol, &samples, &tft_config, train_window, test_window, step) {
-                // tft_acc = tw.overall_accuracy;
-            // }
 
             // Track accuracy for comparison report
             let ov = ensemble::get_override(&ensemble_overrides, stock.symbol);
@@ -212,7 +215,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 gbt: wf.gbt_accuracy,
                 lstm: lstm_acc,
                 regime: regime_acc,
-                tft: tft_acc,
                 ensemble: ens_acc,
             });
 
@@ -242,9 +244,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(stock.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            println!("  ✓ All 6 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}% TFT:{:.1}%]",
+            println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 stock.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
-                lstm_acc, regime_acc, tft_acc);
+                lstm_acc, regime_acc);
         }
 
         if let Some(bt) = backtester::run_backtest(stock.symbol, &samples, &prices, train_window, test_window, step, &bt_config) {
@@ -270,7 +272,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut lstm_acc = 0.0;
         let mut regime_acc = 0.0;
-        let mut tft_acc = 0.0;
 
         if let Some(wf) = ensemble::walk_forward_samples(fx.symbol, &samples, train_window, test_window, step) {
             lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
@@ -278,9 +279,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(rw) = regime::walk_forward_regime(fx.symbol, &samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
-            // if let Some(tw) = tft::walk_forward_tft(fx.symbol, &samples, &tft_config, train_window, test_window, step) {
-                // tft_acc = tw.overall_accuracy;
-            // }
 
             let ov = ensemble::get_override(&ensemble_overrides, fx.symbol);
             let ens_acc = compute_ensemble_accuracy(&wf, &ov);
@@ -290,7 +288,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 gbt: wf.gbt_accuracy,
                 lstm: lstm_acc,
                 regime: regime_acc,
-                tft: tft_acc,
                 ensemble: ens_acc,
             });
 
@@ -320,9 +317,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(fx.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            println!("  ✓ All 6 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}% TFT:{:.1}%]",
+            println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 fx.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
-                lstm_acc, regime_acc, tft_acc);
+                lstm_acc, regime_acc);
         }
 
         if let Some(bt) = backtester::run_backtest(fx.symbol, &samples, &prices, train_window, test_window, step, &bt_config) {
@@ -385,7 +382,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut lstm_acc = 0.0;
         let mut regime_acc = 0.0;
-        let mut tft_acc = 0.0;
 
         if let Some(wf) = ensemble::walk_forward_samples(coin_id, &enriched_samples, train_window, test_window, step) {
             lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
@@ -393,9 +389,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(rw) = regime::walk_forward_regime(coin_id, &enriched_samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
-            // if let Some(tw) = tft::walk_forward_tft(coin_id, &enriched_samples, &tft_config, train_window, test_window, step) {
-                // tft_acc = tw.overall_accuracy;
-            // }
 
             accuracy_results.insert(coin_id.to_string(), AssetAccuracy {
                 linreg: wf.linear_accuracy,
@@ -403,7 +396,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 gbt: wf.gbt_accuracy,
                 lstm: lstm_acc,
                 regime: regime_acc,
-                tft: tft_acc,
                 ensemble: (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
             });
 
@@ -433,9 +425,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(coin_id, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            println!("  ✓ All 6 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}% TFT:{:.1}%]",
+            println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 coin_id, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
-                lstm_acc, regime_acc, tft_acc);
+                lstm_acc, regime_acc);
         }
 
         if let Some(bt) = backtester::run_backtest(coin_id, &enriched_samples, &prices, train_window, test_window, step, &bt_config) {
@@ -483,10 +475,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Save improved results and generate comparison report ──
     if !accuracy_results.is_empty() {
         let improved = serde_json::json!({
-            "version": "v9_6model",
+            "version": "v10_5model",
             "date": Utc::now().format("%Y-%m-%d").to_string(),
             "features": features::active_feature_count(),
-            "models": ["LinReg", "LogReg", "GBT", "LSTM", "RegimeEnsemble", "TFT"],
+            "models": ["LinReg", "LogReg", "GBT", "LSTM", "RegimeEnsemble"],
             "assets": accuracy_results.iter().map(|(k, v)| {
                 (k.clone(), serde_json::json!({
                     "linreg": (v.linreg * 10.0).round() / 10.0,
@@ -494,7 +486,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "gbt": (v.gbt * 10.0).round() / 10.0,
                     "lstm": (v.lstm * 10.0).round() / 10.0,
                     "regime": (v.regime * 10.0).round() / 10.0,
-                    "tft": (v.tft * 10.0).round() / 10.0,
                     "ensemble": (v.ensemble * 10.0).round() / 10.0,
                 }))
             }).collect::<serde_json::Map<String, serde_json::Value>>()
@@ -509,21 +500,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Print 6-model summary table ──
     if !accuracy_results.is_empty() {
-        println!("\n━━━ 6-MODEL ACCURACY SUMMARY ━━━\n");
-        println!("  {:<16} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
-            "Asset", "LinReg", "LogReg", "GBT", "LSTM", "Regime", "TFT");
-        println!("  {}", "-".repeat(64));
+        println!("\n━━━ 5-MODEL ACCURACY SUMMARY ━━━\n");
+        println!("  {:<16} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "Asset", "LinReg", "LogReg", "GBT", "LSTM", "Regime");
+        println!("  {}", "-".repeat(56));
         let mut sorted_assets: Vec<&String> = accuracy_results.keys().collect();
         sorted_assets.sort();
         for asset in sorted_assets {
             let a = &accuracy_results[asset];
-            println!("  {:<16} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
-                asset, a.linreg, a.logreg, a.gbt, a.lstm, a.regime, a.tft);
+            println!("  {:<16} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
+                asset, a.linreg, a.logreg, a.gbt, a.lstm, a.regime);
         }
     }
 
     println!("\n━━━ TRAINING COMPLETE ━━━");
-    println!("  Models: 6 (LinReg, LogReg, GBT, LSTM, RegimeEnsemble, TFT)");
+    println!("  Models: 5 (LinReg, LogReg, GBT, LSTM, RegimeEnsemble)");
     println!("  Features: {} active ({} total, {} pruned)",
         features::active_feature_count(), features::feature_names().len(),
         features::feature_names().len() - features::active_feature_count());
@@ -532,6 +523,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cached = model_store::list_cached_models();
     println!("  Cached models: {} files\n", cached.len());
 
+    Ok(())
+}
+
+/// LSTM test mode — runs only SPY + MSFT with full diagnostic output
+async fn run_lstm_test(database: &db::Database) -> Result<(), Box<dyn std::error::Error>> {
+    let test_symbols = ["SPY", "MSFT"];
+
+    // Build market context
+    let mut market_histories: HashMap<String, Vec<f64>> = HashMap::new();
+    let spy_prices: Vec<f64> = database.get_stock_history("SPY")?.iter().map(|p| p.price).collect();
+    market_histories.insert("SPY".to_string(), spy_prices);
+    for ticker in features::MARKET_TICKERS {
+        let prices = database.get_market_prices(ticker)?;
+        market_histories.insert(ticker.to_string(), prices);
+    }
+    let market_context = features::build_market_context(&market_histories);
+
+    for symbol in &test_symbols {
+        println!("\n{}", "=".repeat(70));
+        println!("  LSTM DIAGNOSTIC TEST: {}", symbol);
+        println!("{}\n", "=".repeat(70));
+
+        let points = database.get_stock_history(symbol)?;
+        if points.is_empty() {
+            println!("  ERROR: No data for {} in database. Run full training first to fetch data.", symbol);
+            continue;
+        }
+        println!("  Data points: {}", points.len());
+
+        let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
+        let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
+        let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
+
+        let samples = features::build_rich_features(
+            &prices, &volumes, &timestamps,
+            Some(&market_context), "stock",
+            features::sector_etf_for(symbol), None, None,
+        );
+
+        println!("  Samples built: {}", samples.len());
+        if samples.is_empty() {
+            println!("  ERROR: No samples produced for {}", symbol);
+            continue;
+        }
+
+        let n_feat = samples[0].features.len();
+        println!("  Features per sample: {}", n_feat);
+
+        // Check for NaN/Inf in features
+        let bad_count: usize = samples.iter()
+            .map(|s| s.features.iter().filter(|x| !x.is_finite()).count())
+            .sum();
+        println!("  NaN/Inf values in features: {}", bad_count);
+
+        // Label stats
+        let n_up = samples.iter().filter(|s| s.label > 0.0).count();
+        println!("  Labels: {:.1}% up, {:.1}% down",
+            n_up as f64 / samples.len() as f64 * 100.0,
+            (samples.len() - n_up) as f64 / samples.len() as f64 * 100.0);
+
+        let train_window = (samples.len() as f64 * 0.6) as usize;
+        let test_window = 30.min(samples.len() / 10);
+        let step = test_window;
+
+        println!("  train_window={}, test_window={}, step={}", train_window, test_window, step);
+
+        // Run full ensemble walk-forward (includes LSTM)
+        println!("\n  --- Running walk-forward with LSTM ---\n");
+
+        if let Some(wf) = ensemble::walk_forward_samples(symbol, &samples, train_window, test_window, step) {
+            println!("\n  --- Results for {} ---", symbol);
+            println!("  LinReg:  {:.1}% (recent: {:.1}%)", wf.linear_accuracy, wf.linear_recent);
+            println!("  LogReg:  {:.1}% (recent: {:.1}%)", wf.logistic_accuracy, wf.logistic_recent);
+            println!("  GBT:     {:.1}% (recent: {:.1}%)", wf.gbt_accuracy, wf.gbt_recent);
+            println!("  LSTM:    {:.1}% (recent: {:.1}%) [has_lstm={}]",
+                wf.lstm_accuracy, wf.lstm_recent, wf.has_lstm);
+            println!("  Final probs: lin={:.3} log={:.3} gbt={:.3} lstm={:.3}",
+                wf.final_linear_prob, wf.final_logistic_prob, wf.final_gbt_prob, wf.final_lstm_prob);
+        } else {
+            println!("  FAILED: walk_forward_samples returned None");
+        }
+    }
+
+    println!("\n━━━ LSTM TEST COMPLETE ━━━\n");
     Ok(())
 }
 
@@ -566,7 +641,6 @@ fn generate_comparison_report(
                             gbt: v.get("gbt").and_then(|x| x.as_f64()).unwrap_or(0.0),
                             lstm: v.get("lstm").and_then(|x| x.as_f64()).unwrap_or(0.0),
                             regime: v.get("regime").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                            tft: v.get("tft").and_then(|x| x.as_f64()).unwrap_or(0.0),
                             ensemble: v.get("ensemble").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         })
                     }).collect()
@@ -630,7 +704,7 @@ td:first-child {{ text-align:left; font-weight:bold; }}
 </style></head><body>
 <h1>Model Improvement Report</h1>
 <p>Baseline: v8 (pruned features, 4-model ensemble)</p>
-<p>Improved: v9 ({} features, 6-model ensemble — LinReg, LogReg, GBT, LSTM, RegimeEnsemble, TFT)</p>
+<p>Improved: v10 ({} features, 5-model ensemble — LinReg, LogReg, GBT, LSTM, RegimeEnsemble)</p>
 <p>Generated: {}</p>
 "#, n_features, Utc::now().format("%Y-%m-%d %H:%M UTC")));
 
@@ -660,7 +734,7 @@ td:first-child {{ text-align:left; font-weight:bold; }}
     // Per-asset comparison table
     html.push_str(r#"<h2>Per-Asset Comparison</h2><table>
 <tr><th style="text-align:left">Asset</th><th>Before (Ens)</th><th>After (Ens)</th><th>Change</th>
-<th>LinReg</th><th>LogReg</th><th>GBT</th><th>LSTM</th><th>Regime</th><th>TFT</th><th>Status</th></tr>"#);
+<th>LinReg</th><th>LogReg</th><th>GBT</th><th>LSTM</th><th>Regime</th><th>Status</th></tr>"#);
 
     for asset in &all_assets {
         let before = &baseline[asset];
@@ -674,11 +748,11 @@ td:first-child {{ text-align:left; font-weight:bold; }}
         html.push_str(&format!(
             "<tr><td>{}</td><td>{:.1}%</td><td>{:.1}%</td><td class='{}'>{:+.1}pp</td>\
              <td>{:.1}%</td><td>{:.1}%</td><td>{:.1}%</td>\
-             <td>{:.1}%</td><td>{:.1}%</td><td>{:.1}%</td>\
+             <td>{:.1}%</td><td>{:.1}%</td>\
              <td><span class='tag {}'>{}</span></td></tr>\n",
             asset, before.ensemble, after.ensemble, cls, diff,
             after.linreg, after.logreg, after.gbt,
-            after.lstm, after.regime, after.tft,
+            after.lstm, after.regime,
             tag_cls, status,
         ));
     }

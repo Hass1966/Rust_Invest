@@ -172,5 +172,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Assets: {} stocks, {} FX, {} crypto\n",
         stocks::STOCK_LIST.len(), stocks::FX_LIST.len(), coin_ids.len());
 
+    // ── Log predictions to database ──
+    println!("\n━━━ LOGGING PREDICTIONS ━━━\n");
+    let now_ts = chrono::Utc::now().to_rfc3339();
+    let mut logged = 0;
+    for s in &signals {
+        if s.signal == "HOLD" { continue; } // Only log actionable signals
+        if let Err(e) = database.insert_prediction(&now_ts, &s.symbol, &s.signal, s.confidence, s.current_price) {
+            eprintln!("  Failed to log prediction for {}: {}", s.symbol, e);
+        } else {
+            logged += 1;
+        }
+    }
+    println!("  Logged {} predictions to database", logged);
+
+    // ── Resolve pending predictions ──
+    println!("\n━━━ RESOLVING PENDING PREDICTIONS ━━━\n");
+    let pending = database.get_pending_predictions()?;
+    let resolve_ts = chrono::Utc::now().to_rfc3339();
+    let mut resolved = 0;
+    for pred in &pending {
+        // Check if prediction is old enough (at least 1 hour / roughly 1 trading day for daily)
+        let pred_time = chrono::DateTime::parse_from_rfc3339(&pred.timestamp)
+            .unwrap_or_else(|_| chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00+00:00").unwrap());
+        let age_hours = (chrono::Utc::now() - pred_time.with_timezone(&chrono::Utc)).num_hours();
+        if age_hours < 1 { continue; } // Too recent, skip
+
+        // Get current price for this asset
+        let current_price = if let Some(sig) = signals.iter().find(|s| s.symbol == pred.asset) {
+            sig.current_price
+        } else {
+            continue; // Can't resolve without current price
+        };
+
+        let price_change = current_price - pred.price_at_prediction;
+        let actual_direction = if price_change.abs() < pred.price_at_prediction * 0.001 {
+            "FLAT"
+        } else if price_change > 0.0 {
+            "UP"
+        } else {
+            "DOWN"
+        };
+
+        let was_correct = match (pred.signal.as_str(), actual_direction) {
+            ("BUY", "UP") | ("SELL", "DOWN") => true,
+            ("BUY", "DOWN") | ("SELL", "UP") => false,
+            _ => true, // FLAT counts as correct for any signal
+        };
+
+        if let Err(e) = database.update_prediction_outcome(pred.id, actual_direction, was_correct, current_price, &resolve_ts) {
+            eprintln!("  Failed to resolve prediction {}: {}", pred.id, e);
+        } else {
+            let icon = if was_correct { "✓" } else { "✗" };
+            println!("  {} {} {} @ {:.2} → {:.2} ({})", icon, pred.asset, pred.signal, pred.price_at_prediction, current_price, actual_direction);
+            resolved += 1;
+        }
+    }
+    println!("  Resolved {} of {} pending predictions", resolved, pending.len());
+
     Ok(())
 }

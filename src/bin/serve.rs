@@ -124,6 +124,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }).await.ok();
             }
 
+            // Resolve pending predictions with current prices
+            {
+                let sigs = scheduler_state.signals.read().await;
+                let signals_map = sigs.clone();
+                drop(sigs);
+                let db_path = scheduler_state.db_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    resolve_pending_predictions(&db_path, &signals_map);
+                }).await.ok();
+            }
+
             let sigs = scheduler_state.signals.read().await;
             println!("  [Scheduler] Refresh complete. {} signals cached.", sigs.len());
         }
@@ -164,6 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/chat", post(chat_handler))
         .route("/api/v1/admin/assets", post(add_asset))
         .route("/api/v1/admin/assets/{symbol}", patch(toggle_asset))
+        .route("/api/v1/predictions/history", get(get_predictions_history))
         .layer(cors.clone())
         .with_state(state);
 
@@ -197,7 +209,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    POST /api/v1/simulate");
     println!("    POST /api/v1/chat");
     println!("    POST /api/v1/admin/assets");
-    println!("    PATCH /api/v1/admin/assets/:symbol\n");
+    println!("    PATCH /api/v1/admin/assets/:symbol");
+    println!("    GET  /api/v1/predictions/history\n");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -263,6 +276,105 @@ async fn get_training_results() -> Result<Json<serde_json::Value>, StatusCode> {
             "assets": {}
         }))),
     }
+}
+
+/// GET /api/v1/predictions/history — prediction tracker data
+async fn get_predictions_history(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(500);
+
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let records = database.get_predictions_history(limit).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // Compute stats
+        let resolved: Vec<_> = records.iter().filter(|r| r.was_correct.is_some()).collect();
+        let correct_count = resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+        let total_resolved = resolved.len();
+
+        let now = Utc::now();
+        let stats_24h = compute_accuracy_stats(&records, now - chrono::Duration::hours(24), now);
+        let stats_7d = compute_accuracy_stats(&records, now - chrono::Duration::days(7), now);
+        let stats_30d = compute_accuracy_stats(&records, now - chrono::Duration::days(30), now);
+
+        // Per-asset breakdown
+        let mut asset_stats: HashMap<String, (usize, usize)> = HashMap::new();
+        for r in &resolved {
+            let entry = asset_stats.entry(r.asset.clone()).or_insert((0, 0));
+            entry.1 += 1; // total
+            if r.was_correct == Some(true) { entry.0 += 1; } // correct
+        }
+        let per_asset: Vec<serde_json::Value> = {
+            let mut sorted: Vec<_> = asset_stats.iter().collect();
+            sorted.sort_by_key(|(k, _)| k.clone());
+            sorted.iter().map(|(asset, (correct, total))| {
+                serde_json::json!({
+                    "asset": asset,
+                    "correct": correct,
+                    "total": total,
+                    "accuracy": if *total > 0 { *correct as f64 / *total as f64 * 100.0 } else { 0.0 },
+                })
+            }).collect()
+        };
+
+        // Confidence calibration bands
+        let bands = compute_confidence_bands(&resolved);
+
+        Ok::<_, StatusCode>(Json(serde_json::json!({
+            "predictions": records,
+            "stats": {
+                "total_predictions": records.len(),
+                "total_resolved": total_resolved,
+                "total_correct": correct_count,
+                "overall_accuracy": if total_resolved > 0 { correct_count as f64 / total_resolved as f64 * 100.0 } else { 0.0 },
+                "last_24h": stats_24h,
+                "last_7d": stats_7d,
+                "last_30d": stats_30d,
+            },
+            "per_asset": per_asset,
+            "confidence_bands": bands,
+        })))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(result)
+}
+
+fn compute_accuracy_stats(records: &[db::PredictionRecord], from: chrono::DateTime<Utc>, to: chrono::DateTime<Utc>) -> serde_json::Value {
+    let in_range: Vec<_> = records.iter().filter(|r| {
+        if let Ok(t) = chrono::DateTime::parse_from_rfc3339(&r.timestamp) {
+            let t_utc = t.with_timezone(&Utc);
+            t_utc >= from && t_utc <= to
+        } else { false }
+    }).collect();
+
+    let resolved: Vec<_> = in_range.iter().filter(|r| r.was_correct.is_some()).collect();
+    let correct = resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+    let total = resolved.len();
+
+    serde_json::json!({
+        "predictions": in_range.len(),
+        "resolved": total,
+        "correct": correct,
+        "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+    })
+}
+
+fn compute_confidence_bands(resolved: &[&db::PredictionRecord]) -> Vec<serde_json::Value> {
+    let bands = [(0.0, 10.0, "0-10%"), (10.0, 20.0, "10-20%"), (20.0, 30.0, "20-30%"), (30.0, 50.0, "30-50%"), (50.0, 100.0, "50%+")];
+    bands.iter().map(|(lo, hi, label)| {
+        let in_band: Vec<_> = resolved.iter().filter(|r| r.confidence >= *lo && r.confidence < *hi).collect();
+        let correct = in_band.iter().filter(|r| r.was_correct == Some(true)).count();
+        let total = in_band.len();
+        serde_json::json!({
+            "band": label,
+            "predictions": total,
+            "correct": correct,
+            "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+        })
+    }).collect()
 }
 
 async fn get_all_signals(
@@ -1113,19 +1225,28 @@ fn infer_with_saved_models(
         logistic_accuracy: log_acc,
         gbt_accuracy: gbt_acc,
         lstm_accuracy: 50.0,
+        gru_accuracy: 50.0,
+        rf_accuracy: 50.0,
         n_folds: 1,
         total_test_samples: 0,
         linear_recent: lin_acc,
         logistic_recent: log_acc,
         gbt_recent: gbt_acc,
         lstm_recent: 50.0,
+        gru_recent: 50.0,
+        rf_recent: 50.0,
         final_linear_prob: lin_prob,
         final_logistic_prob: log_prob,
         final_gbt_prob: gbt_prob,
         final_lstm_prob: 0.5,
+        final_gru_prob: 0.5,
+        final_rf_prob: 0.5,
         gbt_importance: Vec::new(),
         n_features,
         has_lstm: false,
+        has_gru: false,
+        has_rf: false,
+        stacking_weights: None,
     })
 }
 
@@ -1323,6 +1444,60 @@ fn extract_bb_position(samples: &[ml::Sample]) -> Option<f64> {
 // Startup Database Migrations
 // ════════════════════════════════════════
 
+/// Resolve pending predictions by comparing prediction price to current price
+fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched_signals::EnrichedSignal>) {
+    let database = match db::Database::new(db_path) {
+        Ok(d) => d,
+        Err(e) => { eprintln!("  [Predictions] DB error: {}", e); return; }
+    };
+
+    let pending = match database.get_pending_predictions() {
+        Ok(p) => p,
+        Err(e) => { eprintln!("  [Predictions] Error fetching pending: {}", e); return; }
+    };
+
+    if pending.is_empty() { return; }
+
+    let resolve_ts = Utc::now().to_rfc3339();
+    let mut resolved = 0;
+
+    for pred in &pending {
+        let pred_time = match chrono::DateTime::parse_from_rfc3339(&pred.timestamp) {
+            Ok(t) => t.with_timezone(&Utc),
+            Err(_) => continue,
+        };
+        let age_hours = (Utc::now() - pred_time).num_hours();
+        if age_hours < 1 { continue; }
+
+        // Find current price from signals
+        let current_price = if let Some(sig) = signals.get(&pred.asset) {
+            sig.price
+        } else { continue; };
+
+        let price_change = current_price - pred.price_at_prediction;
+        let actual_direction = if price_change.abs() < pred.price_at_prediction * 0.001 {
+            "FLAT"
+        } else if price_change > 0.0 {
+            "UP"
+        } else {
+            "DOWN"
+        };
+
+        let was_correct = match (pred.signal.as_str(), actual_direction) {
+            ("BUY", "UP") | ("SELL", "DOWN") => true,
+            ("BUY", "DOWN") | ("SELL", "UP") => false,
+            _ => true,
+        };
+
+        let _ = database.update_prediction_outcome(pred.id, actual_direction, was_correct, current_price, &resolve_ts);
+        resolved += 1;
+    }
+
+    if resolved > 0 {
+        println!("  [Predictions] Resolved {} of {} pending predictions", resolved, pending.len());
+    }
+}
+
 fn run_startup_migrations(db_path: &str) {
     let database = match db::Database::new(db_path) {
         Ok(d) => d,
@@ -1331,6 +1506,24 @@ fn run_startup_migrations(db_path: &str) {
             return;
         }
     };
+
+    // Ensure predictions table exists
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS predictions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT NOT NULL,
+            asset           TEXT NOT NULL,
+            signal          TEXT NOT NULL,
+            confidence      REAL NOT NULL,
+            price_at_prediction REAL NOT NULL,
+            actual_direction TEXT,
+            was_correct     INTEGER,
+            price_at_outcome REAL,
+            outcome_timestamp TEXT
+        )"
+    );
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_predictions_asset_time ON predictions(asset, timestamp)");
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_predictions_pending ON predictions(outcome_timestamp)");
 
     // FIX 1: Restore correct seed value (£133,993.00)
     match database.execute_raw(
