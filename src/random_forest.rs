@@ -41,7 +41,7 @@ struct ForestTree {
 /// Random Forest Classifier
 pub struct RandomForestClassifier {
     trees: Vec<ForestTree>,
-    n_features: usize,
+    _n_features: usize,
 }
 
 /// Simple deterministic pseudo-random number generator (xorshift64)
@@ -116,7 +116,7 @@ impl RandomForestClassifier {
             trees.push(ForestTree { tree, feature_indices });
         }
 
-        RandomForestClassifier { trees, n_features }
+        RandomForestClassifier { trees, _n_features: n_features }
     }
 
     /// Predict probability P(up) by averaging tree predictions

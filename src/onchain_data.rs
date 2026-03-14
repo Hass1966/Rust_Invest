@@ -67,6 +67,7 @@ pub async fn fetch_fear_greed(
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct FundingRateEntry {
     symbol: String,
     funding_rate: String,
@@ -161,6 +162,7 @@ pub async fn fetch_btc_onchain(
 // ════════════════════════════════════════
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 struct EtherscanResponse {
     status: String,
     result: serde_json::Value,

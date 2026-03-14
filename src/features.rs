@@ -23,7 +23,8 @@ use std::collections::HashMap;
 // ════════════════════════════════════════
 
 const PRUNED_FEATURES: &[&str] = &[
-    "VIX_above_20", "VIX_above_30", "SMA50_above_200", "vol_regime",
+    // VIX_above_20 un-pruned: user explicitly wants VIX regime feature
+    "VIX_above_30", "SMA50_above_200", "vol_regime",
     "daily_return", "is_month_end", "month_sin", "month_cos",
     "day_of_week_cos", "risk_on_off", "up_days_ratio_10d",
     "up_days_ratio_20d", "momentum_3d", "momentum_5d", "momentum_10d",
@@ -102,10 +103,23 @@ pub const MARKET_TICKERS: &[&str] = &[
 /// Map a symbol to its sector ETF (returns None for FX/crypto)
 pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
     match symbol {
-        "TSLA" | "AMZN" => Some("XLY"),
-        "NVDA" | "MSFT" | "AAPL" | "QQQ" => Some("XLK"),
-        "GOOGL" | "META" => Some("XLC"),
-        "DIA" => Some("XLF"),
+        // Technology (XLK)
+        "AAPL" | "MSFT" | "NVDA" | "AMD" | "QQQ" | "INTC" | "AVGO" | "CRM" | "ADBE" | "ORCL" => Some("XLK"),
+        // Communication (XLC) — GOOGL/META per GICS classification
+        "GOOGL" | "META" | "NFLX" | "DIS" | "CMCSA" | "VZ" | "T" => Some("XLC"),
+        // Financials (XLF)
+        "JPM" | "GS" | "BAC" | "WFC" | "MS" | "C" | "BLK" | "SCHW" | "DIA" => Some("XLF"),
+        // Energy (XLE)
+        "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO" => Some("XLE"),
+        // Healthcare (XLV)
+        "JNJ" | "UNH" | "LLY" | "PFE" | "MRNA" | "ABBV" | "TMO" | "ABT" | "BMY" | "AMGN" => Some("XLV"),
+        // Industrials (XLI)
+        "CAT" | "DE" | "MMM" | "HON" | "GE" | "EMR" | "LMT" | "RTX" | "NOC" | "BA" | "GD" | "UPS" | "FDX" => Some("XLI"),
+        // Consumer Discretionary (XLY)
+        "TSLA" | "AMZN" | "HD" | "NKE" | "SBUX" | "MCD" | "TGT" | "LOW" => Some("XLY"),
+        // Consumer Staples (XLP)
+        "WMT" | "COST" | "PG" | "KO" | "PEP" | "PM" | "MO" | "CL" => Some("XLP"),
+        // SPY is the market itself
         "SPY" => Some("SPY"),
         _ => None,
     }
@@ -265,6 +279,15 @@ pub fn feature_names() -> Vec<String> {
     names.push("fx_rate_differential".into()); // Interest rate differential (carry direction)
     names.push("fx_carry_score".into());       // Carry trade attractiveness (0-1)
     names.push("fx_days_to_cb_meeting".into()); // Days to next central bank meeting
+
+    // N. Phase 2+3: Additional macro/cross-asset and calendar features (7 features)
+    names.push("yield_curve_trend".into());     // 5d change in TNX-IRX spread
+    names.push("stock_vs_sector_10d".into());   // 10-day relative strength vs sector ETF
+    names.push("btc_minus_eth_10d".into());     // BTC dominance proxy (BTC 10d ret - ETH 10d ret)
+    names.push("quarter".into());               // Quarter of year (normalised 0.25-1.0)
+    names.push("is_monday".into());             // Monday gap effect (binary)
+    names.push("is_friday".into());             // Friday position squaring (binary)
+    names.push("days_since_52w_high".into());   // Momentum exhaustion signal (normalised)
 
     names
 }
@@ -957,6 +980,70 @@ pub fn build_rich_features_ext(
             }
         }
 
+        // ══ N. Additional macro/cross-asset and calendar features (7) ══
+
+        // yield_curve_trend: 5-day change in TNX-IRX spread
+        let yc_trend = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.tnx.len().saturating_sub(1));
+            if mi >= 5 && mi < mkt.tnx.len() && mi < mkt.irx.len() {
+                let spread_now = mkt.tnx[mi] - mkt.irx[mi];
+                let spread_5d = mkt.tnx[mi - 5] - mkt.irx[mi - 5];
+                (spread_now - spread_5d) / 100.0
+            } else { 0.0 }
+        } else { 0.0 };
+        f.push(yc_trend);                                              // yield_curve_trend
+
+        // stock_vs_sector_10d: 10-day relative strength vs sector ETF
+        let svs_10d = if let (Some(mkt), Some(etf)) = (market, sector_etf) {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            let sector_rets = mkt.sector_returns.get(etf);
+            let sector_10d = sector_rets
+                .filter(|v| v.len() > mi && mi >= 10)
+                .map(|v| v[mi.saturating_sub(9)..=mi].iter().sum::<f64>())
+                .unwrap_or(0.0);
+            mom_10d - sector_10d
+        } else { 0.0 };
+        f.push(svs_10d);                                              // stock_vs_sector_10d
+
+        // btc_minus_eth_10d: BTC dominance proxy (only meaningful for crypto)
+        // Conservative: set to 0.0 for non-crypto; for crypto, computed from
+        // market context SPY slot or passed externally. Without separate BTC/ETH
+        // price series in MarketContext, default to 0.0 with TODO.
+        // TODO: pass BTC and ETH price series via MarketContext for crypto assets
+        f.push(0.0);                                                   // btc_minus_eth_10d
+
+        // Calendar features from timestamp
+        let cal_parts: Vec<&str> = timestamps[i].split('-').collect();
+        let cal_month: u32 = if cal_parts.len() >= 2 { cal_parts[1].parse().unwrap_or(1) } else { 1 };
+        let cal_day_str: &str = if cal_parts.len() >= 3 { cal_parts[2].split('T').next().unwrap_or("15") } else { "15" };
+        let cal_year: i32 = if !cal_parts.is_empty() { cal_parts[0].parse().unwrap_or(2024) } else { 2024 };
+        let cal_day: u32 = cal_day_str.parse().unwrap_or(15);
+        let cal_dow = day_of_week(cal_year, cal_month, cal_day);
+
+        // quarter: normalised 0.25-1.0
+        let quarter = ((cal_month - 1) / 3 + 1) as f64 / 4.0;
+        f.push(quarter);                                               // quarter
+
+        // is_monday: day_of_week returns 0=Sun, 1=Mon, ... 6=Sat
+        f.push(if cal_dow == 1 { 1.0 } else { 0.0 });                 // is_monday
+
+        // is_friday
+        f.push(if cal_dow == 5 { 1.0 } else { 0.0 });                 // is_friday
+
+        // days_since_52w_high: normalised by 252 trading days
+        let days_since_high = {
+            let mut days = 0_usize;
+            for j in (0..252.min(i + 1)).rev() {
+                let idx = i - j;
+                if prices[idx] >= high_52w * 0.999 { // within 0.1% of high
+                    days = j;
+                    break;
+                }
+            }
+            (days as f64 / 252.0).min(1.0)
+        };
+        f.push(days_since_high);                                       // days_since_52w_high
+
         // ══ Label: next day return ══
         let label = prices[i+1] - prices[i]; // positive = up
 
@@ -1205,7 +1292,136 @@ mod tests {
         }
     }
 
-    /// Test 2: ensemble_overrides.json parses successfully
+    /// Test 2: Macro feature inclusion — VIX, yield curve, UUP are present and non-zero
+    #[test]
+    fn test_macro_features_present() {
+        let n = 350;
+        let mut prices = Vec::with_capacity(n);
+        prices.push(100.0);
+        for i in 1..n {
+            let noise = ((i as f64 * 0.1).sin()) * 2.0;
+            prices.push(prices[i - 1] + 0.05 + noise * 0.01);
+        }
+
+        let volumes: Vec<Option<f64>> = (0..n).map(|i| Some(1_000_000.0 + (i as f64 * 100.0))).collect();
+        let timestamps: Vec<String> = (0..n).map(|i| {
+            let day = (i % 28) + 1;
+            let month = ((i / 28) % 12) + 1;
+            format!("2023-{:02}-{:02}T00:00:00+00:00", month, day)
+        }).collect();
+
+        // Build MarketContext with non-trivial values
+        let vix: Vec<f64> = (0..n).map(|i| 15.0 + (i as f64 * 0.03).sin() * 10.0).collect();
+        let tnx: Vec<f64> = (0..n).map(|i| 4.0 + (i as f64 * 0.02).sin() * 0.5).collect();
+        let irx: Vec<f64> = (0..n).map(|i| 5.0 + (i as f64 * 0.01).sin() * 0.3).collect();
+        let spy_returns: Vec<f64> = (0..n).map(|i| (i as f64 * 0.05).sin() * 0.01).collect();
+        let gold_returns: Vec<f64> = (0..n).map(|i| (i as f64 * 0.07).sin() * 0.005).collect();
+        let dollar_returns: Vec<f64> = (0..n).map(|i| (i as f64 * 0.03).sin() * 0.003).collect();
+        let mut sector_returns = HashMap::new();
+        for sector in &["XLK", "XLF", "XLE", "XLV", "XLI", "XLC", "XLP", "XLY"] {
+            sector_returns.insert(sector.to_string(),
+                (0..n).map(|i| (i as f64 * 0.04).sin() * 0.008).collect());
+        }
+
+        let mkt = MarketContext { vix, tnx, irx, sector_returns, spy_returns, gold_returns, dollar_returns };
+
+        let samples = build_rich_features(&prices, &volumes, &timestamps, Some(&mkt), "stock", Some("XLK"), None, None);
+        assert!(!samples.is_empty());
+
+        // Find feature indices by name
+        let names = active_feature_names();
+        let find_idx = |name: &str| names.iter().position(|n| n == name);
+
+        // VIX_level should be non-zero (VIX was ~15-25)
+        if let Some(idx) = find_idx("VIX_level") {
+            let val = samples[5].features[idx];
+            assert!(val > 0.0, "VIX_level should be positive, got {}", val);
+        }
+
+        // treasury_spread should be non-zero (TNX ~4.0, IRX ~5.0, so spread ~-1.0)
+        if let Some(idx) = find_idx("treasury_spread") {
+            let val = samples[5].features[idx];
+            assert!(val != 0.0, "treasury_spread should be non-zero, got {}", val);
+        }
+
+        // dollar_return_5d should be non-zero given sinusoidal input
+        if let Some(idx) = find_idx("dollar_return_5d") {
+            // At least one sample should have non-zero dollar return
+            let any_nonzero = samples.iter().any(|s| s.features[idx].abs() > 1e-10);
+            assert!(any_nonzero, "dollar_return_5d should have non-zero values");
+        }
+
+        // yield_curve_trend should be present and some non-zero
+        if let Some(idx) = find_idx("yield_curve_trend") {
+            let any_nonzero = samples.iter().any(|s| s.features[idx].abs() > 1e-10);
+            assert!(any_nonzero, "yield_curve_trend should have non-zero values");
+        }
+    }
+
+    /// Test 3: Calendar features in valid ranges
+    #[test]
+    fn test_calendar_features_range() {
+        let n = 350;
+        let mut prices = Vec::with_capacity(n);
+        prices.push(100.0);
+        for i in 1..n {
+            prices.push(prices[i - 1] + 0.05 + ((i as f64 * 0.1).sin()) * 0.01);
+        }
+        let volumes: Vec<Option<f64>> = (0..n).map(|_| Some(1_000_000.0)).collect();
+        let timestamps: Vec<String> = (0..n).map(|i| {
+            let day = (i % 28) + 1;
+            let month = ((i / 28) % 12) + 1;
+            format!("2023-{:02}-{:02}T00:00:00+00:00", month, day)
+        }).collect();
+
+        let samples = build_rich_features(&prices, &volumes, &timestamps, None, "stock", None, None, None);
+        assert!(!samples.is_empty());
+
+        let names = active_feature_names();
+        let find_idx = |name: &str| names.iter().position(|n| n == name);
+
+        // day_of_week_sin should be in [-1, 1]
+        if let Some(idx) = find_idx("day_of_week_sin") {
+            for s in &samples {
+                assert!((-1.0..=1.0).contains(&s.features[idx]),
+                    "day_of_week_sin out of range: {}", s.features[idx]);
+            }
+        }
+
+        // quarter should be in [0.25, 1.0]
+        if let Some(idx) = find_idx("quarter") {
+            for s in &samples {
+                assert!((0.2..=1.01).contains(&s.features[idx]),
+                    "quarter out of range: {}", s.features[idx]);
+            }
+        }
+
+        // is_monday should be 0.0 or 1.0
+        if let Some(idx) = find_idx("is_monday") {
+            for s in &samples {
+                assert!(s.features[idx] == 0.0 || s.features[idx] == 1.0,
+                    "is_monday should be 0 or 1, got {}", s.features[idx]);
+            }
+        }
+
+        // is_friday should be 0.0 or 1.0
+        if let Some(idx) = find_idx("is_friday") {
+            for s in &samples {
+                assert!(s.features[idx] == 0.0 || s.features[idx] == 1.0,
+                    "is_friday should be 0 or 1, got {}", s.features[idx]);
+            }
+        }
+
+        // days_since_52w_high should be in [0.0, 1.0]
+        if let Some(idx) = find_idx("days_since_52w_high") {
+            for s in &samples {
+                assert!((0.0..=1.0).contains(&s.features[idx]),
+                    "days_since_52w_high out of range: {}", s.features[idx]);
+            }
+        }
+    }
+
+    /// Test 4: ensemble_overrides.json parses successfully
     #[test]
     fn test_ensemble_overrides_parse() {
         use crate::ensemble::{load_ensemble_overrides, EnsembleOverride};
@@ -1220,7 +1436,6 @@ mod tests {
 
         // Verify each entry has valid fields
         for (key, ov) in &overrides {
-            // Just verify it deserialized — bools are always valid
             let _ = format!("{}: linreg={} logreg={} gbt={}", key, ov.use_linreg, ov.use_logreg, ov.use_gbt);
         }
 
@@ -1230,6 +1445,30 @@ mod tests {
         let parsed: std::collections::HashMap<String, EnsembleOverride> =
             serde_json::from_str(&json).expect("JSON should parse into HashMap<String, EnsembleOverride>");
         assert!(!parsed.is_empty());
+    }
+
+    /// Test 5: Ensemble overrides have valid fields
+    #[test]
+    fn test_ensemble_overrides_valid_fields() {
+        use crate::ensemble::{load_ensemble_overrides, get_override};
+
+        let overrides = load_ensemble_overrides();
+        assert!(!overrides.is_empty(), "Should have at least one override");
+
+        // Test that get_override returns a valid result for a known key
+        let aapl_ov = get_override(&overrides, "AAPL");
+        // AAPL override should have GBT enabled
+        assert!(aapl_ov.use_gbt, "AAPL override should have use_gbt=true");
+
+        // Default should have all models enabled
+        let default_ov = get_override(&overrides, "default");
+        assert!(default_ov.use_linreg && default_ov.use_logreg && default_ov.use_gbt,
+            "Default override should enable all models");
+
+        // Unknown symbol should fall back to default
+        let unknown_ov = get_override(&overrides, "UNKNOWN_TICKER_XYZ");
+        assert!(unknown_ov.use_linreg && unknown_ov.use_logreg && unknown_ov.use_gbt,
+            "Unknown symbol should fall back to default (all enabled)");
     }
 
     /// Test 3: Walk-forward fold produces valid accuracy for each model

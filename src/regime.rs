@@ -399,7 +399,7 @@ pub struct RegimeEnsemble {
     specialists: [Option<RegimeSpecialist>; N_REGIMES],
     /// Rolling accuracy per specialist (for adaptive gating)
     recency_accuracy: [f64; N_REGIMES],
-    n_features: usize,
+    _n_features: usize,
 }
 
 impl RegimeEnsemble {
@@ -440,7 +440,7 @@ impl RegimeEnsemble {
             detector,
             specialists,
             recency_accuracy,
-            n_features,
+            _n_features: n_features,
         }
     }
 
