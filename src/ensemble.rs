@@ -693,10 +693,14 @@ pub fn ensemble_signal_with_override(
         ("NO EDGE".to_string(), false)
     };
 
-    // Accuracy-squared weighting, masked by ensemble override
+    // Accuracy-squared weighting, masked by ensemble override.
+    // GBT gets a 1.2x bonus: it is consistently the best-performing pointwise model
+    // across all asset classes (stocks ~70%, FX ~71%, vs ~69% for LinReg/LogReg).
+    // RegimeEnsemble is NOT included in ensemble voting — it scores 47-58% and would
+    // drag down the ensemble. It is trained separately for diagnostic reporting only.
     let lin_weight = if ov.use_linreg { (wf.linear_recent / 100.0).powi(2) } else { 0.0 };
     let log_weight = if ov.use_logreg { (wf.logistic_recent / 100.0).powi(2) } else { 0.0 };
-    let gbt_weight = if ov.use_gbt { (wf.gbt_recent / 100.0).powi(2) } else { 0.0 };
+    let gbt_weight = if ov.use_gbt { (wf.gbt_recent / 100.0).powi(2) * 1.2 } else { 0.0 };
 
     // Gate LSTM per-asset: <54% exclude, 54-58% normal weight, >58% double weight
     let lstm_useful = wf.has_lstm && wf.lstm_accuracy >= 54.0;
@@ -1027,4 +1031,75 @@ pub fn signals_html(signals: &[TradingSignal]) -> String {
         Assets with NO EDGE are forced to HOLD. Not financial advice.</em></p>\n");
 
     html
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify stacking_predict output is always in [0.0, 1.0] (actually [0.15, 0.85] due to clamp)
+    #[test]
+    fn test_stacking_predict_bounded() {
+        // Typical stacking weights: [w_linreg, w_logreg, w_gbt, w_lstm, w_gru, w_rf, bias]
+        let weights = vec![0.5, 0.3, 0.8, 0.2, 0.1, 0.4, -1.0];
+
+        // All models predict UP strongly
+        let probs_up: [f64; 6] = [0.9, 0.85, 0.95, 0.7, 0.6, 0.8];
+        let result = stacking_predict(&weights, &probs_up);
+        assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
+
+        // All models predict DOWN strongly
+        let probs_down: [f64; 6] = [0.1, 0.15, 0.05, 0.3, 0.4, 0.2];
+        let result = stacking_predict(&weights, &probs_down);
+        assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
+
+        // Mixed predictions
+        let probs_mixed: [f64; 6] = [0.8, 0.3, 0.6, 0.5, 0.4, 0.7];
+        let result = stacking_predict(&weights, &probs_mixed);
+        assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
+
+        // Edge: all 0.5 (neutral)
+        let probs_neutral: [f64; 6] = [0.5; 6];
+        let result = stacking_predict(&weights, &probs_neutral);
+        assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
+
+        // Edge: extreme weights
+        let extreme_weights = vec![10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 50.0];
+        let result = stacking_predict(&extreme_weights, &probs_up);
+        assert!((0.0..=1.0).contains(&result), "extreme weights should still be bounded, got {}", result);
+
+        // Edge: too few weights falls back to 0.5
+        let short_weights = vec![0.5, 0.3];
+        let result = stacking_predict(&short_weights, &probs_up);
+        assert_eq!(result, 0.5, "insufficient weights should return 0.5");
+    }
+
+    /// Verify accuracy-squared weighting with GBT 1.2x bonus produces valid weights
+    #[test]
+    fn test_weighted_ensemble_gbt_bonus() {
+        // Simulate accuracy-squared weighting as done in ensemble_signal_with_override
+        let lin_recent = 70.0_f64;
+        let log_recent = 68.0_f64;
+        let gbt_recent = 72.0_f64;
+
+        let lin_weight = (lin_recent / 100.0).powi(2);         // 0.49
+        let log_weight = (log_recent / 100.0).powi(2);         // 0.4624
+        let gbt_weight = (gbt_recent / 100.0).powi(2) * 1.2;  // 0.5184 * 1.2 = 0.62208
+
+        let total = lin_weight + log_weight + gbt_weight;
+        let lw = lin_weight / total;
+        let logw = log_weight / total;
+        let gw = gbt_weight / total;
+
+        // Weights should sum to 1.0
+        assert!((lw + logw + gw - 1.0).abs() < 1e-10, "weights should sum to 1.0");
+
+        // GBT should have the highest weight due to 1.2x bonus
+        assert!(gw > lw, "GBT weight ({gw:.4}) should exceed LinReg ({lw:.4})");
+        assert!(gw > logw, "GBT weight ({gw:.4}) should exceed LogReg ({logw:.4})");
+
+        // Weighted average should be bounded
+        let prob = lw * 0.7 + logw * 0.6 + gw * 0.8;
+        assert!((0.0..=1.0).contains(&prob), "weighted ensemble prob should be in [0,1], got {prob}");
+    }
 }

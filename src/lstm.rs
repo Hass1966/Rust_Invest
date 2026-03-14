@@ -34,11 +34,21 @@ fn count_bad_values(data: &[f64]) -> usize {
 }
 
 /// Select device for LSTM operations.
-/// NOTE: candle 0.9 Metal backend is missing sigmoid/tanh kernels which LSTM
-/// gates require, so we force CPU. The Metal feature is still useful for other
-/// modules (e.g. matrix multiplications in GBT/TFT) but not LSTM.
+/// NOTE: candle 0.9.x Metal backend is missing sigmoid/tanh kernels which LSTM
+/// gates require, so we force CPU. Checked candle-core 0.9.2 (latest as of
+/// 2026-03-14) — still not fixed. See https://github.com/huggingface/candle/issues/2832
+///
+/// TODO(metal): Revisit when candle releases Metal sigmoid/tanh kernel support.
+///   When fixed, replace body with:
+///     if cfg!(feature = "metal") {
+///         match Device::new_metal(0) {
+///             Ok(d)  => { println!("    [LSTM] Using Metal GPU"); return d; }
+///             Err(e) => { println!("    [LSTM] Metal unavailable ({e}), falling back to CPU"); }
+///         }
+///     }
+///     Device::Cpu
 fn select_device() -> Device {
-    println!("    [LSTM] Using CPU (Metal lacks sigmoid/tanh kernels for LSTM gates)");
+    println!("    [LSTM] Using CPU (candle 0.9.x Metal lacks sigmoid/tanh kernels for LSTM gates)");
     Device::Cpu
 }
 

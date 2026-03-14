@@ -24,7 +24,9 @@ fn sanitise_vec(data: &[f64]) -> Vec<f32> {
     data.iter().map(|&x| sanitise_f32(x as f32)).collect()
 }
 
-/// Select device — CPU for RNN (same reasoning as LSTM)
+/// Select device — CPU for GRU (same Metal sigmoid/tanh limitation as LSTM).
+/// TODO(metal): See lstm.rs select_device() — enable Metal when candle adds
+///   sigmoid/tanh kernel support. Track: https://github.com/huggingface/candle/issues/2832
 fn select_device() -> Device {
     Device::Cpu
 }
