@@ -239,7 +239,7 @@ impl TFTModel {
             for batch_start in (0..train_seqs.len()).step_by(self.config.batch_size) {
                 let batch_end = (batch_start + self.config.batch_size).min(train_seqs.len());
                 let batch = &train_seqs[batch_start..batch_end];
-                let bs = batch.len();
+                let _bs = batch.len();
 
                 let (input, labels) = build_tensors(batch, seq_len, self.config.n_features)?;
                 let logits = self.forward(&input)?;

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let _client = reqwest::Client::new();
     let database = db::Database::new("rust_invest.db")?;
 
     println!("╔══════════════════════════════════════════════════════════════════╗");

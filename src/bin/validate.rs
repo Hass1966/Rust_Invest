@@ -466,7 +466,7 @@ fn print_results(
     starting_capital: f64,
     total_correct: usize,
     total_signals: usize,
-    cfg: &Config,
+    _cfg: &Config,
 ) {
     let final_value = days.last().map(|d| d.portfolio_value).unwrap_or(starting_capital);
     let total_return = (final_value - starting_capital) / starting_capital * 100.0;

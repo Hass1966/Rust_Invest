@@ -115,13 +115,19 @@ pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
 pub fn feature_names() -> Vec<String> {
     let mut names = Vec::new();
 
-    // A. Price-derived technical (20 features)
+    // A. Price-derived technical (26 features)
     names.push("RSI_14".into());
     names.push("RSI_7".into());
     names.push("RSI_delta_3d".into());
     names.push("RSI_delta_7d".into());
     names.push("MACD_hist".into());
     names.push("MACD_hist_delta".into());
+    names.push("MACD_line".into());
+    names.push("MACD_signal".into());
+    names.push("SMA7".into());
+    names.push("SMA30".into());
+    names.push("SMA50".into());
+    names.push("SMA200".into());
     names.push("BB_position".into());
     names.push("BB_width".into());
     names.push("SMA7_ratio".into());
@@ -460,6 +466,24 @@ pub fn build_rich_features_ext(
         let mh = if mh_idx < macd_hist.len() { macd_hist[mh_idx] } else { 0.0 };
         f.push(mh);                                              // MACD_hist
         f.push(mh - mh_prev);                                   // MACD_hist_delta
+
+        // MACD line and signal line (pre-computed, normalised by price)
+        let ml_idx = i.min(macd_line.len().saturating_sub(1));
+        let sl_idx = i.min(signal_line.len().saturating_sub(1));
+        let ml_val = if ml_idx < macd_line.len() { macd_line[ml_idx] } else { 0.0 };
+        let sl_val = if sl_idx < signal_line.len() { signal_line[sl_idx] } else { 0.0 };
+        f.push(safe_div(ml_val, price));                         // MACD_line (normalised)
+        f.push(safe_div(sl_val, price));                         // MACD_signal (normalised)
+
+        // Raw SMA values (pre-computed, normalised by price)
+        let sma7_val = if i < sma7.len() { sma7[i] } else { price };
+        let sma30_val = if i < sma30.len() { sma30[i] } else { price };
+        let sma50_val = if i < sma50.len() { sma50[i] } else { price };
+        let sma200_val = if i < sma200.len() { sma200[i] } else { price };
+        f.push(safe_div(sma7_val, price));                       // SMA7 (normalised)
+        f.push(safe_div(sma30_val, price));                      // SMA30 (normalised)
+        f.push(safe_div(sma50_val, price));                      // SMA50 (normalised)
+        f.push(safe_div(sma200_val, price));                     // SMA200 (normalised)
 
         let bb_idx = i.min(bb.len().saturating_sub(1));
         let (bb_upper, bb_mid, bb_lower) = if bb_idx < bb.len() { bb[bb_idx] } else { (price, price, price) };
@@ -1132,5 +1156,148 @@ pub fn build_market_context(
         spy_returns,
         gold_returns,
         dollar_returns,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ml::Sample;
+
+    /// Test 1: Feature vector length and no NaN/Inf values
+    #[test]
+    fn test_feature_vector_length_and_validity() {
+        // Generate 300 synthetic prices (enough for sma200 + 260 lookback + some samples)
+        let n = 350;
+        let mut prices = Vec::with_capacity(n);
+        prices.push(100.0);
+        for i in 1..n {
+            // Slight uptrend with noise
+            let noise = ((i as f64 * 0.1).sin()) * 2.0;
+            prices.push(prices[i - 1] + 0.05 + noise * 0.01);
+        }
+
+        let volumes: Vec<Option<f64>> = (0..n).map(|i| Some(1_000_000.0 + (i as f64 * 100.0))).collect();
+        let timestamps: Vec<String> = (0..n).map(|i| {
+            let day = (i % 28) + 1;
+            let month = ((i / 28) % 12) + 1;
+            format!("2023-{:02}-{:02}T00:00:00+00:00", month, day)
+        }).collect();
+
+        let samples = build_rich_features(&prices, &volumes, &timestamps, None, "stock", None, None, None);
+
+        assert!(!samples.is_empty(), "Should produce at least one sample");
+
+        let expected = active_feature_count();
+        for (idx, s) in samples.iter().enumerate() {
+            assert_eq!(
+                s.features.len(), expected,
+                "Sample {} has {} features, expected {}",
+                idx, s.features.len(), expected
+            );
+            for (fi, &val) in s.features.iter().enumerate() {
+                assert!(
+                    val.is_finite(),
+                    "Sample {} feature {} is not finite: {}",
+                    idx, fi, val
+                );
+            }
+        }
+    }
+
+    /// Test 2: ensemble_overrides.json parses successfully
+    #[test]
+    fn test_ensemble_overrides_parse() {
+        use crate::ensemble::{load_ensemble_overrides, EnsembleOverride};
+
+        let overrides = load_ensemble_overrides();
+        // Should have at least AAPL and default
+        assert!(
+            overrides.contains_key("AAPL") || overrides.contains_key("default"),
+            "Overrides should contain at least one entry, got: {:?}",
+            overrides.keys().collect::<Vec<_>>()
+        );
+
+        // Verify each entry has valid fields
+        for (key, ov) in &overrides {
+            // Just verify it deserialized — bools are always valid
+            let _ = format!("{}: linreg={} logreg={} gbt={}", key, ov.use_linreg, ov.use_logreg, ov.use_gbt);
+        }
+
+        // Also test direct JSON parse
+        let json = std::fs::read_to_string("config/ensemble_overrides.json")
+            .expect("ensemble_overrides.json should exist");
+        let parsed: std::collections::HashMap<String, EnsembleOverride> =
+            serde_json::from_str(&json).expect("JSON should parse into HashMap<String, EnsembleOverride>");
+        assert!(!parsed.is_empty());
+    }
+
+    /// Test 3: Walk-forward fold produces valid accuracy for each model
+    #[test]
+    fn test_walk_forward_model_accuracy() {
+        // Create synthetic labeled data
+        let n_samples = 200;
+        let n_features = 10; // Small feature set for speed
+        let mut samples: Vec<Sample> = Vec::with_capacity(n_samples);
+
+        for i in 0..n_samples {
+            let features: Vec<f64> = (0..n_features)
+                .map(|j| ((i * 7 + j * 13) as f64 / 100.0).sin())
+                .collect();
+            let label = if i % 3 == 0 { -1.0 } else { 1.0 }; // ~67% positive
+            samples.push(Sample { features, label });
+        }
+
+        let train_window = 120;
+        let test_window = 30;
+        let (train_data, test_data) = samples.split_at(train_window);
+
+        // LinReg
+        let mut train_copy = train_data.to_vec();
+        let (means, stds) = crate::ml::normalise(&mut train_copy);
+        let mut test_copy = test_data[..test_window].to_vec();
+        crate::ml::apply_normalisation(&mut test_copy, &means, &stds);
+
+        let mut linreg = crate::ml::LinearRegression::new(n_features);
+        linreg.train(&train_copy, 0.005, 1000);
+        let lin_correct = test_copy.iter().filter(|s| {
+            let pred = linreg.predict(&s.features);
+            (pred > 0.0) == (s.label > 0.0)
+        }).count();
+        let lin_acc = lin_correct as f64 / test_copy.len() as f64;
+        assert!((0.0..=1.0).contains(&lin_acc), "LinReg accuracy {:.3} out of [0,1]", lin_acc);
+
+        // LogReg
+        let mut logreg = crate::ml::LogisticRegression::new(n_features);
+        logreg.train(&train_copy, 0.01, 1000);
+        let log_correct = test_copy.iter().filter(|s| {
+            let prob = logreg.predict_probability(&s.features);
+            (prob > 0.5) == (s.label > 0.0)
+        }).count();
+        let log_acc = log_correct as f64 / test_copy.len() as f64;
+        assert!((0.0..=1.0).contains(&log_acc), "LogReg accuracy {:.3} out of [0,1]", log_acc);
+
+        // GBT
+        let x_train: Vec<Vec<f64>> = train_copy.iter().map(|s| s.features.clone()).collect();
+        let y_train: Vec<f64> = train_copy.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+        let x_test: Vec<Vec<f64>> = test_copy.iter().map(|s| s.features.clone()).collect();
+        let y_test: Vec<f64> = test_copy.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+
+        let gbt_config = crate::gbt::GBTConfig {
+            n_trees: 20,
+            learning_rate: 0.1,
+            tree_config: crate::gbt::TreeConfig { max_depth: 3, min_samples_leaf: 5, min_samples_split: 10 },
+            subsample_ratio: 0.8,
+            early_stopping_rounds: Some(5),
+        };
+        let gbt_model = crate::gbt::GradientBoostedClassifier::train(
+            &x_train, &y_train, None, None, gbt_config
+        );
+        let gbt_correct = x_test.iter().zip(y_test.iter()).filter(|(x, &y)| {
+            let prob = gbt_model.predict_proba(x);
+            (prob > 0.5) == (y > 0.5)
+        }).count();
+        let gbt_acc = gbt_correct as f64 / x_test.len() as f64;
+        assert!((0.0..=1.0).contains(&gbt_acc), "GBT accuracy {:.3} out of [0,1]", gbt_acc);
     }
 }

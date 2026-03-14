@@ -692,7 +692,7 @@ pub fn run_extended_pipeline(
         let (t, _) = temp.split_at_mut(split);
         ml::normalise(t)
     };
-    let (means, stds) = (train_slice.clone(), train_slice.clone());
+    let (_means, _stds) = (train_slice.clone(), train_slice.clone());
 
     // Rebuild cleanly so borrow checker is happy
     let mut temp_means = build_extended_features(prices, volumes);

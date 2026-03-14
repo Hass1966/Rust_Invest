@@ -425,7 +425,7 @@ pub fn run_pipeline(
     let split = (samples.len() as f64 * train_ratio) as usize;
 
     // Normalise on training data, apply same transform to test
-    let (mut train, mut test) = {
+    let (_train, _test) = {
         let (t, te) = samples.split_at_mut(split);
         (t.to_vec(), te.to_vec())
     };

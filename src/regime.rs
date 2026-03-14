@@ -329,7 +329,7 @@ impl RegimeSpecialist {
         }
 
         let mut train_data = regime_samples.to_vec();
-        let (means, stds) = ml::normalise(&mut train_data);
+        let (_means, _stds) = ml::normalise(&mut train_data);
 
         let mut linreg = ml::LinearRegression::new(n_features);
         linreg.train(&train_data, 0.005, 2000);

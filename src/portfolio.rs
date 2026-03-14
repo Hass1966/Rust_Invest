@@ -329,7 +329,7 @@ pub fn portfolio_html(result: &PortfolioResult) -> String {
 
     // Allocation donut data (for CSS donut chart)
     let mut donut_segments = String::new();
-    let mut offset = 0.0_f64;
+    let mut _offset = 0.0_f64;
     let colors = ["#00d4aa","#4fc3f7","#ffd740","#ff8a65","#ce93d8",
                   "#80cbc4","#ef5350","#66bb6a","#42a5f5","#ffca28"];
 
@@ -348,7 +348,7 @@ pub fn portfolio_html(result: &PortfolioResult) -> String {
             if a.contribution >= 0.0 { "#00e676" } else { "#ff5252" },
             a.contribution,
         ));
-        offset += pct;
+        _offset += pct;
     }
 
     // Equity curve SVG

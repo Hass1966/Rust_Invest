@@ -17,7 +17,7 @@
 ///   Win rate > 55% with positive expectancy = edge confirmed
 
 use crate::ml::{self, Sample};
-use crate::gbt::{self, GBTConfig, TreeConfig, GradientBoostedClassifier};
+use crate::gbt::{GBTConfig, TreeConfig, GradientBoostedClassifier};
 
 // ════════════════════════════════════════
 // Configuration
@@ -171,7 +171,7 @@ pub fn run_backtest(
 
     let mut equity = config.initial_capital;
     let mut position_open = false;
-    let mut entry_price = 0.0;
+    let mut _entry_price = 0.0;
     let mut equity_curve = Vec::new();
     let mut daily_returns: Vec<f64> = Vec::new();
     let mut trades = Vec::new();
@@ -278,7 +278,7 @@ pub fn run_backtest(
                     // Enter long position
                     let entry_cost = equity * config.transaction_cost;
                     equity -= entry_cost;
-                    entry_price = current_price;
+                    _entry_price = current_price;
                     position_open = true;
                     days_in_market += 1;
                     let pnl = actual_return * config.position_size;
@@ -382,7 +382,7 @@ pub fn run_backtest(
     let max_drawdown = compute_max_drawdown(&equity_curve);
 
     // Win/loss stats (on actual trade entries, not holds)
-    let entry_trades: Vec<&Trade> = trades.iter()
+    let _entry_trades: Vec<&Trade> = trades.iter()
         .filter(|t| t.action == TradeAction::Buy)
         .collect();
 

@@ -1,5 +1,4 @@
 {
-  "_comment": "v9: Reverted degraded assets. Only AAPL confirmed improved with GBT-only.",
   "AAPL": {
     "use_linreg": false,
     "use_logreg": false,

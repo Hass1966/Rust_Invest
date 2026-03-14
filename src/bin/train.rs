@@ -195,13 +195,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let step = test_window;
 
         // Model 1-4: Core ensemble (LinReg, LogReg, GBT, LSTM)
-        let mut lstm_acc = 0.0;
-        let mut regime_acc = 0.0;
-
         if let Some(wf) = ensemble::walk_forward_samples(stock.symbol, &samples, train_window, test_window, step) {
-            lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
+            let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
 
             // Model 5: Regime-Aware Ensemble
+            let mut regime_acc = 0.0;
             if let Some(rw) = regime::walk_forward_regime(stock.symbol, &samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
@@ -270,12 +268,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let test_window = 30.min(samples.len() / 10);
         let step = test_window;
 
-        let mut lstm_acc = 0.0;
-        let mut regime_acc = 0.0;
-
         if let Some(wf) = ensemble::walk_forward_samples(fx.symbol, &samples, train_window, test_window, step) {
-            lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
+            let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
 
+            let mut regime_acc = 0.0;
             if let Some(rw) = regime::walk_forward_regime(fx.symbol, &samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
@@ -380,12 +376,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let test_window = 20.min(enriched_samples.len() / 10);
         let step = test_window;
 
-        let mut lstm_acc = 0.0;
-        let mut regime_acc = 0.0;
-
         if let Some(wf) = ensemble::walk_forward_samples(coin_id, &enriched_samples, train_window, test_window, step) {
-            lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
+            let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
 
+            let mut regime_acc = 0.0;
             if let Some(rw) = regime::walk_forward_regime(coin_id, &enriched_samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
@@ -627,7 +621,7 @@ fn compute_ensemble_accuracy(wf: &ensemble::WalkForwardResult, ov: &ensemble::En
 /// Generate comparison HTML report
 fn generate_comparison_report(
     new_results: &HashMap<String, AssetAccuracy>,
-    overrides: &HashMap<String, ensemble::EnsembleOverride>,
+    _overrides: &HashMap<String, ensemble::EnsembleOverride>,
 ) {
     // Load baseline
     let baseline: HashMap<String, AssetAccuracy> = match std::fs::read_to_string("reports/baseline.json") {
@@ -660,7 +654,7 @@ fn generate_comparison_report(
     let mut total_after = 0.0_f64;
     let mut improved = 0_usize;
     let mut degraded = 0_usize;
-    let mut unchanged = 0_usize;
+    let mut _unchanged = 0_usize;
     let mut count = 0_usize;
 
     // All assets that appear in both
@@ -678,7 +672,7 @@ fn generate_comparison_report(
         let diff = after - before;
         if diff > 0.5 { improved += 1; }
         else if diff < -0.5 { degraded += 1; }
-        else { unchanged += 1; }
+        else { _unchanged += 1; }
     }
 
     let avg_before = if count > 0 { total_before / count as f64 } else { 0.0 };

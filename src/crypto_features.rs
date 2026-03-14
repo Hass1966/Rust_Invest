@@ -129,10 +129,10 @@ pub fn fetch_btc_dominance() -> Result<(f64, f64, f64), Box<dyn std::error::Erro
         .and_then(|m| m.get("btc"))
         .and_then(|v| v.as_f64())
         .unwrap_or(50.0);
-    let mcap_change_24h: f64 = data.get("market_cap_change_percentage_24h_usd")
+    let _mcap_change_24h: f64 = data.get("market_cap_change_percentage_24h_usd")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let total_volume: f64 = data.get("total_volume")
+    let _total_volume: f64 = data.get("total_volume")
         .and_then(|v| v.as_object())
         .and_then(|m| m.get("usd"))
         .and_then(|v| v.as_f64())

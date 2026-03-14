@@ -18,8 +18,8 @@
 /// change any signal logic. Think of it as an X-ray of your models.
 
 use crate::ml::{self, Sample};
-use crate::gbt::{self, GBTConfig, TreeConfig, GradientBoostedClassifier};
-use crate::lstm::{self, LSTMModelConfig, LSTMModel, build_sequences};
+use crate::gbt::{GBTConfig, TreeConfig, GradientBoostedClassifier};
+use crate::lstm::{LSTMModelConfig, LSTMModel, build_sequences};
 use crate::features;
 
 // ════════════════════════════════════════
