@@ -31,7 +31,8 @@ export default function Predictions() {
         <p className="text-lg mb-2">No predictions yet</p>
         <p className="text-sm">
           Run <code className="bg-gray-800 px-2 py-1 rounded text-cyan-400">cargo run --release --bin signal</code> to
-          generate predictions.
+          generate predictions using saved models (inference only, no retraining).
+          Models must be trained first with <code className="bg-gray-800 px-2 py-1 rounded text-cyan-400">cargo run --release --bin train</code>.
         </p>
       </div>
     )

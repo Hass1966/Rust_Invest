@@ -189,6 +189,38 @@ impl Database {
                 value REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS signal_history (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                asset           TEXT NOT NULL,
+                asset_class     TEXT NOT NULL,
+                signal_type     TEXT NOT NULL,
+                price_at_signal REAL NOT NULL,
+                confidence      REAL NOT NULL,
+                linreg_prob     REAL,
+                logreg_prob     REAL,
+                gbt_prob        REAL,
+                outcome_price   REAL,
+                pct_change      REAL,
+                was_correct     INTEGER,
+                resolution_ts   TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_signal_history_asset
+                ON signal_history(asset, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_signal_history_pending
+                ON signal_history(resolution_ts);
+            CREATE INDEX IF NOT EXISTS idx_signal_history_ts
+                ON signal_history(timestamp);
+
+            CREATE TABLE IF NOT EXISTS user_holdings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol      TEXT NOT NULL,
+                quantity    REAL NOT NULL,
+                start_date  TEXT NOT NULL,
+                asset_class TEXT NOT NULL,
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS predictions (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp       TEXT NOT NULL,
@@ -820,6 +852,44 @@ impl Database {
         Ok(count > 0)
     }
 
+    // ── Live price upserts (INSERT OR REPLACE for latest price) ──
+
+    pub fn upsert_stock_price(&self, symbol: &str, price: f64, volume: Option<f64>, timestamp: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO stock_history (symbol, price, volume, timestamp)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![symbol, price, volume, timestamp],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_fx_price(&self, symbol: &str, price: f64, volume: Option<f64>, timestamp: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO fx_history (symbol, price, volume, timestamp)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![symbol, price, volume, timestamp],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_crypto_price(&self, coin_id: &str, price: f64, volume: Option<f64>, timestamp: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO crypto_history (coin_id, price_usd, volume, timestamp)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![coin_id, price, volume, timestamp],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_market_price(&self, symbol: &str, price: f64, timestamp: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO market_history (symbol, price, volume, timestamp)
+             VALUES (?1, ?2, NULL, ?3)",
+            params![symbol, price, timestamp],
+        )?;
+        Ok(())
+    }
+
     // ── Earnings dates ──
 
     pub fn insert_earnings_date(&self, symbol: &str, earnings_date: &str) -> Result<()> {
@@ -863,6 +933,257 @@ impl Database {
     /// Execute a raw SQL statement and return the number of rows affected
     pub fn execute_raw(&self, sql: &str) -> Result<usize> {
         Ok(self.conn.execute(sql, [])?)
+    }
+
+    // ── User holdings (personal portfolio tracker) ──
+
+    pub fn insert_user_holding(&self, symbol: &str, quantity: f64, start_date: &str, asset_class: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO user_holdings (symbol, quantity, start_date, asset_class)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![symbol, quantity, start_date, asset_class],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_user_holdings(&self) -> Result<Vec<UserHolding>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, symbol, quantity, start_date, asset_class, created_at
+             FROM user_holdings ORDER BY created_at ASC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(UserHolding {
+                id: row.get(0)?,
+                symbol: row.get(1)?,
+                quantity: row.get(2)?,
+                start_date: row.get(3)?,
+                asset_class: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn update_user_holding(&self, id: i64, quantity: f64, start_date: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE user_holdings SET quantity = ?1, start_date = ?2 WHERE id = ?3",
+            params![quantity, start_date, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_user_holding(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM user_holdings WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Get the price at or before a given date from stock_history
+    pub fn get_stock_price_at_date(&self, symbol: &str, date: &str) -> Result<Option<(String, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, price FROM stock_history
+             WHERE symbol = ?1 AND timestamp <= ?2
+             ORDER BY timestamp DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![symbol, date], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// Get the price at or before a given date from fx_history
+    pub fn get_fx_price_at_date(&self, symbol: &str, date: &str) -> Result<Option<(String, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, price FROM fx_history
+             WHERE symbol = ?1 AND timestamp <= ?2
+             ORDER BY timestamp DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![symbol, date], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// Get the price at or before a given date from crypto_history
+    pub fn get_crypto_price_at_date(&self, coin_id: &str, date: &str) -> Result<Option<(String, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, price_usd FROM crypto_history
+             WHERE coin_id = ?1 AND timestamp <= ?2
+             ORDER BY timestamp DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![coin_id, date], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// Get the latest price for any asset class
+    pub fn get_latest_stock_price(&self, symbol: &str) -> Result<Option<f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT price FROM stock_history WHERE symbol = ?1 ORDER BY timestamp DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![symbol], |row| row.get::<_, f64>(0))?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn get_latest_fx_price(&self, symbol: &str) -> Result<Option<f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT price FROM fx_history WHERE symbol = ?1 ORDER BY timestamp DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![symbol], |row| row.get::<_, f64>(0))?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn get_latest_crypto_price(&self, coin_id: &str) -> Result<Option<f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT price_usd FROM crypto_history WHERE coin_id = ?1 ORDER BY timestamp DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![coin_id], |row| row.get::<_, f64>(0))?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// Get signal history for an asset from a specific date onwards
+    pub fn get_signal_history_for_asset_from(&self, asset: &str, from_date: &str) -> Result<Vec<SignalHistoryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, asset, asset_class, signal_type, price_at_signal,
+                    confidence, linreg_prob, logreg_prob, gbt_prob,
+                    outcome_price, pct_change, was_correct, resolution_ts
+             FROM signal_history
+             WHERE asset = ?1 AND timestamp >= ?2
+             ORDER BY timestamp ASC"
+        )?;
+        let rows = stmt.query_map(params![asset, from_date], |row| {
+            Ok(SignalHistoryRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                asset: row.get(2)?,
+                asset_class: row.get(3)?,
+                signal_type: row.get(4)?,
+                price_at_signal: row.get(5)?,
+                confidence: row.get(6)?,
+                linreg_prob: row.get(7)?,
+                logreg_prob: row.get(8)?,
+                gbt_prob: row.get(9)?,
+                outcome_price: row.get(10)?,
+                pct_change: row.get(11)?,
+                was_correct: row.get::<_, Option<i32>>(12)?.map(|v| v != 0),
+                resolution_ts: row.get(13)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    /// Get the earliest signal_history timestamp for a given asset
+    pub fn get_signal_tracking_start(&self, asset: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT MIN(timestamp) FROM signal_history WHERE asset = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![asset], |row| row.get::<_, Option<String>>(0))?;
+        Ok(rows.next().and_then(|r| r.ok()).flatten())
+    }
+
+    // ── Signal history tracking (every signal, every cycle) ──
+
+    pub fn insert_signal_history(
+        &self,
+        timestamp: &str,
+        asset: &str,
+        asset_class: &str,
+        signal_type: &str,
+        price_at_signal: f64,
+        confidence: f64,
+        linreg_prob: f64,
+        logreg_prob: f64,
+        gbt_prob: f64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO signal_history
+                (timestamp, asset, asset_class, signal_type, price_at_signal,
+                 confidence, linreg_prob, logreg_prob, gbt_prob)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![timestamp, asset, asset_class, signal_type, price_at_signal,
+                    confidence, linreg_prob, logreg_prob, gbt_prob],
+        )?;
+        Ok(())
+    }
+
+    /// Get the most recent unresolved signal for a given asset
+    pub fn get_last_unresolved_signal(&self, asset: &str) -> Result<Option<SignalHistoryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, asset, asset_class, signal_type, price_at_signal,
+                    confidence, linreg_prob, logreg_prob, gbt_prob,
+                    outcome_price, pct_change, was_correct, resolution_ts
+             FROM signal_history
+             WHERE asset = ?1 AND resolution_ts IS NULL
+             ORDER BY timestamp DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![asset], |row| {
+            Ok(SignalHistoryRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                asset: row.get(2)?,
+                asset_class: row.get(3)?,
+                signal_type: row.get(4)?,
+                price_at_signal: row.get(5)?,
+                confidence: row.get(6)?,
+                linreg_prob: row.get(7)?,
+                logreg_prob: row.get(8)?,
+                gbt_prob: row.get(9)?,
+                outcome_price: row.get(10)?,
+                pct_change: row.get(11)?,
+                was_correct: row.get::<_, Option<i32>>(12)?.map(|v| v != 0),
+                resolution_ts: row.get(13)?,
+            })
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// Resolve a signal_history entry with the outcome
+    pub fn resolve_signal_history(
+        &self,
+        id: i64,
+        outcome_price: f64,
+        pct_change: f64,
+        was_correct: bool,
+        resolution_ts: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE signal_history
+             SET outcome_price = ?1, pct_change = ?2, was_correct = ?3, resolution_ts = ?4
+             WHERE id = ?5",
+            params![outcome_price, pct_change, was_correct as i32, resolution_ts, id],
+        )?;
+        Ok(())
+    }
+
+    /// Get signal history for the truth page with optional limit
+    pub fn get_signal_history_all(&self, limit: usize) -> Result<Vec<SignalHistoryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, asset, asset_class, signal_type, price_at_signal,
+                    confidence, linreg_prob, logreg_prob, gbt_prob,
+                    outcome_price, pct_change, was_correct, resolution_ts
+             FROM signal_history
+             ORDER BY timestamp DESC
+             LIMIT ?1"
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(SignalHistoryRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                asset: row.get(2)?,
+                asset_class: row.get(3)?,
+                signal_type: row.get(4)?,
+                price_at_signal: row.get(5)?,
+                confidence: row.get(6)?,
+                linreg_prob: row.get(7)?,
+                logreg_prob: row.get(8)?,
+                gbt_prob: row.get(9)?,
+                outcome_price: row.get(10)?,
+                pct_change: row.get(11)?,
+                was_correct: row.get::<_, Option<i32>>(12)?.map(|v| v != 0),
+                resolution_ts: row.get(13)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
     }
 
     // ── Predictions tracking ──
@@ -1021,4 +1342,32 @@ pub struct PredictionRecord {
     pub was_correct: Option<bool>,
     pub price_at_outcome: Option<f64>,
     pub outcome_timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserHolding {
+    pub id: i64,
+    pub symbol: String,
+    pub quantity: f64,
+    pub start_date: String,
+    pub asset_class: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SignalHistoryRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub asset: String,
+    pub asset_class: String,
+    pub signal_type: String,
+    pub price_at_signal: f64,
+    pub confidence: f64,
+    pub linreg_prob: Option<f64>,
+    pub logreg_prob: Option<f64>,
+    pub gbt_prob: Option<f64>,
+    pub outcome_price: Option<f64>,
+    pub pct_change: Option<f64>,
+    pub was_correct: Option<bool>,
+    pub resolution_ts: Option<String>,
 }

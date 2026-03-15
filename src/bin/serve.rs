@@ -11,7 +11,7 @@
 use rust_invest::*;
 use axum::{
     Router,
-    routing::{get, post, patch},
+    routing::{get, post, patch, put, delete},
     extract::{Path, Query, State},
     Json,
     http::StatusCode,
@@ -103,6 +103,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
 
+        // Skip the first tick (fires immediately) — startup refresh already ran above
+        interval.tick().await;
+
         loop {
             interval.tick().await;
             let now = Utc::now();
@@ -176,6 +179,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/admin/assets", post(add_asset))
         .route("/api/v1/admin/assets/{symbol}", patch(toggle_asset))
         .route("/api/v1/predictions/history", get(get_predictions_history))
+        .route("/api/v1/signals/truth", get(get_signal_truth))
+        .route("/api/v1/user-portfolio", get(get_user_holdings))
+        .route("/api/v1/user-portfolio", post(add_user_holding))
+        .route("/api/v1/user-portfolio/{id}", put(update_user_holding))
+        .route("/api/v1/user-portfolio/{id}", delete(delete_user_holding))
+        .route("/api/v1/user-portfolio/compare", post(compare_portfolio))
+        .route("/api/v1/feedback/signal", post(submit_signal_feedback))
+        .route("/api/v1/feedback/survey", post(submit_survey_feedback))
+        .route("/api/v1/feedback", get(get_feedback))
         .layer(cors.clone())
         .with_state(state);
 
@@ -375,6 +387,143 @@ fn compute_confidence_bands(resolved: &[&db::PredictionRecord]) -> Vec<serde_jso
             "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
         })
     }).collect()
+}
+
+/// GET /api/v1/signals/truth — signal truth / track record data
+async fn get_signal_truth(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(1000);
+
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let records = database.get_signal_history_all(limit).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // ── Overall stats ──
+        let total = records.len();
+        let resolved: Vec<_> = records.iter().filter(|r| r.was_correct.is_some()).collect();
+        let pending_count = records.iter().filter(|r| r.was_correct.is_none()).count();
+        let correct_count = resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+        let total_resolved = resolved.len();
+        let overall_accuracy = if total_resolved > 0 { correct_count as f64 / total_resolved as f64 * 100.0 } else { 0.0 };
+
+        // ── Accuracy by signal type ──
+        let mut by_signal: HashMap<String, (usize, usize)> = HashMap::new();
+        for r in &resolved {
+            let entry = by_signal.entry(r.signal_type.clone()).or_insert((0, 0));
+            entry.1 += 1;
+            if r.was_correct == Some(true) { entry.0 += 1; }
+        }
+        let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SELL", "HOLD"].iter().map(|&st| {
+            let (correct, total) = by_signal.get(st).copied().unwrap_or((0, 0));
+            serde_json::json!({
+                "signal_type": st,
+                "correct": correct,
+                "total": total,
+                "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+            })
+        }).collect();
+
+        // ── Accuracy by asset class ──
+        let mut by_class: HashMap<String, (usize, usize)> = HashMap::new();
+        for r in &resolved {
+            let entry = by_class.entry(r.asset_class.clone()).or_insert((0, 0));
+            entry.1 += 1;
+            if r.was_correct == Some(true) { entry.0 += 1; }
+        }
+        let asset_class_accuracy: Vec<serde_json::Value> = ["stock", "fx", "crypto"].iter().map(|&ac| {
+            let (correct, total) = by_class.get(ac).copied().unwrap_or((0, 0));
+            serde_json::json!({
+                "asset_class": ac,
+                "correct": correct,
+                "total": total,
+                "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+            })
+        }).collect();
+
+        // ── Rolling accuracy (today, this week, all time) ──
+        let now = Utc::now();
+        let today_start = now.format("%Y-%m-%d").to_string();
+        let week_ago = (now - chrono::Duration::days(7)).to_rfc3339();
+
+        let today_resolved: Vec<_> = resolved.iter().filter(|r| r.timestamp.starts_with(&today_start)).collect();
+        let today_correct = today_resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+
+        let week_resolved: Vec<_> = resolved.iter().filter(|r| r.timestamp.as_str() >= week_ago.as_str()).collect();
+        let week_correct = week_resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+
+        let rolling = serde_json::json!({
+            "today": {
+                "resolved": today_resolved.len(),
+                "correct": today_correct,
+                "accuracy": if !today_resolved.is_empty() { today_correct as f64 / today_resolved.len() as f64 * 100.0 } else { 0.0 },
+            },
+            "this_week": {
+                "resolved": week_resolved.len(),
+                "correct": week_correct,
+                "accuracy": if !week_resolved.is_empty() { week_correct as f64 / week_resolved.len() as f64 * 100.0 } else { 0.0 },
+            },
+            "all_time": {
+                "resolved": total_resolved,
+                "correct": correct_count,
+                "accuracy": overall_accuracy,
+            },
+        });
+
+        // ── Per-asset accuracy ──
+        let mut per_asset: HashMap<String, (usize, usize)> = HashMap::new();
+        for r in &resolved {
+            let entry = per_asset.entry(r.asset.clone()).or_insert((0, 0));
+            entry.1 += 1;
+            if r.was_correct == Some(true) { entry.0 += 1; }
+        }
+        let mut per_asset_vec: Vec<serde_json::Value> = per_asset.iter().map(|(asset, (correct, total))| {
+            serde_json::json!({
+                "asset": asset,
+                "correct": correct,
+                "total": total,
+                "accuracy": if *total > 0 { *correct as f64 / *total as f64 * 100.0 } else { 0.0 },
+            })
+        }).collect();
+        per_asset_vec.sort_by(|a, b| a["asset"].as_str().cmp(&b["asset"].as_str()));
+
+        // ── Full signal history ──
+        let signals: Vec<serde_json::Value> = records.iter().map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "timestamp": r.timestamp,
+                "asset": r.asset,
+                "asset_class": r.asset_class,
+                "signal_type": r.signal_type,
+                "price_at_signal": r.price_at_signal,
+                "confidence": r.confidence,
+                "linreg_prob": r.linreg_prob,
+                "logreg_prob": r.logreg_prob,
+                "gbt_prob": r.gbt_prob,
+                "outcome_price": r.outcome_price,
+                "pct_change": r.pct_change,
+                "was_correct": r.was_correct,
+                "resolution_ts": r.resolution_ts,
+            })
+        }).collect();
+
+        Ok::<_, StatusCode>(Json(serde_json::json!({
+            "total_signals": total,
+            "total_resolved": total_resolved,
+            "total_pending": pending_count,
+            "total_correct": correct_count,
+            "overall_accuracy": overall_accuracy,
+            "by_signal_type": signal_type_accuracy,
+            "by_asset_class": asset_class_accuracy,
+            "rolling": rolling,
+            "per_asset": per_asset_vec,
+            "signals": signals,
+        })))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(result)
 }
 
 async fn get_all_signals(
@@ -959,11 +1108,121 @@ fn save_asset_config(cfg: &config::AssetConfig) -> Result<(), String> {
 }
 
 // ════════════════════════════════════════
+// Live Price Fetching
+// ════════════════════════════════════════
+
+/// Fetch live prices from Yahoo Finance (stocks/FX/market indicators) and CoinGecko (crypto),
+/// then insert into the database so inference always uses the latest price.
+async fn fetch_and_store_live_prices(
+    state: &AppState,
+    include_stocks: bool,
+    include_fx: bool,
+    include_crypto: bool,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    let asset_config = state.asset_config.read().await.clone();
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let client = &state.http_client;
+
+    // Collect all (class, symbol, price, volume) tuples
+    let mut updates: Vec<(&str, String, f64, Option<f64>)> = Vec::new();
+
+    // ── Stocks ──
+    if include_stocks {
+        for entry in asset_config.enabled_stocks() {
+            match stocks::fetch_quote(client, &entry.symbol).await {
+                Ok(q) if q.price > 0.0 => {
+                    updates.push(("stock", entry.symbol.clone(), q.price, Some(q.volume as f64)));
+                }
+                Err(e) => eprintln!("  [LivePrice] {} error: {}", entry.symbol, e),
+                _ => {}
+            }
+        }
+    }
+
+    // ── FX ──
+    if include_fx {
+        for entry in asset_config.enabled_fx() {
+            match stocks::fetch_quote(client, &entry.symbol).await {
+                Ok(q) if q.price > 0.0 => {
+                    updates.push(("fx", entry.symbol.clone(), q.price, None));
+                }
+                Err(e) => eprintln!("  [LivePrice] {} error: {}", entry.symbol, e),
+                _ => {}
+            }
+        }
+    }
+
+    // ── Crypto (CoinGecko bulk — single API call for all coins) ──
+    if include_crypto {
+        match crypto::fetch_top_coins(client).await {
+            Ok(coins) => {
+                let enabled_ids: std::collections::HashSet<String> = asset_config
+                    .enabled_crypto().iter().map(|e| e.symbol.clone()).collect();
+                for coin in &coins {
+                    if coin.current_price > 0.0 && (enabled_ids.contains(&coin.id) || enabled_ids.is_empty()) {
+                        updates.push(("crypto", coin.id.clone(), coin.current_price, coin.total_volume));
+                    }
+                }
+            }
+            Err(e) => eprintln!("  [LivePrice] CoinGecko error: {}", e),
+        }
+    }
+
+    // ── Market indicators (VIX, treasuries, sector ETFs, gold, dollar) ──
+    // Always fetch these — they feed into feature engineering for all asset classes
+    for ticker in features::MARKET_TICKERS {
+        match stocks::fetch_quote(client, ticker).await {
+            Ok(q) if q.price > 0.0 => {
+                updates.push(("market", ticker.to_string(), q.price, None));
+            }
+            Err(e) => eprintln!("  [LivePrice] {} error: {}", ticker, e),
+            _ => {}
+        }
+    }
+    // SPY is used for market context too
+    if !include_stocks {
+        // SPY might not have been fetched if stocks were skipped
+        if let Ok(q) = stocks::fetch_quote(client, "SPY").await {
+            if q.price > 0.0 {
+                updates.push(("stock", "SPY".to_string(), q.price, Some(q.volume as f64)));
+            }
+        }
+    }
+
+    let count = updates.len();
+    let db_path = state.db_path.clone();
+    let today_clone = today.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path)
+            .map_err(|e| format!("DB error: {}", e))?;
+        for (class, symbol, price, volume) in &updates {
+            let _ = match *class {
+                "stock" => database.upsert_stock_price(symbol, *price, *volume, &today_clone),
+                "fx" => database.upsert_fx_price(symbol, *price, *volume, &today_clone),
+                "crypto" => database.upsert_crypto_price(symbol, *price, *volume, &today_clone),
+                "market" => database.upsert_market_price(symbol, *price, &today_clone),
+                _ => Ok(()),
+            };
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    }).await??;
+
+    println!("  [LivePrice] Updated {} live prices for {}", count, today);
+    Ok(count)
+}
+
+// ════════════════════════════════════════
 // Signal Generation Pipeline (INFERENCE ONLY)
 // ════════════════════════════════════════
 
 /// Refresh all signals (loads saved model weights, runs inference)
 async fn refresh_signals(state: &AppState) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Fetch live prices first so inference uses current data
+    if let Err(e) = fetch_and_store_live_prices(state, true, true, true).await {
+        eprintln!("  [LivePrice] Warning: {}", e);
+    }
+
     let db_path = state.db_path.clone();
     let asset_config = state.asset_config.read().await.clone();
 
@@ -971,12 +1230,14 @@ async fn refresh_signals(state: &AppState) -> Result<(), Box<dyn std::error::Err
         generate_all_signals(&db_path, &asset_config)
     }).await??;
 
-    // Store snapshots in DB
+    // Store snapshots + signal history in DB
     {
         let database = db::Database::new(&state.db_path)
             .map_err(|e| format!("DB error: {}", e))?;
+        let ts = Utc::now().to_rfc3339();
         for sig in &new_signals {
             let _ = database.insert_signal_snapshot(sig, 3);
+            record_signal_history(&database, sig, &ts);
         }
     }
 
@@ -1012,6 +1273,11 @@ async fn refresh_signals_with_market_hours(state: &AppState) -> Result<(), Box<d
     // Crypto: 24/7
     let crypto_open = true;
 
+    // Fetch live prices first so inference uses current data
+    if let Err(e) = fetch_and_store_live_prices(state, us_market_open, fx_open, crypto_open).await {
+        eprintln!("  [LivePrice] Warning: {}", e);
+    }
+
     let db_path = state.db_path.clone();
     let asset_config = state.asset_config.read().await.clone();
 
@@ -1019,12 +1285,14 @@ async fn refresh_signals_with_market_hours(state: &AppState) -> Result<(), Box<d
         generate_signals_filtered(&db_path, &asset_config, us_market_open, fx_open, crypto_open)
     }).await??;
 
-    // Store snapshots
+    // Store snapshots + signal history
     {
         let database = db::Database::new(&state.db_path)
             .map_err(|e| format!("DB error: {}", e))?;
+        let ts = Utc::now().to_rfc3339();
         for sig in &new_signals {
             let _ = database.insert_signal_snapshot(sig, 3);
+            record_signal_history(&database, sig, &ts);
         }
     }
 
@@ -1158,124 +1426,8 @@ fn generate_signals_filtered(
 // Inference-Only Signal Generation
 // ════════════════════════════════════════
 
-/// Load saved model weights and run inference on the latest feature vector.
-/// Returns a WalkForwardResult populated with saved accuracies + fresh predictions.
-fn infer_with_saved_models(
-    symbol: &str,
-    samples: &[ml::Sample],
-) -> Option<ensemble::WalkForwardResult> {
-    if samples.is_empty() {
-        println!("  {} — no samples for inference", symbol);
-        return None;
-    }
-
-    let n_features = samples[0].features.len();
-
-    // Load the 3 saved models
-    let linreg_saved = match model_store::load_weights(symbol, "linreg") {
-        Ok(w) => w,
-        Err(e) => {
-            println!("  {} — skipping: no linreg model ({})", symbol, e);
-            return None;
-        }
-    };
-    let logreg_saved = match model_store::load_weights(symbol, "logreg") {
-        Ok(w) => w,
-        Err(e) => {
-            println!("  {} — skipping: no logreg model ({})", symbol, e);
-            return None;
-        }
-    };
-    let (gbt_saved, gbt_classifier) = match model_store::load_gbt(symbol) {
-        Ok(g) => g,
-        Err(e) => {
-            println!("  {} — skipping: no GBT model ({})", symbol, e);
-            return None;
-        }
-    };
-
-    // Get the latest feature vector
-    let last_sample = samples.last().unwrap();
-    let feat = &last_sample.features;
-
-    // LinReg prediction (normalise with its own saved params)
-    let lin_feat = normalise_features(feat, &linreg_saved.norm_means, &linreg_saved.norm_stds);
-    let raw_lin = predict_linreg(&linreg_saved, &lin_feat);
-    let lin_prob = (1.0 / (1.0 + (-raw_lin).exp())).clamp(0.15, 0.85);
-
-    // LogReg prediction
-    let log_feat = normalise_features(feat, &logreg_saved.norm_means, &logreg_saved.norm_stds);
-    let log_prob = predict_logreg(&logreg_saved, &log_feat).clamp(0.15, 0.85);
-
-    // GBT prediction (GBT has its own norm params)
-    let gbt_feat = normalise_features(feat, &gbt_saved.norm_means, &gbt_saved.norm_stds);
-    let gbt_prob = gbt_classifier.predict_proba(&gbt_feat).clamp(0.15, 0.85);
-
-    // Use saved walk-forward accuracies
-    let lin_acc = linreg_saved.meta.walk_forward_accuracy;
-    let log_acc = logreg_saved.meta.walk_forward_accuracy;
-    let gbt_acc = gbt_saved.meta.walk_forward_accuracy;
-
-    println!("  {} — inference: LinR={:.1}% LogR={:.1}% GBT={:.1}% | probs: {:.2} {:.2} {:.2}",
-        symbol, lin_acc, log_acc, gbt_acc, lin_prob, log_prob, gbt_prob);
-
-    Some(ensemble::WalkForwardResult {
-        symbol: symbol.to_string(),
-        linear_accuracy: lin_acc,
-        logistic_accuracy: log_acc,
-        gbt_accuracy: gbt_acc,
-        lstm_accuracy: 50.0,
-        gru_accuracy: 50.0,
-        rf_accuracy: 50.0,
-        n_folds: 1,
-        total_test_samples: 0,
-        linear_recent: lin_acc,
-        logistic_recent: log_acc,
-        gbt_recent: gbt_acc,
-        lstm_recent: 50.0,
-        gru_recent: 50.0,
-        rf_recent: 50.0,
-        final_linear_prob: lin_prob,
-        final_logistic_prob: log_prob,
-        final_gbt_prob: gbt_prob,
-        final_lstm_prob: 0.5,
-        final_gru_prob: 0.5,
-        final_rf_prob: 0.5,
-        gbt_importance: Vec::new(),
-        n_features,
-        has_lstm: false,
-        has_gru: false,
-        has_rf: false,
-        stacking_weights: None,
-    })
-}
-
-/// Normalise a feature vector using pre-computed means and stds
-fn normalise_features(features: &[f64], means: &[f64], stds: &[f64]) -> Vec<f64> {
-    features.iter().enumerate().map(|(i, &f)| {
-        let mean = means.get(i).copied().unwrap_or(0.0);
-        let std = stds.get(i).copied().unwrap_or(1.0);
-        if std == 0.0 { f - mean } else { (f - mean) / std }
-    }).collect()
-}
-
-/// Run linreg inference: dot(weights, features) + bias
-fn predict_linreg(saved: &model_store::SavedWeights, features: &[f64]) -> f64 {
-    let mut result = saved.bias;
-    for (w, f) in saved.weights.iter().zip(features.iter()) {
-        result += w * f;
-    }
-    result
-}
-
-/// Run logreg inference: sigmoid(dot(weights, features) + bias)
-fn predict_logreg(saved: &model_store::SavedWeights, features: &[f64]) -> f64 {
-    let mut z = saved.bias;
-    for (w, f) in saved.weights.iter().zip(features.iter()) {
-        z += w * f;
-    }
-    1.0 / (1.0 + (-z).exp())
-}
+// Inference functions are in the shared inference module (src/inference.rs)
+// Used via: inference::infer_with_saved_models(), inference::normalise_features(), etc.
 
 /// Generate a single stock signal via inference
 fn infer_stock_signal(
@@ -1296,7 +1448,7 @@ fn infer_stock_signal(
     );
     if samples.is_empty() { return None; }
 
-    let wf = infer_with_saved_models(symbol, &samples)?;
+    let wf = inference::infer_with_saved_models(symbol, &samples)?;
 
     let result = analysis::analyse_coin(symbol, points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -1338,7 +1490,7 @@ fn infer_fx_signal(
     );
     if samples.is_empty() { return None; }
 
-    let wf = infer_with_saved_models(symbol, &samples)?;
+    let wf = inference::infer_with_saved_models(symbol, &samples)?;
 
     let result = analysis::analyse_coin(symbol, points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -1399,7 +1551,7 @@ fn infer_crypto_signal(
 
     if enriched_samples.is_empty() { return None; }
 
-    let wf = infer_with_saved_models(coin_id, &enriched_samples)?;
+    let wf = inference::infer_with_saved_models(coin_id, &enriched_samples)?;
 
     let result = analysis::analyse_coin(coin_id, &points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -1441,10 +1593,101 @@ fn extract_bb_position(samples: &[ml::Sample]) -> Option<f64> {
 }
 
 // ════════════════════════════════════════
+// Feedback Handlers
+// ════════════════════════════════════════
+
+#[derive(serde::Deserialize)]
+struct SignalFeedbackRequest {
+    asset: String,
+    signal_type: String,
+    reaction: String,  // "up" or "down"
+}
+
+async fn submit_signal_feedback(
+    State(state): State<AppState>,
+    Json(req): Json<SignalFeedbackRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        database.execute_raw(&format!(
+            "INSERT INTO signal_feedback (asset, signal_type, reaction) VALUES ('{}', '{}', '{}')",
+            req.asset.replace('\'', "''"),
+            req.signal_type.replace('\'', "''"),
+            req.reaction.replace('\'', "''"),
+        )).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok::<_, StatusCode>(Json(serde_json::json!({"status": "ok"})))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+#[derive(serde::Deserialize)]
+struct SurveyFeedbackRequest {
+    q_understand: Option<String>,
+    q_check_daily: Option<String>,
+    q_trust_more: Option<String>,
+    q_missing: Option<String>,
+    q_would_pay: Option<String>,
+}
+
+async fn submit_survey_feedback(
+    State(state): State<AppState>,
+    Json(req): Json<SurveyFeedbackRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        database.execute_raw(&format!(
+            "INSERT INTO survey_feedback (q_understand, q_check_daily, q_trust_more, q_missing, q_would_pay) \
+             VALUES ({}, {}, {}, {}, {})",
+            opt_sql(&req.q_understand), opt_sql(&req.q_check_daily),
+            opt_sql(&req.q_trust_more), opt_sql(&req.q_missing),
+            opt_sql(&req.q_would_pay),
+        )).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok::<_, StatusCode>(Json(serde_json::json!({"status": "ok"})))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+fn opt_sql(v: &Option<String>) -> String {
+    match v {
+        Some(s) => format!("'{}'", s.replace('\'', "''")),
+        None => "NULL".to_string(),
+    }
+}
+
+async fn get_feedback(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // Count signal feedback
+        let signal_up: i64 = database.execute_raw(
+            "SELECT 0 FROM signal_feedback WHERE reaction = 'up'"
+        ).unwrap_or(0) as i64;
+        let signal_count: i64 = database.execute_raw(
+            "SELECT 0 FROM signal_feedback"
+        ).unwrap_or(0) as i64;
+
+        // Count survey submissions
+        let survey_count: i64 = database.execute_raw(
+            "SELECT 0 FROM survey_feedback"
+        ).unwrap_or(0) as i64;
+
+        Ok::<_, StatusCode>(Json(serde_json::json!({
+            "signal_feedback_count": signal_count,
+            "signal_thumbs_up": signal_up,
+            "survey_count": survey_count,
+        })))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+// ════════════════════════════════════════
 // Startup Database Migrations
 // ════════════════════════════════════════
 
-/// Resolve pending predictions by comparing prediction price to current price
+/// Resolve pending predictions by comparing prediction price to current price.
+/// Uses market-hours-aware resolution logic (same rules as signal_history).
 fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched_signals::EnrichedSignal>) {
     let database = match db::Database::new(db_path) {
         Ok(d) => d,
@@ -1458,22 +1701,24 @@ fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched
 
     if pending.is_empty() { return; }
 
-    let resolve_ts = Utc::now().to_rfc3339();
+    let now = Utc::now();
+    let resolve_ts = now.to_rfc3339();
     let mut resolved = 0;
 
     for pred in &pending {
-        let pred_time = match chrono::DateTime::parse_from_rfc3339(&pred.timestamp) {
-            Ok(t) => t.with_timezone(&Utc),
-            Err(_) => continue,
+        // Determine asset class from the current signals cache
+        let sig = match signals.get(&pred.asset) {
+            Some(s) => s,
+            None => continue,
         };
-        let age_hours = (Utc::now() - pred_time).num_hours();
-        if age_hours < 1 { continue; }
+        let asset_class = sig.asset_class.as_str();
 
-        // Find current price from signals
-        let current_price = if let Some(sig) = signals.get(&pred.asset) {
-            sig.price
-        } else { continue; };
+        // Apply market-hours-aware resolution rules
+        if !can_resolve_signal(asset_class, &pred.signal, &pred.timestamp, now) {
+            continue;
+        }
 
+        let current_price = sig.price;
         let price_change = current_price - pred.price_at_prediction;
         let actual_direction = if price_change.abs() < pred.price_at_prediction * 0.001 {
             "FLAT"
@@ -1498,6 +1743,419 @@ fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched
     }
 }
 
+// ════════════════════════════════════════
+// User Portfolio Tracker
+// ════════════════════════════════════════
+
+async fn get_user_holdings(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<db::UserHolding>>, StatusCode> {
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        database.get_user_holdings().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct AddHoldingRequest {
+    symbol: String,
+    quantity: f64,
+    start_date: String,
+}
+
+async fn add_user_holding(
+    State(state): State<AppState>,
+    Json(req): Json<AddHoldingRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let symbol = req.symbol.trim().to_string();
+    let asset_class = detect_asset_class(&symbol);
+    let db_path = state.db_path.clone();
+    let start_date = req.start_date.clone();
+    let quantity = req.quantity;
+
+    let id = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        database.insert_user_holding(&symbol, quantity, &start_date, &asset_class)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(Json(serde_json::json!({"status": "ok", "id": id})))
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateHoldingRequest {
+    quantity: f64,
+    start_date: String,
+}
+
+async fn update_user_holding(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateHoldingRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        database.update_user_holding(id, req.quantity, &req.start_date)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+    Ok(Json(serde_json::json!({"status": "ok"})))
+}
+
+async fn delete_user_holding(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        database.delete_user_holding(id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+    Ok(Json(serde_json::json!({"status": "ok"})))
+}
+
+/// Detect asset class from a symbol string
+fn detect_asset_class(symbol: &str) -> String {
+    if symbol.ends_with("=X") {
+        "fx".to_string()
+    } else if is_crypto_id(symbol) {
+        "crypto".to_string()
+    } else {
+        "stock".to_string()
+    }
+}
+
+/// Check if a symbol is a known CoinGecko crypto ID
+fn is_crypto_id(s: &str) -> bool {
+    matches!(s, "bitcoin" | "ethereum" | "solana" | "ripple" | "dogecoin"
+        | "cardano" | "avalanche-2" | "chainlink" | "polkadot" | "near"
+        | "sui" | "aptos" | "arbitrum" | "the-open-network" | "uniswap"
+        | "tron" | "litecoin" | "shiba-inu" | "stellar" | "matic-network")
+}
+
+/// POST /api/v1/user-portfolio/compare — run Follow Signals vs Buy & Hold comparison
+async fn compare_portfolio(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let holdings = database.get_user_holdings().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if holdings.is_empty() {
+            return Ok::<_, StatusCode>(serde_json::json!({
+                "has_data": false,
+                "note": "No holdings added yet. Add your assets to see the comparison."
+            }));
+        }
+
+        let mut per_asset = Vec::new();
+        let mut total_buy_hold = 0.0_f64;
+        let mut total_follow_signals = 0.0_f64;
+        let mut total_cost = 0.0_f64;
+
+        for holding in &holdings {
+            let asset_result = compute_holding_comparison(&database, holding);
+            if let Some(ar) = asset_result {
+                total_cost += ar.cost_basis;
+                total_buy_hold += ar.buy_hold_value;
+                total_follow_signals += ar.signal_value;
+                per_asset.push(ar);
+            }
+        }
+
+        let buy_hold_return = if total_cost > 0.0 {
+            (total_buy_hold - total_cost) / total_cost * 100.0
+        } else { 0.0 };
+        let signal_return = if total_cost > 0.0 {
+            (total_follow_signals - total_cost) / total_cost * 100.0
+        } else { 0.0 };
+
+        let verdict = if (signal_return - buy_hold_return).abs() < 1.0 {
+            "roughly_equal"
+        } else if signal_return > buy_hold_return {
+            "signals_win"
+        } else {
+            "buy_hold_wins"
+        };
+
+        let per_asset_json: Vec<serde_json::Value> = per_asset.iter().map(|a| {
+            serde_json::json!({
+                "symbol": a.symbol,
+                "asset_class": a.asset_class,
+                "quantity": a.quantity,
+                "start_date": a.start_date,
+                "actual_start_date": a.actual_start_date,
+                "start_price": a.start_price,
+                "current_price": a.current_price,
+                "cost_basis": round2(a.cost_basis),
+                "buy_hold_value": round2(a.buy_hold_value),
+                "buy_hold_return_pct": round2(a.buy_hold_return_pct),
+                "signal_value": round2(a.signal_value),
+                "signal_return_pct": round2(a.signal_return_pct),
+                "signals_used": a.signals_used,
+                "signal_tracking_start": a.signal_tracking_start,
+                "note": a.note,
+            })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "has_data": true,
+            "total_cost": round2(total_cost),
+            "buy_hold_value": round2(total_buy_hold),
+            "buy_hold_return_pct": round2(buy_hold_return),
+            "signal_value": round2(total_follow_signals),
+            "signal_return_pct": round2(signal_return),
+            "verdict": verdict,
+            "per_asset": per_asset_json,
+        }))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(Json(result))
+}
+
+fn round2(v: f64) -> f64 { (v * 100.0).round() / 100.0 }
+
+struct AssetComparison {
+    symbol: String,
+    asset_class: String,
+    quantity: f64,
+    start_date: String,
+    actual_start_date: String,
+    start_price: f64,
+    current_price: f64,
+    cost_basis: f64,
+    buy_hold_value: f64,
+    buy_hold_return_pct: f64,
+    signal_value: f64,
+    signal_return_pct: f64,
+    signals_used: usize,
+    signal_tracking_start: Option<String>,
+    note: Option<String>,
+}
+
+fn compute_holding_comparison(database: &db::Database, holding: &db::UserHolding) -> Option<AssetComparison> {
+    let (start_price, actual_start_date, current_price) = match holding.asset_class.as_str() {
+        "stock" => {
+            let (date, price) = database.get_stock_price_at_date(&holding.symbol, &holding.start_date).ok()??;
+            let current = database.get_latest_stock_price(&holding.symbol).ok()??;
+            (price, date, current)
+        }
+        "fx" => {
+            let (date, price) = database.get_fx_price_at_date(&holding.symbol, &holding.start_date).ok()??;
+            let current = database.get_latest_fx_price(&holding.symbol).ok()??;
+            (price, date, current)
+        }
+        "crypto" => {
+            let (date, price) = database.get_crypto_price_at_date(&holding.symbol, &holding.start_date).ok()??;
+            let current = database.get_latest_crypto_price(&holding.symbol).ok()??;
+            (price, date, current)
+        }
+        _ => return None,
+    };
+
+    if start_price <= 0.0 { return None; }
+
+    let cost_basis = holding.quantity * start_price;
+    let buy_hold_value = holding.quantity * current_price;
+    let buy_hold_return_pct = (current_price - start_price) / start_price * 100.0;
+
+    // Get signal tracking start for this asset
+    let signal_tracking_start = database.get_signal_tracking_start(&holding.symbol).ok().flatten();
+
+    // Get all signals from start_date onwards
+    let signals = database.get_signal_history_for_asset_from(&holding.symbol, &holding.start_date)
+        .unwrap_or_default();
+
+    let note = if actual_start_date != holding.start_date {
+        Some(format!("Exact date unavailable. Using nearest: {}", actual_start_date))
+    } else {
+        None
+    };
+
+    // Simulate Follow The Signals
+    // Start: we hold the asset (we bought it on start_date)
+    let signal_value;
+    let signals_used;
+
+    if signals.is_empty() {
+        // No signal history for this asset — both modes are identical
+        signal_value = buy_hold_value;
+        signals_used = 0;
+    } else {
+        // Walk through signals chronologically
+        let mut in_position = true;
+        let mut shares = holding.quantity;
+        let mut cash = 0.0_f64;
+        let mut count = 0_usize;
+
+        for sig in &signals {
+            match sig.signal_type.as_str() {
+                "SELL" if in_position => {
+                    cash = shares * sig.price_at_signal;
+                    shares = 0.0;
+                    in_position = false;
+                    count += 1;
+                }
+                "BUY" if !in_position => {
+                    if sig.price_at_signal > 0.0 {
+                        shares = cash / sig.price_at_signal;
+                    }
+                    cash = 0.0;
+                    in_position = true;
+                    count += 1;
+                }
+                _ => {
+                    count += 1;
+                }
+            }
+        }
+
+        signal_value = if in_position {
+            shares * current_price
+        } else {
+            cash
+        };
+        signals_used = count;
+    }
+
+    let signal_return_pct = if cost_basis > 0.0 {
+        (signal_value - cost_basis) / cost_basis * 100.0
+    } else { 0.0 };
+
+    Some(AssetComparison {
+        symbol: holding.symbol.clone(),
+        asset_class: holding.asset_class.clone(),
+        quantity: holding.quantity,
+        start_date: holding.start_date.clone(),
+        actual_start_date,
+        start_price,
+        current_price,
+        cost_basis,
+        buy_hold_value,
+        buy_hold_return_pct,
+        signal_value,
+        signal_return_pct,
+        signals_used,
+        signal_tracking_start,
+        note,
+    })
+}
+
+/// Check whether a signal should be resolved now, based on asset class, signal type,
+/// market hours, and minimum age rules.
+///
+/// Rules:
+///   - No signal resolves in less than 4 hours
+///   - Stocks:  only resolve Mon-Fri 14:30-21:00 UTC; BUY/SELL at end of day (hour >= 20)
+///   - FX:      only resolve Mon 00:00 – Fri 22:00 UTC; BUY/SELL at end of day (hour >= 21)
+///   - Crypto:  resolves 24/7; BUY/SELL at end of day (hour >= 23 or age >= 24h)
+///   - HOLD:    resolves any time during open market hours (respecting 4h minimum)
+fn can_resolve_signal(
+    asset_class: &str,
+    signal_type: &str,
+    signal_ts: &str,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    let signal_dt = match chrono::DateTime::parse_from_rfc3339(signal_ts) {
+        Ok(t) => t.with_timezone(&Utc),
+        Err(_) => return false,
+    };
+
+    let age_hours = (now - signal_dt).num_hours();
+
+    // ── Global: no signal resolves in less than 4 hours ──
+    if age_hours < 4 {
+        return false;
+    }
+
+    let weekday = now.weekday();
+    let hour = now.hour();
+
+    match asset_class {
+        "stock" => {
+            // Stocks only resolve Mon-Fri 14:30-21:00 UTC
+            if matches!(weekday, Weekday::Sat | Weekday::Sun) { return false; }
+            if hour < 14 || hour > 21 { return false; }
+
+            match signal_type {
+                "BUY" | "SELL" => hour >= 20,  // end of trading day
+                "HOLD" => true,                 // any time during open hours
+                _ => false,
+            }
+        }
+        "fx" => {
+            // FX resolves Mon 00:00 through Fri 22:00 UTC
+            let fx_open = match weekday {
+                Weekday::Sat | Weekday::Sun => false,
+                Weekday::Fri => hour < 22,
+                _ => true,
+            };
+            if !fx_open { return false; }
+
+            match signal_type {
+                "BUY" | "SELL" => hour >= 21,  // end of NY session
+                "HOLD" => true,
+                _ => false,
+            }
+        }
+        "crypto" => {
+            // Crypto resolves 24/7 (4h minimum already enforced)
+            match signal_type {
+                "BUY" | "SELL" => hour >= 23 || age_hours >= 24,  // end of day
+                "HOLD" => true,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Record a signal to signal_history table, resolving the previous unresolved signal for the same asset
+fn record_signal_history(database: &db::Database, sig: &enriched_signals::EnrichedSignal, timestamp: &str) {
+    // Extract model probabilities from the enriched signal
+    let linreg_prob = sig.models.get("linreg").map(|m| m.probability_up);
+    let logreg_prob = sig.models.get("logreg").map(|m| m.probability_up);
+    let gbt_prob = sig.models.get("gbt").map(|m| m.probability_up);
+
+    // Resolve previous unresolved signal for this asset (market-hours aware)
+    if let Ok(Some(prev)) = database.get_last_unresolved_signal(&sig.asset) {
+        let now = Utc::now();
+        if can_resolve_signal(&prev.asset_class, &prev.signal_type, &prev.timestamp, now) {
+            let current_price = sig.price;
+            let prev_price = prev.price_at_signal;
+            if prev_price > 0.0 {
+                let pct_change = (current_price - prev_price) / prev_price * 100.0;
+                let was_correct = match prev.signal_type.as_str() {
+                    "BUY" => current_price > prev_price,
+                    "SELL" => current_price < prev_price,
+                    "HOLD" => pct_change.abs() < 1.0,
+                    _ => false,
+                };
+                let _ = database.resolve_signal_history(
+                    prev.id, current_price, pct_change, was_correct, timestamp,
+                );
+            }
+        }
+    }
+
+    // Insert the new signal
+    let _ = database.insert_signal_history(
+        timestamp,
+        &sig.asset,
+        &sig.asset_class,
+        &sig.signal,
+        sig.price,
+        sig.technical.confidence,
+        linreg_prob.unwrap_or(0.0),
+        logreg_prob.unwrap_or(0.0),
+        gbt_prob.unwrap_or(0.0),
+    );
+}
+
 fn run_startup_migrations(db_path: &str) {
     let database = match db::Database::new(db_path) {
         Ok(d) => d,
@@ -1506,6 +2164,41 @@ fn run_startup_migrations(db_path: &str) {
             return;
         }
     };
+
+    // Ensure user_holdings table exists
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS user_holdings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol      TEXT NOT NULL,
+            quantity    REAL NOT NULL,
+            start_date  TEXT NOT NULL,
+            asset_class TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now'))
+        )"
+    );
+
+    // Ensure signal_history table exists
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS signal_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT NOT NULL,
+            asset           TEXT NOT NULL,
+            asset_class     TEXT NOT NULL,
+            signal_type     TEXT NOT NULL,
+            price_at_signal REAL NOT NULL,
+            confidence      REAL NOT NULL,
+            linreg_prob     REAL,
+            logreg_prob     REAL,
+            gbt_prob        REAL,
+            outcome_price   REAL,
+            pct_change      REAL,
+            was_correct     INTEGER,
+            resolution_ts   TEXT
+        )"
+    );
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_signal_history_asset ON signal_history(asset, timestamp)");
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_signal_history_pending ON signal_history(resolution_ts)");
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_signal_history_ts ON signal_history(timestamp)");
 
     // Ensure predictions table exists
     let _ = database.execute_raw(
@@ -1524,6 +2217,30 @@ fn run_startup_migrations(db_path: &str) {
     );
     let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_predictions_asset_time ON predictions(asset, timestamp)");
     let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_predictions_pending ON predictions(outcome_timestamp)");
+
+    // Ensure signal_feedback table exists (thumbs up/down on individual signals)
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS signal_feedback (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset       TEXT NOT NULL,
+            signal_type TEXT NOT NULL,
+            reaction    TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now'))
+        )"
+    );
+
+    // Ensure survey_feedback table exists (Feedback page survey responses)
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS survey_feedback (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            q_understand    TEXT,
+            q_check_daily   TEXT,
+            q_trust_more    TEXT,
+            q_missing       TEXT,
+            q_would_pay     TEXT,
+            created_at      TEXT DEFAULT (datetime('now'))
+        )"
+    );
 
     // FIX 1: Restore correct seed value (£133,993.00)
     match database.execute_raw(

@@ -28,6 +28,7 @@ pub mod regime;
 pub mod tft;
 pub mod forex_features;
 pub mod enriched_signals;
+pub mod inference;
 pub mod llm;
 pub mod daily_tracker;
 pub mod hints;

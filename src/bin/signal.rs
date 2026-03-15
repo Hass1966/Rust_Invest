@@ -1,10 +1,12 @@
-/// signal — Fast daily/twice-daily signal generation
-/// ==================================================
-/// Loads saved models, fetches latest prices, generates trading signals in seconds.
+/// signal — Fast daily/twice-daily signal generation (INFERENCE ONLY)
+/// ==================================================================
+/// Loads saved models, fetches latest prices from DB, generates trading signals.
+/// NO training happens here — only forward-pass inference on saved weights.
 /// Usage: cargo run --release --bin signal
 
 use rust_invest::*;
 use std::collections::HashMap;
+use chrono::{Datelike, Timelike};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = db::Database::new("rust_invest.db")?;
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║       RUST INVEST — SIGNAL MODE (Fast Daily Signals)           ║");
+    println!("║       RUST INVEST — SIGNAL MODE (Inference Only)               ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
 
     // Check that we have trained models
@@ -34,10 +36,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let market_context = features::build_market_context(&market_histories);
 
+    // Load Fear & Greed history
+    let fear_greed_history = database.get_fear_greed_history().unwrap_or_default();
+    let fg_ref: Option<&[(String, f64)]> = if fear_greed_history.is_empty() {
+        None
+    } else {
+        Some(&fear_greed_history)
+    };
+
     let mut signals: Vec<ensemble::TradingSignal> = Vec::new();
 
-    // ── Stock signals ──
-    println!("━━━ GENERATING STOCK SIGNALS ━━━\n");
+    // ── Stock signals (inference only) ──
+    println!("━━━ GENERATING STOCK SIGNALS (inference only) ━━━\n");
     for stock in stocks::STOCK_LIST {
         let points = database.get_stock_history(stock.symbol)?;
         if points.len() < 300 { continue; }
@@ -46,14 +56,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None);
-        if samples.len() < 100 { continue; }
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, fg_ref);
+        if samples.is_empty() { continue; }
 
-        let train_window = (samples.len() as f64 * 0.6) as usize;
-        let test_window = 30.min(samples.len() / 10);
-        let step = test_window;
-
-        if let Some(wf) = ensemble::walk_forward_samples(stock.symbol, &samples, train_window, test_window, step) {
+        if let Some(wf) = inference::infer_with_saved_models(stock.symbol, &samples) {
             let result = analysis::analyse_coin(stock.symbol, &points);
             let sma_7 = analysis::sma(&prices, 7);
             let sma_30 = analysis::sma(&prices, 30);
@@ -65,8 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── FX signals ──
-    println!("━━━ GENERATING FX SIGNALS ━━━\n");
+    // ── FX signals (inference only) ──
+    println!("━━━ GENERATING FX SIGNALS (inference only) ━━━\n");
     for fx in stocks::FX_LIST {
         let points = database.get_fx_history(fx.symbol)?;
         if points.len() < 300 { continue; }
@@ -75,14 +81,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None);
-        if samples.len() < 100 { continue; }
+        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, fg_ref);
+        if samples.is_empty() { continue; }
 
-        let train_window = (samples.len() as f64 * 0.6) as usize;
-        let test_window = 30.min(samples.len() / 10);
-        let step = test_window;
-
-        if let Some(wf) = ensemble::walk_forward_samples(fx.symbol, &samples, train_window, test_window, step) {
+        if let Some(wf) = inference::infer_with_saved_models(fx.symbol, &samples) {
             let result = analysis::analyse_coin(fx.symbol, &points);
             let sma_7 = analysis::sma(&prices, 7);
             let sma_30 = analysis::sma(&prices, 30);
@@ -94,8 +96,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Crypto signals ──
-    println!("━━━ GENERATING CRYPTO SIGNALS ━━━\n");
+    // ── Crypto signals (inference only) ──
+    println!("━━━ GENERATING CRYPTO SIGNALS (inference only) ━━━\n");
     let coin_ids: Vec<String> = database.get_all_coin_ids()?.into_iter().filter(|id| id != "tether").collect();
 
     // Build crypto enrichment data
@@ -143,12 +145,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }).collect()
         };
 
-        if enriched_samples.len() < 100 { continue; }
-        let train_window = (enriched_samples.len() as f64 * 0.6) as usize;
-        let test_window = 20.min(enriched_samples.len() / 10);
-        let step = test_window;
+        if enriched_samples.is_empty() { continue; }
 
-        if let Some(wf) = ensemble::walk_forward_samples(coin_id, &enriched_samples, train_window, test_window, step) {
+        if let Some(wf) = inference::infer_with_saved_models(coin_id, &enriched_samples) {
             let result = analysis::analyse_coin(coin_id, &points);
             let sma_7 = analysis::sma(&prices, 7);
             let sma_30 = analysis::sma(&prices, 30);
@@ -186,24 +185,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("  Logged {} predictions to database", logged);
 
-    // ── Resolve pending predictions ──
+    // ── Resolve pending predictions (market-hours aware) ──
     println!("\n━━━ RESOLVING PENDING PREDICTIONS ━━━\n");
     let pending = database.get_pending_predictions()?;
-    let resolve_ts = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now();
+    let resolve_ts = now.to_rfc3339();
     let mut resolved = 0;
     for pred in &pending {
-        // Check if prediction is old enough (at least 1 hour / roughly 1 trading day for daily)
-        let pred_time = chrono::DateTime::parse_from_rfc3339(&pred.timestamp)
-            .unwrap_or_else(|_| chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00+00:00").unwrap());
-        let age_hours = (chrono::Utc::now() - pred_time.with_timezone(&chrono::Utc)).num_hours();
-        if age_hours < 1 { continue; } // Too recent, skip
-
-        // Get current price for this asset
-        let current_price = if let Some(sig) = signals.iter().find(|s| s.symbol == pred.asset) {
-            sig.current_price
-        } else {
-            continue; // Can't resolve without current price
+        let pred_time = match chrono::DateTime::parse_from_rfc3339(&pred.timestamp) {
+            Ok(t) => t.with_timezone(&chrono::Utc),
+            Err(_) => continue,
         };
+        let age_hours = (now - pred_time).num_hours();
+
+        // No signal resolves in less than 4 hours
+        if age_hours < 4 { continue; }
+
+        // Get current price and asset class for this asset
+        let (current_price, asset_class) = if let Some(sig) = signals.iter().find(|s| s.symbol == pred.asset) {
+            let ac = if sig.symbol.ends_with("=X") { "fx" }
+                else if matches!(sig.symbol.as_str(), "bitcoin"|"ethereum"|"solana"|"ripple"|"dogecoin"|"cardano"|"avalanche-2"|"chainlink"|"polkadot"|"near"|"sui"|"aptos"|"arbitrum"|"the-open-network"|"uniswap"|"tron"|"litecoin"|"shiba-inu"|"stellar"|"matic-network") { "crypto" }
+                else { "stock" };
+            (sig.current_price, ac)
+        } else {
+            continue;
+        };
+
+        // Apply market-hours resolution rules
+        let weekday = now.weekday();
+        let hour = now.hour();
+        let can_resolve = match asset_class {
+            "stock" => {
+                if matches!(weekday, chrono::Weekday::Sat | chrono::Weekday::Sun) { false }
+                else if hour < 14 || hour > 21 { false }
+                else { match pred.signal.as_str() { "BUY"|"SELL" => hour >= 20, _ => true } }
+            }
+            "fx" => {
+                let fx_open = match weekday {
+                    chrono::Weekday::Sat | chrono::Weekday::Sun => false,
+                    chrono::Weekday::Fri => hour < 22,
+                    _ => true,
+                };
+                if !fx_open { false }
+                else { match pred.signal.as_str() { "BUY"|"SELL" => hour >= 21, _ => true } }
+            }
+            "crypto" => match pred.signal.as_str() {
+                "BUY"|"SELL" => hour >= 23 || age_hours >= 24,
+                _ => true,
+            },
+            _ => false,
+        };
+        if !can_resolve { continue; }
 
         let price_change = current_price - pred.price_at_prediction;
         let actual_direction = if price_change.abs() < pred.price_at_prediction * 0.001 {

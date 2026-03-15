@@ -52,9 +52,9 @@ axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 [features]
-default = ["metal"]
+default = []
 # Metal GPU acceleration for Apple Silicon (M1/M2/M3/M4).
-# Enabled by default on macOS. Disable with --no-default-features on Linux/CI.
+# On macOS, build with: cargo build --features metal,accelerate
 metal = ["candle-core/metal"]
 # Apple Accelerate BLAS for optimised CPU fallback
 accelerate = ["candle-core/accelerate"]

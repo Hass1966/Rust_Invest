@@ -1,6 +1,6 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import { useState } from 'react'
-import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X, Clock, Bot, PlayCircle, Bitcoin, GraduationCap, Target } from 'lucide-react'
+import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X, Clock, Bot, PlayCircle, Bitcoin, GraduationCap, Target, ShieldCheck, Wallet, Info, MessageCircle } from 'lucide-react'
 import Overview from './pages/Overview'
 import Stocks from './pages/Stocks'
 import FX from './pages/FX'
@@ -13,6 +13,10 @@ import Advisor from './pages/Advisor'
 import Simulate from './pages/Simulate'
 import Admin from './pages/Admin'
 import Predictions from './pages/Predictions'
+import Truth from './pages/Truth'
+import MyPortfolio from './pages/MyPortfolio'
+import About from './pages/About'
+import Feedback from './pages/Feedback'
 import ChatPanel from './components/ChatPanel'
 
 const tabs = [
@@ -21,16 +25,21 @@ const tabs = [
   { path: '/fx', label: 'FX', icon: DollarSign },
   { path: '/crypto', label: 'Crypto', icon: Bitcoin },
   { path: '/portfolio', label: 'Portfolio', icon: Briefcase },
+  { path: '/my-portfolio', label: 'My Portfolio', icon: Wallet },
   { path: '/history', label: 'History', icon: Clock },
   { path: '/simulate', label: 'Simulate', icon: PlayCircle },
   { path: '/advisor', label: 'Advisor', icon: Bot },
   { path: '/predictions', label: 'Predictions', icon: Target },
+  { path: '/truth', label: 'Signal Truth', icon: ShieldCheck },
   { path: '/training', label: 'Training', icon: GraduationCap },
   { path: '/diagnostics', label: 'Diagnostics', icon: Cpu },
+  { path: '/feedback', label: 'Feedback', icon: MessageCircle },
+  { path: '/about', label: 'About', icon: Info },
 ]
 
 export default function App() {
   const [chatOpen, setChatOpen] = useState(false)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
   const location = useLocation()
 
   const currentTab = tabs.find(t =>
@@ -79,6 +88,21 @@ export default function App() {
         </button>
       </header>
 
+      {/* Beta Banner */}
+      {!bannerDismissed && (
+        <div className="bg-cyan-900/30 border-b border-cyan-800/40 px-4 py-2 flex items-center justify-between text-sm">
+          <span className="text-cyan-300/90">
+            Beta &mdash; Signal tracking started 15 March 2026. Signals shown transparently &mdash; good and bad. Not financial advice.
+          </span>
+          <button
+            onClick={() => setBannerDismissed(true)}
+            className="text-cyan-400/60 hover:text-cyan-300 ml-4 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Content */}
       <div className="flex flex-1 overflow-hidden">
         <main className={`flex-1 overflow-y-auto p-6 transition-all ${chatOpen ? 'mr-96' : ''}`}>
@@ -88,13 +112,17 @@ export default function App() {
             <Route path="/fx" element={<FX />} />
             <Route path="/crypto" element={<Crypto />} />
             <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/my-portfolio" element={<MyPortfolio />} />
             <Route path="/history" element={<History />} />
             <Route path="/simulate" element={<Simulate />} />
             <Route path="/advisor" element={<Advisor />} />
             <Route path="/predictions" element={<Predictions />} />
+            <Route path="/truth" element={<Truth />} />
             <Route path="/training" element={<Training />} />
             <Route path="/diagnostics" element={<Diagnostics />} />
             <Route path="/admin" element={<Admin />} />
+            <Route path="/feedback" element={<Feedback />} />
+            <Route path="/about" element={<About />} />
           </Routes>
         </main>
 

@@ -138,6 +138,150 @@ export interface ConfidenceBand {
   accuracy: number
 }
 
+export interface SignalTruthData {
+  total_signals: number
+  total_resolved: number
+  total_pending: number
+  total_correct: number
+  overall_accuracy: number
+  by_signal_type: { signal_type: string; correct: number; total: number; accuracy: number }[]
+  by_asset_class: { asset_class: string; correct: number; total: number; accuracy: number }[]
+  rolling: {
+    today: { resolved: number; correct: number; accuracy: number }
+    this_week: { resolved: number; correct: number; accuracy: number }
+    all_time: { resolved: number; correct: number; accuracy: number }
+  }
+  per_asset: { asset: string; correct: number; total: number; accuracy: number }[]
+  signals: SignalTruthRecord[]
+}
+
+export interface SignalTruthRecord {
+  id: number
+  timestamp: string
+  asset: string
+  asset_class: string
+  signal_type: string
+  price_at_signal: number
+  confidence: number
+  linreg_prob: number | null
+  logreg_prob: number | null
+  gbt_prob: number | null
+  outcome_price: number | null
+  pct_change: number | null
+  was_correct: boolean | null
+  resolution_ts: string | null
+}
+
+export async function fetchSignalTruth(): Promise<SignalTruthData> {
+  const res = await fetch(`${BASE}/api/v1/signals/truth?limit=1000`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+// ── User Portfolio Tracker ──
+
+export interface UserHolding {
+  id: number
+  symbol: string
+  quantity: number
+  start_date: string
+  asset_class: string
+  created_at: string | null
+}
+
+export interface AssetComparison {
+  symbol: string
+  asset_class: string
+  quantity: number
+  start_date: string
+  actual_start_date: string
+  start_price: number
+  current_price: number
+  cost_basis: number
+  buy_hold_value: number
+  buy_hold_return_pct: number
+  signal_value: number
+  signal_return_pct: number
+  signals_used: number
+  signal_tracking_start: string | null
+  note: string | null
+}
+
+export interface PortfolioComparison {
+  has_data: boolean
+  note?: string
+  total_cost?: number
+  buy_hold_value?: number
+  buy_hold_return_pct?: number
+  signal_value?: number
+  signal_return_pct?: number
+  verdict?: 'signals_win' | 'buy_hold_wins' | 'roughly_equal'
+  per_asset?: AssetComparison[]
+}
+
+export async function fetchUserHoldings(): Promise<UserHolding[]> {
+  const res = await fetch(`${BASE}/api/v1/user-portfolio`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function addUserHolding(symbol: string, quantity: number, start_date: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/v1/user-portfolio`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, quantity, start_date }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+export async function updateUserHolding(id: number, quantity: number, start_date: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/v1/user-portfolio/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quantity, start_date }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+export async function deleteUserHolding(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/v1/user-portfolio/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+export async function comparePortfolio(): Promise<PortfolioComparison> {
+  const res = await fetch(`${BASE}/api/v1/user-portfolio/compare`, { method: 'POST' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+// ── Feedback ──
+
+export async function submitSignalFeedback(asset: string, signalType: string, reaction: 'up' | 'down'): Promise<void> {
+  const res = await fetch(`${BASE}/api/v1/feedback/signal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ asset, signal_type: signalType, reaction }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+export interface SurveyFeedback {
+  q_understand?: string
+  q_check_daily?: string
+  q_trust_more?: string
+  q_missing?: string
+  q_would_pay?: string
+}
+
+export async function submitSurveyFeedback(survey: SurveyFeedback): Promise<void> {
+  const res = await fetch(`${BASE}/api/v1/feedback/survey`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(survey),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
 export async function sendChat(message: string, tabContext: string): Promise<string> {
   const res = await fetch(`${BASE}/api/v1/chat`, {
     method: 'POST',
