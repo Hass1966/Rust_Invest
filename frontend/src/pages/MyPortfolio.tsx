@@ -1,16 +1,22 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Trash2, Plus, RefreshCw, Edit2, Check, X } from 'lucide-react'
 import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts'
+import {
   fetchUserHoldings, addUserHolding, updateUserHolding,
   deleteUserHolding, comparePortfolio,
 } from '../lib/api'
 import type { UserHolding, PortfolioComparison, AssetComparison } from '../lib/api'
+
+type Frequency = 'weekly' | 'daily' | 'hourly'
 
 export default function MyPortfolio() {
   const [holdings, setHoldings] = useState<UserHolding[]>([])
   const [comparison, setComparison] = useState<PortfolioComparison | null>(null)
   const [loading, setLoading] = useState(true)
   const [comparing, setComparing] = useState(false)
+  const [frequency, setFrequency] = useState<Frequency>('weekly')
   const [editId, setEditId] = useState<number | null>(null)
   const [editQty, setEditQty] = useState('')
   const [editDate, setEditDate] = useState('')
@@ -29,16 +35,17 @@ export default function MyPortfolio() {
   }, [])
 
   const runComparison = useCallback(() => {
+    if (frequency === 'hourly') return
     setComparing(true)
-    comparePortfolio()
+    comparePortfolio(frequency)
       .then(setComparison)
       .catch(() => setComparison(null))
       .finally(() => setComparing(false))
-  }, [])
+  }, [frequency])
 
   useEffect(() => { loadHoldings() }, [loadHoldings])
 
-  // Auto-run comparison when holdings change
+  // Auto-run comparison when holdings or frequency change
   useEffect(() => {
     if (holdings.length > 0) runComparison()
     else setComparison(null)
@@ -66,12 +73,15 @@ export default function MyPortfolio() {
     }
   }
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: number, symbol: string) => {
+    if (!confirm(`Are you sure you want to remove ${symbol} from your portfolio?`)) return
+    setAddError('')
     try {
       await deleteUserHolding(id)
-      loadHoldings()
-    } catch {
-      setAddError('Failed to delete holding')
+      setHoldings(prev => prev.filter(h => h.id !== id))
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      setAddError(`Failed to delete ${symbol}: ${msg}`)
     }
   }
 
@@ -117,9 +127,8 @@ export default function MyPortfolio() {
       {/* Caveat */}
       <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
         <p className="text-sm text-amber-300/90">
-          <strong>Important:</strong> Signal history only exists from the date tracking began.
-          For any period before that, both modes use buy &amp; hold as the baseline.
-          Results only diverge from the point signals started being recorded for each asset.
+          <strong>Note:</strong> Signals are retroactively generated using trained models.
+          This is a simulated backtest, not out-of-sample results.
         </p>
       </div>
 
@@ -173,7 +182,7 @@ export default function MyPortfolio() {
               className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 cursor-pointer disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${comparing ? 'animate-spin' : ''}`} />
-              {comparing ? 'Comparing...' : 'Refresh'}
+              {comparing ? 'Backtesting...' : 'Refresh'}
             </button>
           </div>
           <div className="overflow-x-auto">
@@ -219,7 +228,7 @@ export default function MyPortfolio() {
                           <button onClick={() => handleEdit(h)} className="text-gray-400 hover:text-gray-300 cursor-pointer p-1">
                             <Edit2 className="w-4 h-4" />
                           </button>
-                          <button onClick={() => handleDelete(h.id)} className="text-red-400/60 hover:text-red-400 cursor-pointer p-1">
+                          <button onClick={() => handleDelete(h.id, h.symbol)} className="text-red-400/60 hover:text-red-400 cursor-pointer p-1">
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
@@ -233,6 +242,36 @@ export default function MyPortfolio() {
         </div>
       )}
 
+      {/* Frequency tabs */}
+      {holdings.length > 0 && (
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500 uppercase tracking-wider">Signal frequency</span>
+          <div className="flex gap-2">
+            {(['weekly', 'daily', 'hourly'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => f !== 'hourly' && setFrequency(f)}
+                disabled={f === 'hourly'}
+                className={`px-4 py-1.5 rounded text-sm transition-colors ${
+                  f === 'hourly'
+                    ? 'bg-[#0a0e17] text-gray-600 border border-[#1f2937] cursor-not-allowed'
+                    : frequency === f
+                      ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 cursor-pointer'
+                      : 'bg-[#0a0e17] text-gray-400 border border-[#1f2937] hover:border-[#374151] cursor-pointer'
+                }`}
+                title={f === 'hourly' ? 'Available after next training run' : undefined}
+              >
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+          {comparing && <span className="text-xs text-gray-500 animate-pulse">Generating signals...</span>}
+          {frequency === 'daily' && !comparing && (
+            <span className="text-xs text-gray-600">Daily mode may take 30-60s</span>
+          )}
+        </div>
+      )}
+
       {/* Comparison results */}
       {comparison?.has_data && (
         <>
@@ -242,6 +281,49 @@ export default function MyPortfolio() {
               {verdictText}
             </div>
           </div>
+
+          {/* Metrics row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <MetricCard label="Sharpe (Signals)" value={comparison.sharpe_signals?.toFixed(2) ?? '-'} />
+            <MetricCard label="Sharpe (B&H)" value={comparison.sharpe_buy_hold?.toFixed(2) ?? '-'} />
+            <MetricCard label="Win Rate" value={comparison.overall_win_rate_pct != null ? `${comparison.overall_win_rate_pct.toFixed(1)}%` : '-'} />
+            <MetricCard label="Total Trades" value={comparison.total_trades?.toString() ?? '-'} />
+          </div>
+
+          {/* Equity curve chart */}
+          {comparison.equity_curve && comparison.equity_curve.length > 1 && (
+            <div className="bg-[#111827] border border-[#1f2937] rounded-xl p-6">
+              <div className="text-gray-400 text-xs uppercase tracking-wider mb-3">
+                Portfolio equity curve
+              </div>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={comparison.equity_curve} margin={{ left: 10, right: 10, top: 5, bottom: 5 }}>
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: '#4b5563', fontSize: 11 }}
+                    tickFormatter={v => v.slice(5)}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fill: '#4b5563', fontSize: 11 }}
+                    tickFormatter={v => `$${(v / 1000).toFixed(1)}k`}
+                    width={60}
+                    domain={['auto', 'auto']}
+                  />
+                  <Tooltip
+                    contentStyle={{ background: '#111827', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
+                    labelStyle={{ color: '#e5e7eb' }}
+                    formatter={(v: number | undefined, name?: string) => [formatCurrency(v ?? 0), name === 'signal_value' ? 'Follow Signals' : 'Buy & Hold']}
+                  />
+                  <Legend formatter={v => v === 'signal_value' ? 'Follow Signals' : 'Buy & Hold'} />
+                  <Line type="monotone" dataKey="signal_value" name="signal_value"
+                    stroke="#06b6d4" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="buy_hold_value" name="buy_hold_value"
+                    stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="4 4" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Side by side comparison */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -287,12 +369,12 @@ export default function MyPortfolio() {
                     <th className="text-right py-2 px-2">Qty</th>
                     <th className="text-right py-2 px-2">Start</th>
                     <th className="text-right py-2 px-2">Now</th>
-                    <th className="text-right py-2 px-2">B&amp;H Value</th>
                     <th className="text-right py-2 px-2">B&amp;H %</th>
-                    <th className="text-right py-2 px-2">Signal Value</th>
                     <th className="text-right py-2 px-2">Signal %</th>
                     <th className="text-center py-2 px-2">Winner</th>
-                    <th className="text-right py-2 px-2 hidden sm:table-cell">Signals</th>
+                    <th className="text-right py-2 px-2 hidden sm:table-cell">Trades</th>
+                    <th className="text-right py-2 px-2 hidden sm:table-cell">Win %</th>
+                    <th className="text-right py-2 px-2 hidden md:table-cell">Sharpe</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -315,6 +397,15 @@ export default function MyPortfolio() {
   )
 }
 
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4 text-center">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      <div className="text-lg font-semibold text-white">{value}</div>
+    </div>
+  )
+}
+
 function AssetRow({ asset: a }: { asset: AssetComparison }) {
   const signalBetter = a.signal_return_pct > a.buy_hold_return_pct + 1
   const holdBetter = a.buy_hold_return_pct > a.signal_return_pct + 1
@@ -327,25 +418,20 @@ function AssetRow({ asset: a }: { asset: AssetComparison }) {
         <div className="text-gray-200 font-medium">{a.symbol}</div>
         <div className="text-xs text-gray-600 capitalize">{a.asset_class}</div>
         {a.note && <div className="text-xs text-amber-400/70">{a.note}</div>}
-        {a.signal_tracking_start && (
-          <div className="text-xs text-gray-600">
-            Signals from: {a.signal_tracking_start.slice(0, 10)}
-          </div>
-        )}
       </td>
       <td className="py-2 px-2 text-right text-gray-400">{a.quantity}</td>
       <td className="py-2 px-2 text-right text-gray-400">{formatPrice(a.start_price)}</td>
       <td className="py-2 px-2 text-right text-gray-300">{formatPrice(a.current_price)}</td>
-      <td className="py-2 px-2 text-right text-gray-300">{formatCurrency(a.buy_hold_value)}</td>
       <td className={`py-2 px-2 text-right ${a.buy_hold_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
         {a.buy_hold_return_pct >= 0 ? '+' : ''}{a.buy_hold_return_pct.toFixed(2)}%
       </td>
-      <td className="py-2 px-2 text-right text-gray-300">{formatCurrency(a.signal_value)}</td>
       <td className={`py-2 px-2 text-right ${a.signal_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
         {a.signal_return_pct >= 0 ? '+' : ''}{a.signal_return_pct.toFixed(2)}%
       </td>
       <td className={`py-2 px-2 text-center font-medium ${winnerColor}`}>{winner}</td>
-      <td className="py-2 px-2 text-right text-gray-500 hidden sm:table-cell">{a.signals_used}</td>
+      <td className="py-2 px-2 text-right text-gray-500 hidden sm:table-cell">{a.total_trades}</td>
+      <td className="py-2 px-2 text-right text-gray-500 hidden sm:table-cell">{a.win_rate_pct.toFixed(1)}%</td>
+      <td className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">{a.sharpe_signals.toFixed(2)}</td>
     </tr>
   )
 }

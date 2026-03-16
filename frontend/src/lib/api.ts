@@ -189,6 +189,12 @@ export interface UserHolding {
   created_at: string | null
 }
 
+export interface EquityCurvePoint {
+  date: string
+  signal_value: number
+  buy_hold_value: number
+}
+
 export interface AssetComparison {
   symbol: string
   asset_class: string
@@ -203,19 +209,29 @@ export interface AssetComparison {
   signal_value: number
   signal_return_pct: number
   signals_used: number
-  signal_tracking_start: string | null
+  total_trades: number
+  win_rate_pct: number
+  sharpe_signals: number
+  sharpe_buy_hold: number
+  equity_curve: EquityCurvePoint[]
   note: string | null
 }
 
 export interface PortfolioComparison {
   has_data: boolean
   note?: string
+  frequency?: string
   total_cost?: number
   buy_hold_value?: number
   buy_hold_return_pct?: number
   signal_value?: number
   signal_return_pct?: number
   verdict?: 'signals_win' | 'buy_hold_wins' | 'roughly_equal'
+  sharpe_signals?: number
+  sharpe_buy_hold?: number
+  overall_win_rate_pct?: number
+  total_trades?: number
+  equity_curve?: EquityCurvePoint[]
   per_asset?: AssetComparison[]
 }
 
@@ -245,11 +261,18 @@ export async function updateUserHolding(id: number, quantity: number, start_date
 
 export async function deleteUserHolding(id: number): Promise<void> {
   const res = await fetch(`${BASE}/api/v1/user-portfolio/${id}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `Server returned ${res.status}`)
+  }
 }
 
-export async function comparePortfolio(): Promise<PortfolioComparison> {
-  const res = await fetch(`${BASE}/api/v1/user-portfolio/compare`, { method: 'POST' })
+export async function comparePortfolio(frequency: string = 'weekly'): Promise<PortfolioComparison> {
+  const res = await fetch(`${BASE}/api/v1/user-portfolio/compare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frequency }),
+  })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }

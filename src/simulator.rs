@@ -37,6 +37,179 @@ pub struct SimAsset {
     pub contribution_pct: f64,
 }
 
+// ── Cached model infrastructure ──────────────────────────────
+
+/// Pre-loaded model weights for a single asset (avoids re-reading JSON per date)
+pub struct CachedModels {
+    pub linreg: model_store::SavedWeights,
+    pub logreg: model_store::SavedWeights,
+    pub gbt_saved: model_store::SavedGBT,
+    pub gbt_classifier: gbt::GradientBoostedClassifier,
+}
+
+/// Load all 3 model files for a symbol once
+pub fn load_models_for_symbol(symbol: &str) -> Option<CachedModels> {
+    let linreg = model_store::load_weights(symbol, "linreg").ok()?;
+    let logreg = model_store::load_weights(symbol, "logreg").ok()?;
+    let (gbt_saved, gbt_classifier) = model_store::load_gbt(symbol).ok()?;
+    Some(CachedModels { linreg, logreg, gbt_saved, gbt_classifier })
+}
+
+// ── Shared helpers ───────────────────────────────────────────
+
+/// Build market context from DB (shared by simulator + portfolio backtest)
+pub fn build_market_context_from_db(database: &db::Database) -> features::MarketContext {
+    let mut market_histories: HashMap<String, Vec<f64>> = HashMap::new();
+    let spy_prices: Vec<f64> = database.get_stock_history("SPY")
+        .unwrap_or_default().iter().map(|p| p.price).collect();
+    market_histories.insert("SPY".to_string(), spy_prices);
+    for ticker in features::MARKET_TICKERS {
+        let prices = database.get_market_prices(ticker).unwrap_or_default();
+        market_histories.insert(ticker.to_string(), prices);
+    }
+    features::build_market_context(&market_histories)
+}
+
+/// Load full price history for a single asset as Vec<(date, price)>
+pub fn load_asset_prices(
+    database: &db::Database,
+    symbol: &str,
+    asset_class: &str,
+) -> Vec<(String, f64)> {
+    match asset_class {
+        "stock" => database.get_stock_history(symbol)
+            .unwrap_or_default().into_iter()
+            .map(|p| (p.timestamp[..10].to_string(), p.price))
+            .collect(),
+        "fx" => database.get_fx_history(symbol)
+            .unwrap_or_default().into_iter()
+            .map(|p| (p.timestamp[..10].to_string(), p.price))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+// ── Signal generation (public for portfolio backtest) ────────
+
+/// Generate a signal for a specific historical date using cached models.
+/// Cuts off price data at `date` to avoid look-ahead bias.
+pub fn generate_signal_cached(
+    symbol: &str,
+    asset_class: &str,
+    date: &str,
+    asset_prices: &HashMap<String, Vec<(String, f64)>>,
+    market_context: &features::MarketContext,
+    models: &CachedModels,
+) -> Option<String> {
+    let points_full = asset_prices.get(symbol)?;
+
+    let cutoff_points: Vec<analysis::PricePoint> = points_full.iter()
+        .filter(|(d, _)| d.as_str() <= date)
+        .map(|(d, p)| analysis::PricePoint {
+            timestamp: d.clone(),
+            price: *p,
+            volume: None,
+        })
+        .collect();
+
+    if cutoff_points.len() < 100 { return None; }
+
+    let prices: Vec<f64> = cutoff_points.iter().map(|p| p.price).collect();
+    let volumes: Vec<Option<f64>> = cutoff_points.iter().map(|_| None).collect();
+    let timestamps: Vec<String> = cutoff_points.iter().map(|p| p.timestamp.clone()).collect();
+
+    let samples = match asset_class {
+        "stock" | "fx" => features::build_rich_features(
+            &prices, &volumes, &timestamps,
+            Some(market_context), asset_class,
+            if asset_class == "stock" { features::sector_etf_for(symbol) } else { None },
+            None, None,
+        ),
+        _ => return None,
+    };
+
+    if samples.is_empty() { return None; }
+
+    let wf = infer_with_cached(symbol, &samples, models)?;
+
+    let result = analysis::analyse_coin(symbol, &cutoff_points);
+    let sma_7 = analysis::sma(&prices, 7);
+    let sma_30 = analysis::sma(&prices, 30);
+    let trend = match (sma_7.last(), sma_30.last()) {
+        (Some(s), Some(l)) if s > l => "BULLISH",
+        _ => "BEARISH",
+    };
+
+    let signal = ensemble::ensemble_signal(
+        symbol, &wf, result.current_price,
+        result.rsi_14.unwrap_or(50.0), trend,
+    );
+
+    Some(signal.signal.clone())
+}
+
+/// Run inference using pre-loaded model weights (no disk reads)
+pub fn infer_with_cached(
+    symbol: &str,
+    samples: &[ml::Sample],
+    models: &CachedModels,
+) -> Option<ensemble::WalkForwardResult> {
+    if samples.is_empty() { return None; }
+    let n_features = samples[0].features.len();
+    let feat = &samples.last().unwrap().features;
+
+    let lin_feat = norm(feat, &models.linreg.norm_means, &models.linreg.norm_stds);
+    let raw_lin: f64 = models.linreg.bias + models.linreg.weights.iter().zip(lin_feat.iter()).map(|(w, f)| w * f).sum::<f64>();
+    let lin_prob = (1.0 / (1.0 + (-raw_lin).exp())).clamp(0.15, 0.85);
+
+    let log_feat = norm(feat, &models.logreg.norm_means, &models.logreg.norm_stds);
+    let log_z: f64 = models.logreg.bias + models.logreg.weights.iter().zip(log_feat.iter()).map(|(w, f)| w * f).sum::<f64>();
+    let log_prob = (1.0 / (1.0 + (-log_z).exp())).clamp(0.15, 0.85);
+
+    let gbt_feat = norm(feat, &models.gbt_saved.norm_means, &models.gbt_saved.norm_stds);
+    let gbt_prob = models.gbt_classifier.predict_proba(&gbt_feat).clamp(0.15, 0.85);
+
+    Some(ensemble::WalkForwardResult {
+        symbol: symbol.to_string(),
+        linear_accuracy: models.linreg.meta.walk_forward_accuracy,
+        logistic_accuracy: models.logreg.meta.walk_forward_accuracy,
+        gbt_accuracy: models.gbt_saved.meta.walk_forward_accuracy,
+        lstm_accuracy: 50.0,
+        gru_accuracy: 50.0,
+        rf_accuracy: 50.0,
+        n_folds: 1,
+        total_test_samples: 0,
+        linear_recent: models.linreg.meta.walk_forward_accuracy,
+        logistic_recent: models.logreg.meta.walk_forward_accuracy,
+        gbt_recent: models.gbt_saved.meta.walk_forward_accuracy,
+        lstm_recent: 50.0,
+        gru_recent: 50.0,
+        rf_recent: 50.0,
+        final_linear_prob: lin_prob,
+        final_logistic_prob: log_prob,
+        final_gbt_prob: gbt_prob,
+        final_lstm_prob: 0.5,
+        final_gru_prob: 0.5,
+        final_rf_prob: 0.5,
+        gbt_importance: Vec::new(),
+        n_features,
+        has_lstm: false,
+        has_gru: false,
+        has_rf: false,
+        stacking_weights: None,
+    })
+}
+
+pub fn norm(features: &[f64], means: &[f64], stds: &[f64]) -> Vec<f64> {
+    features.iter().enumerate().map(|(i, &f)| {
+        let mean = means.get(i).copied().unwrap_or(0.0);
+        let std = stds.get(i).copied().unwrap_or(1.0);
+        if std == 0.0 { f - mean } else { (f - mean) / std }
+    }).collect()
+}
+
+// ── Original simulation (uses uncached path for backward compat) ──
+
 pub fn run_simulation(
     days: usize,
     capital: f64,
@@ -61,15 +234,7 @@ pub fn run_simulation(
         .collect();
 
     // Market context
-    let mut market_histories: HashMap<String, Vec<f64>> = HashMap::new();
-    let spy_prices: Vec<f64> = database.get_stock_history("SPY")
-        .unwrap_or_default().iter().map(|p| p.price).collect();
-    market_histories.insert("SPY".to_string(), spy_prices);
-    for ticker in features::MARKET_TICKERS {
-        let prices = database.get_market_prices(ticker).unwrap_or_default();
-        market_histories.insert(ticker.to_string(), prices);
-    }
-    let market_context = features::build_market_context(&market_histories);
+    let market_context = build_market_context_from_db(&database);
 
     // Load price history
     let mut asset_prices: HashMap<String, Vec<(String, f64)>> = HashMap::new();
@@ -270,6 +435,8 @@ pub fn run_simulation(
     })
 }
 
+// ── Private helpers for run_simulation (uncached path) ───────
+
 fn generate_signal_for_date(
     symbol: &str,
     asset_class: &str,
@@ -374,12 +541,4 @@ fn infer_quiet(symbol: &str, samples: &[ml::Sample]) -> Option<ensemble::WalkFor
         has_rf: false,
         stacking_weights: None,
     })
-}
-
-fn norm(features: &[f64], means: &[f64], stds: &[f64]) -> Vec<f64> {
-    features.iter().enumerate().map(|(i, &f)| {
-        let mean = means.get(i).copied().unwrap_or(0.0);
-        let std = stds.get(i).copied().unwrap_or(1.0);
-        if std == 0.0 { f - mean } else { (f - mean) / std }
-    }).collect()
 }

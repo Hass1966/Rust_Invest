@@ -11,7 +11,7 @@
 use rust_invest::*;
 use axum::{
     Router,
-    routing::{get, post, patch, put, delete},
+    routing::{get, post, patch, put},
     extract::{Path, Query, State},
     Json,
     http::StatusCode,
@@ -182,9 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/signals/truth", get(get_signal_truth))
         .route("/api/v1/user-portfolio", get(get_user_holdings))
         .route("/api/v1/user-portfolio", post(add_user_holding))
-        .route("/api/v1/user-portfolio/{id}", put(update_user_holding))
-        .route("/api/v1/user-portfolio/{id}", delete(delete_user_holding))
         .route("/api/v1/user-portfolio/compare", post(compare_portfolio))
+        .route("/api/v1/user-portfolio/{id}", put(update_user_holding).delete(delete_user_holding))
         .route("/api/v1/feedback/signal", post(submit_signal_feedback))
         .route("/api/v1/feedback/survey", post(submit_survey_feedback))
         .route("/api/v1/feedback", get(get_feedback))
@@ -1836,10 +1835,19 @@ fn is_crypto_id(s: &str) -> bool {
 }
 
 /// POST /api/v1/user-portfolio/compare — run Follow Signals vs Buy & Hold comparison
+// ── Portfolio backtest ────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct CompareRequest {
+    frequency: Option<String>, // "daily" | "weekly", default "weekly"
+}
+
 async fn compare_portfolio(
     State(state): State<AppState>,
+    Json(req): Json<CompareRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let db_path = state.db_path.clone();
+    let frequency = req.frequency.unwrap_or_else(|| "weekly".to_string());
 
     let result = tokio::task::spawn_blocking(move || {
         let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -1852,17 +1860,28 @@ async fn compare_portfolio(
             }));
         }
 
+        // Build market context ONCE for all holdings
+        let market_context = simulator::build_market_context_from_db(&database);
+
         let mut per_asset = Vec::new();
         let mut total_buy_hold = 0.0_f64;
         let mut total_follow_signals = 0.0_f64;
         let mut total_cost = 0.0_f64;
+        let mut total_trades = 0_usize;
+        let mut total_wins = 0_usize;
+        let mut total_trade_signals = 0_usize;
 
         for holding in &holdings {
-            let asset_result = compute_holding_comparison(&database, holding);
+            let asset_result = backtest_holding(
+                &database, holding, &frequency, &market_context,
+            );
             if let Some(ar) = asset_result {
                 total_cost += ar.cost_basis;
                 total_buy_hold += ar.buy_hold_value;
                 total_follow_signals += ar.signal_value;
+                total_trades += ar.total_trades;
+                total_wins += ar.wins;
+                total_trade_signals += ar.trade_signals;
                 per_asset.push(ar);
             }
         }
@@ -1882,7 +1901,20 @@ async fn compare_portfolio(
             "buy_hold_wins"
         };
 
+        let overall_win_rate = if total_trade_signals > 0 {
+            total_wins as f64 / total_trade_signals as f64 * 100.0
+        } else { 0.0 };
+
+        // Build aggregate equity curve (sum across assets by date)
+        let agg_curve = build_aggregate_equity_curve(&per_asset);
+
+        // Compute portfolio-level Sharpe from aggregate curve
+        let annualise = if frequency == "weekly" { 52.0_f64.sqrt() } else { 252.0_f64.sqrt() };
+        let (sharpe_sig, sharpe_bh) = compute_sharpe_from_curve(&agg_curve, annualise);
+
         let per_asset_json: Vec<serde_json::Value> = per_asset.iter().map(|a| {
+            // Downsample per-asset curve for JSON
+            let curve = downsample_curve(&a.equity_curve, 300);
             serde_json::json!({
                 "symbol": a.symbol,
                 "asset_class": a.asset_class,
@@ -1897,19 +1929,31 @@ async fn compare_portfolio(
                 "signal_value": round2(a.signal_value),
                 "signal_return_pct": round2(a.signal_return_pct),
                 "signals_used": a.signals_used,
-                "signal_tracking_start": a.signal_tracking_start,
+                "total_trades": a.total_trades,
+                "win_rate_pct": round2(a.win_rate_pct),
+                "sharpe_signals": round2(a.sharpe_signals),
+                "sharpe_buy_hold": round2(a.sharpe_buy_hold),
+                "equity_curve": curve,
                 "note": a.note,
             })
         }).collect();
 
+        let agg_curve_json = downsample_curve(&agg_curve, 500);
+
         Ok(serde_json::json!({
             "has_data": true,
+            "frequency": frequency,
             "total_cost": round2(total_cost),
             "buy_hold_value": round2(total_buy_hold),
             "buy_hold_return_pct": round2(buy_hold_return),
             "signal_value": round2(total_follow_signals),
             "signal_return_pct": round2(signal_return),
             "verdict": verdict,
+            "sharpe_signals": round2(sharpe_sig),
+            "sharpe_buy_hold": round2(sharpe_bh),
+            "overall_win_rate_pct": round2(overall_win_rate),
+            "total_trades": total_trades,
+            "equity_curve": agg_curve_json,
             "per_asset": per_asset_json,
         }))
     }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
@@ -1919,7 +1963,7 @@ async fn compare_portfolio(
 
 fn round2(v: f64) -> f64 { (v * 100.0).round() / 100.0 }
 
-struct AssetComparison {
+struct BacktestResult {
     symbol: String,
     asset_class: String,
     quantity: f64,
@@ -1933,11 +1977,27 @@ struct AssetComparison {
     signal_value: f64,
     signal_return_pct: f64,
     signals_used: usize,
-    signal_tracking_start: Option<String>,
+    total_trades: usize,
+    wins: usize,
+    trade_signals: usize,
+    win_rate_pct: f64,
+    sharpe_signals: f64,
+    sharpe_buy_hold: f64,
+    equity_curve: Vec<(String, f64, f64)>, // (date, signal_value, buy_hold_value)
     note: Option<String>,
 }
 
-fn compute_holding_comparison(database: &db::Database, holding: &db::UserHolding) -> Option<AssetComparison> {
+fn backtest_holding(
+    database: &db::Database,
+    holding: &db::UserHolding,
+    frequency: &str,
+    market_context: &features::MarketContext,
+) -> Option<BacktestResult> {
+    // 1. Get price history
+    let all_prices = simulator::load_asset_prices(database, &holding.symbol, &holding.asset_class);
+    if all_prices.is_empty() { return None; }
+
+    // Also get start/current price from DB (handles exact date lookup)
     let (start_price, actual_start_date, current_price) = match holding.asset_class.as_str() {
         "stock" => {
             let (date, price) = database.get_stock_price_at_date(&holding.symbol, &holding.start_date).ok()??;
@@ -1963,86 +2023,226 @@ fn compute_holding_comparison(database: &db::Database, holding: &db::UserHolding
     let buy_hold_value = holding.quantity * current_price;
     let buy_hold_return_pct = (current_price - start_price) / start_price * 100.0;
 
-    // Get signal tracking start for this asset
-    let signal_tracking_start = database.get_signal_tracking_start(&holding.symbol).ok().flatten();
-
-    // Get all signals from start_date onwards
-    let signals = database.get_signal_history_for_asset_from(&holding.symbol, &holding.start_date)
-        .unwrap_or_default();
-
     let note = if actual_start_date != holding.start_date {
         Some(format!("Exact date unavailable. Using nearest: {}", actual_start_date))
     } else {
         None
     };
 
-    // Simulate Follow The Signals
-    // Start: we hold the asset (we bought it on start_date)
-    let signal_value;
-    let signals_used;
+    // 2. Build price lookup & date list from actual_start_date onwards
+    let price_map: std::collections::HashMap<String, f64> = all_prices.iter().cloned().collect();
+    let trading_dates: Vec<String> = all_prices.iter()
+        .filter(|(d, _)| d.as_str() >= actual_start_date.as_str())
+        .map(|(d, _)| d.clone())
+        .collect();
 
-    if signals.is_empty() {
-        // No signal history for this asset — both modes are identical
-        signal_value = buy_hold_value;
-        signals_used = 0;
+    if trading_dates.is_empty() {
+        return Some(BacktestResult {
+            symbol: holding.symbol.clone(),
+            asset_class: holding.asset_class.clone(),
+            quantity: holding.quantity,
+            start_date: holding.start_date.clone(),
+            actual_start_date,
+            start_price, current_price, cost_basis,
+            buy_hold_value, buy_hold_return_pct,
+            signal_value: buy_hold_value,
+            signal_return_pct: buy_hold_return_pct,
+            signals_used: 0, total_trades: 0, wins: 0, trade_signals: 0,
+            win_rate_pct: 0.0, sharpe_signals: 0.0, sharpe_buy_hold: 0.0,
+            equity_curve: Vec::new(), note,
+        });
+    }
+
+    // 3. Determine signal dates based on frequency
+    let signal_dates: std::collections::HashSet<String> = if frequency == "weekly" {
+        weekly_signal_dates(&trading_dates)
     } else {
-        // Walk through signals chronologically
-        let mut in_position = true;
-        let mut shares = holding.quantity;
-        let mut cash = 0.0_f64;
-        let mut count = 0_usize;
+        trading_dates.iter().cloned().collect()
+    };
 
-        for sig in &signals {
-            match sig.signal_type.as_str() {
+    // 4. Try to load models (may fail for crypto or untrained assets)
+    let models = simulator::load_models_for_symbol(&holding.symbol);
+
+    // 5. Build asset_prices map for generate_signal_cached
+    let mut asset_prices_map: std::collections::HashMap<String, Vec<(String, f64)>> = std::collections::HashMap::new();
+    asset_prices_map.insert(holding.symbol.clone(), all_prices);
+
+    // 6. Walk through all trading dates, generating signals on signal_dates
+    let mut in_position = true;
+    let mut shares = holding.quantity;
+    let mut cash = 0.0_f64;
+    let mut total_trades = 0_usize;
+    let mut signals_used = 0_usize;
+    let mut wins = 0_usize;
+    let mut trade_signals = 0_usize;
+    let mut equity_curve: Vec<(String, f64, f64)> = Vec::new();
+
+    // Track last signal price for win/loss calculation
+    let mut last_trade_price: Option<(String, f64)> = None; // (signal_type, price)
+
+    for date in &trading_dates {
+        let price = match price_map.get(date.as_str()) {
+            Some(&p) if p > 0.0 => p,
+            _ => continue,
+        };
+
+        // Generate signal on signal dates
+        if signal_dates.contains(date) {
+            let signal = if let Some(ref m) = models {
+                simulator::generate_signal_cached(
+                    &holding.symbol, &holding.asset_class, date,
+                    &asset_prices_map, market_context, m,
+                ).unwrap_or_else(|| "HOLD".to_string())
+            } else {
+                "HOLD".to_string()
+            };
+
+            signals_used += 1;
+
+            match signal.as_str() {
                 "SELL" if in_position => {
-                    cash = shares * sig.price_at_signal;
+                    // Check if previous BUY was a win
+                    if let Some((ref sig_type, prev_price)) = last_trade_price {
+                        if sig_type == "BUY" && price > prev_price { wins += 1; }
+                        trade_signals += 1;
+                    }
+                    cash = shares * price;
                     shares = 0.0;
                     in_position = false;
-                    count += 1;
+                    total_trades += 1;
+                    last_trade_price = Some(("SELL".to_string(), price));
                 }
                 "BUY" if !in_position => {
-                    if sig.price_at_signal > 0.0 {
-                        shares = cash / sig.price_at_signal;
+                    // Check if previous SELL was a win
+                    if let Some((ref sig_type, prev_price)) = last_trade_price {
+                        if sig_type == "SELL" && price < prev_price { wins += 1; }
+                        trade_signals += 1;
+                    }
+                    if price > 0.0 {
+                        shares = cash / price;
                     }
                     cash = 0.0;
                     in_position = true;
-                    count += 1;
+                    total_trades += 1;
+                    last_trade_price = Some(("BUY".to_string(), price));
                 }
-                _ => {
-                    count += 1;
-                }
+                _ => {}
             }
         }
 
-        signal_value = if in_position {
-            shares * current_price
-        } else {
-            cash
-        };
-        signals_used = count;
+        // Record equity curve point
+        let signal_val = if in_position { shares * price } else { cash };
+        let bh_val = holding.quantity * price;
+        equity_curve.push((date.clone(), round2(signal_val), round2(bh_val)));
     }
 
+    // Final values
+    let signal_value = if in_position {
+        shares * current_price
+    } else {
+        cash
+    };
     let signal_return_pct = if cost_basis > 0.0 {
         (signal_value - cost_basis) / cost_basis * 100.0
     } else { 0.0 };
 
-    Some(AssetComparison {
+    let win_rate_pct = if trade_signals > 0 {
+        wins as f64 / trade_signals as f64 * 100.0
+    } else { 0.0 };
+
+    // Compute Sharpe ratios from equity curve
+    let annualise = if frequency == "weekly" { 52.0_f64.sqrt() } else { 252.0_f64.sqrt() };
+    let sig_values: Vec<f64> = equity_curve.iter().map(|(_, s, _)| *s).collect();
+    let bh_values: Vec<f64> = equity_curve.iter().map(|(_, _, b)| *b).collect();
+    let sharpe_signals = compute_sharpe(&sig_values, annualise);
+    let sharpe_buy_hold = compute_sharpe(&bh_values, annualise);
+
+    Some(BacktestResult {
         symbol: holding.symbol.clone(),
         asset_class: holding.asset_class.clone(),
         quantity: holding.quantity,
         start_date: holding.start_date.clone(),
         actual_start_date,
-        start_price,
-        current_price,
-        cost_basis,
-        buy_hold_value,
-        buy_hold_return_pct,
-        signal_value,
-        signal_return_pct,
-        signals_used,
-        signal_tracking_start,
-        note,
+        start_price, current_price, cost_basis,
+        buy_hold_value, buy_hold_return_pct,
+        signal_value, signal_return_pct,
+        signals_used, total_trades, wins, trade_signals,
+        win_rate_pct, sharpe_signals, sharpe_buy_hold,
+        equity_curve, note,
     })
+}
+
+/// Pick the last trading day of each ISO week as signal dates
+fn weekly_signal_dates(dates: &[String]) -> std::collections::HashSet<String> {
+    use chrono::Datelike;
+    let mut weeks: std::collections::HashMap<(i32, u32), String> = std::collections::HashMap::new();
+    for d in dates {
+        if let Ok(nd) = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d") {
+            let key = (nd.iso_week().year(), nd.iso_week().week());
+            weeks.entry(key)
+                .and_modify(|existing| { if d.as_str() > existing.as_str() { *existing = d.clone(); } })
+                .or_insert_with(|| d.clone());
+        }
+    }
+    weeks.into_values().collect()
+}
+
+/// Compute annualised Sharpe ratio from a value series
+fn compute_sharpe(values: &[f64], annualise: f64) -> f64 {
+    if values.len() < 2 { return 0.0; }
+    let returns: Vec<f64> = values.windows(2)
+        .filter_map(|w| {
+            if w[0] > 0.0 { Some((w[1] - w[0]) / w[0]) } else { None }
+        })
+        .collect();
+    if returns.is_empty() { return 0.0; }
+    let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+    let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+    let std = variance.sqrt();
+    if std == 0.0 { return 0.0; }
+    (mean / std) * annualise
+}
+
+/// Compute Sharpe from aggregate equity curve tuples
+fn compute_sharpe_from_curve(curve: &[(String, f64, f64)], annualise: f64) -> (f64, f64) {
+    let sig: Vec<f64> = curve.iter().map(|(_, s, _)| *s).collect();
+    let bh: Vec<f64> = curve.iter().map(|(_, _, b)| *b).collect();
+    (compute_sharpe(&sig, annualise), compute_sharpe(&bh, annualise))
+}
+
+/// Build aggregate portfolio equity curve by summing per-asset curves aligned by date
+fn build_aggregate_equity_curve(assets: &[BacktestResult]) -> Vec<(String, f64, f64)> {
+    let mut by_date: std::collections::BTreeMap<String, (f64, f64)> = std::collections::BTreeMap::new();
+    for a in assets {
+        for (date, sig, bh) in &a.equity_curve {
+            let entry = by_date.entry(date.clone()).or_insert((0.0, 0.0));
+            entry.0 += sig;
+            entry.1 += bh;
+        }
+    }
+    by_date.into_iter().map(|(d, (s, b))| (d, round2(s), round2(b))).collect()
+}
+
+/// Downsample equity curve to at most `max_points` entries
+fn downsample_curve(curve: &[(String, f64, f64)], max_points: usize) -> Vec<serde_json::Value> {
+    if curve.len() <= max_points {
+        return curve.iter().map(|(d, s, b)| {
+            serde_json::json!({"date": d, "signal_value": s, "buy_hold_value": b})
+        }).collect();
+    }
+    let step = curve.len() as f64 / max_points as f64;
+    let mut result = Vec::with_capacity(max_points);
+    for i in 0..max_points {
+        let idx = (i as f64 * step) as usize;
+        let (ref d, s, b) = curve[idx.min(curve.len() - 1)];
+        result.push(serde_json::json!({"date": d, "signal_value": s, "buy_hold_value": b}));
+    }
+    // Always include the last point
+    if let Some((ref d, s, b)) = curve.last() {
+        let last = serde_json::json!({"date": d, "signal_value": s, "buy_hold_value": b});
+        if result.last() != Some(&last) { result.push(last); }
+    }
+    result
 }
 
 /// Check whether a signal should be resolved now, based on asset class, signal type,
