@@ -1,9 +1,12 @@
 import { useEffect, useState, useCallback } from 'react'
-import { fetchSignalTruth, submitSignalFeedback } from '../lib/api'
-import type { SignalTruthData, SignalTruthRecord } from '../lib/api'
+import { fetchSignalTruth, fetchHistoricalSignalAccuracy, submitSignalFeedback } from '../lib/api'
+import type { SignalTruthData, SignalTruthRecord, HistoricalSignalAccuracy } from '../lib/api'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
 
 export default function Truth() {
   const [data, setData] = useState<SignalTruthData | null>(null)
+  const [historical, setHistorical] = useState<HistoricalSignalAccuracy | null>(null)
+  const [histLoading, setHistLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<string>('all')
   const [classFilter, setClassFilter] = useState<string>('all')
@@ -17,20 +20,271 @@ export default function Truth() {
       .finally(() => setLoading(false))
   }, [])
 
-  useEffect(() => { load() }, [load])
+  const loadHistorical = useCallback(() => {
+    setHistLoading(true)
+    fetchHistoricalSignalAccuracy('weekly')
+      .then(setHistorical)
+      .catch(() => setHistorical(null))
+      .finally(() => setHistLoading(false))
+  }, [])
 
-  // Auto-refresh every 60 seconds
+  useEffect(() => { load(); loadHistorical() }, [load, loadHistorical])
+
+  // Auto-refresh live data every 60 seconds
   useEffect(() => {
     const interval = setInterval(load, 60_000)
     return () => clearInterval(interval)
   }, [load])
 
-  if (loading && !data) return <div className="text-gray-500 p-8">Loading signal truth...</div>
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h2 className="text-xl font-semibold text-white">Signal Truth</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Fully transparent, unfiltered track record. Every signal shown &mdash; good and bad.
+        </p>
+      </div>
+
+      {/* Historical Backtest Section */}
+      <HistoricalBacktest data={historical} loading={histLoading} onRefresh={loadHistorical} />
+
+      {/* Divider */}
+      <div className="border-t border-[#1f2937] pt-2">
+        <h3 className="text-lg font-semibold text-white">Live Signal Tracker</h3>
+        <p className="text-xs text-gray-500 mt-1">Forward-looking signals recorded since launch</p>
+      </div>
+
+      {/* Live tracker section (unchanged) */}
+      <LiveTracker data={data} loading={loading} load={load}
+        filter={filter} setFilter={setFilter}
+        classFilter={classFilter} setClassFilter={setClassFilter}
+        signalFilter={signalFilter} setSignalFilter={setSignalFilter}
+      />
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════
+// Historical Backtest Section
+// ═══════════════════════════════════════
+
+function HistoricalBacktest({ data, loading, onRefresh }: {
+  data: HistoricalSignalAccuracy | null
+  loading: boolean
+  onRefresh: () => void
+}) {
+  if (loading && !data) {
+    return (
+      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+        <div className="text-gray-500 text-center">Loading historical backtest...</div>
+      </div>
+    )
+  }
+
+  if (!data || !data.has_data) {
+    return (
+      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+        <h3 className="text-lg font-semibold text-white mb-2">Historical Signal Accuracy</h3>
+        <p className="text-gray-500 text-sm">
+          {data?.note || 'No holdings in portfolio. Add holdings to see historical signal accuracy.'}
+        </p>
+      </div>
+    )
+  }
+
+  const accColor = (acc: number) =>
+    acc >= 55 ? 'text-green-400' : acc >= 50 ? 'text-amber-400' : 'text-red-400'
+
+  const buyStats = data.by_signal_type.find(s => s.signal_type === 'BUY')
+  const sellStats = data.by_signal_type.find(s => s.signal_type === 'SELL')
+  const holdStats = data.by_signal_type.find(s => s.signal_type === 'HOLD')
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-white">Historical Signal Accuracy</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Retrospective backtest across all portfolio holdings
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-600">
+            {data.generated_at ? `Updated ${new Date(data.generated_at).toLocaleString()}` : ''}
+          </span>
+          <button onClick={onRefresh} className="text-xs text-cyan-400 hover:text-cyan-300 cursor-pointer">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Overall stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">Overall Accuracy</div>
+          <div className={`text-2xl font-bold ${accColor(data.overall_accuracy)}`}>
+            {data.total_resolved > 0 ? `${data.overall_accuracy.toFixed(1)}%` : '--'}
+          </div>
+          <div className="text-xs text-gray-600 mt-1">{data.total_correct}/{data.total_resolved - (holdStats?.total || 0)} BUY/SELL correct</div>
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">Total Signals</div>
+          <div className="text-2xl font-bold text-white">{data.total_signals.toLocaleString()}</div>
+          <div className="text-xs text-gray-600 mt-1">{data.total_pending} pending</div>
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">BUY Accuracy</div>
+          <div className={`text-2xl font-bold ${buyStats && buyStats.total > 0 ? accColor(buyStats.accuracy) : 'text-gray-600'}`}>
+            {buyStats && buyStats.total > 0 ? `${buyStats.accuracy.toFixed(1)}%` : '--'}
+          </div>
+          <div className="text-xs text-gray-600 mt-1">{buyStats?.correct || 0}/{buyStats?.total || 0} correct</div>
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">SELL Accuracy</div>
+          <div className={`text-2xl font-bold ${sellStats && sellStats.total > 0 ? accColor(sellStats.accuracy) : 'text-gray-600'}`}>
+            {sellStats && sellStats.total > 0 ? `${sellStats.accuracy.toFixed(1)}%` : '--'}
+          </div>
+          <div className="text-xs text-gray-600 mt-1">{sellStats?.correct || 0}/{sellStats?.total || 0} correct</div>
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">HOLD Signals</div>
+          <div className="text-2xl font-bold text-amber-400">{holdStats?.total_including_pending || 0}</div>
+          <div className="text-xs text-gray-600 mt-1">excluded from accuracy</div>
+        </div>
+      </div>
+
+      {/* Accuracy by asset class */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <h4 className="text-sm font-medium text-gray-400 mb-3">Accuracy by Asset Class</h4>
+          <div className="space-y-2">
+            {data.by_asset_class.map(ac => (
+              <div key={ac.asset_class} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium w-14 text-gray-300 capitalize">{ac.asset_class}</span>
+                  <div className="w-32 bg-[#0a0e17] rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full ${ac.accuracy >= 50 ? 'bg-cyan-500' : 'bg-red-500'}`}
+                      style={{ width: `${Math.min(ac.accuracy, 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="text-sm text-gray-400">
+                  {ac.total > 0 ? `${ac.accuracy.toFixed(1)}%` : '--'}{' '}
+                  <span className="text-gray-600">({ac.correct}/{ac.total})</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Per-asset table */}
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <h4 className="text-sm font-medium text-gray-400 mb-3">Per-Asset Accuracy</h4>
+          <div className="overflow-y-auto max-h-48">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-500 border-b border-[#1f2937]">
+                  <th className="text-left py-1 px-1">Asset</th>
+                  <th className="text-left py-1 px-1">Class</th>
+                  <th className="text-right py-1 px-1">Signals</th>
+                  <th className="text-right py-1 px-1">Accuracy</th>
+                  <th className="text-right py-1 px-1 hidden sm:table-cell">Range</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.per_asset.map(a => (
+                  <tr key={a.asset} className="border-b border-[#1f2937]/30">
+                    <td className="py-1 px-1 text-gray-300 font-medium">{a.asset}</td>
+                    <td className="py-1 px-1 text-gray-500 text-xs capitalize">{a.asset_class}</td>
+                    <td className="py-1 px-1 text-right text-gray-400">{a.total_signals}</td>
+                    <td className={`py-1 px-1 text-right font-medium ${a.total > 0 ? accColor(a.accuracy) : 'text-gray-600'}`}>
+                      {a.total > 0 ? `${a.accuracy.toFixed(1)}%` : '--'}
+                    </td>
+                    <td className="py-1 px-1 text-right text-gray-600 text-xs hidden sm:table-cell">
+                      {a.date_from.slice(0, 7)} - {a.date_to.slice(0, 7)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Monthly accuracy chart */}
+      {data.monthly_accuracy.length > 0 && (
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <h4 className="text-sm font-medium text-gray-400 mb-3">
+            Monthly Accuracy Timeline
+            <span className="text-gray-600 font-normal ml-2">
+              ({data.monthly_accuracy[0]?.month} to {data.monthly_accuracy[data.monthly_accuracy.length - 1]?.month})
+            </span>
+          </h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={data.monthly_accuracy.map(m => ({
+              month: m.month,
+              accuracy: Number(m.accuracy.toFixed(1)),
+              total: m.total,
+            }))}>
+              <XAxis
+                dataKey="month"
+                tick={{ fill: '#6b7280', fontSize: 10 }}
+                interval={Math.max(0, Math.floor(data.monthly_accuracy.length / 12) - 1)}
+                angle={-45}
+                textAnchor="end"
+                height={50}
+              />
+              <YAxis
+                domain={[0, 100]}
+                tick={{ fill: '#6b7280', fontSize: 11 }}
+                width={35}
+              />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }}
+                labelStyle={{ color: '#9ca3af' }}
+                formatter={(value: unknown, _name: unknown, props: unknown) => {
+                  const v = value as number
+                  const p = props as { payload: { total: number } }
+                  return [`${v}% (${p.payload.total} signals)`, 'Accuracy']
+                }}
+              />
+              <ReferenceLine y={50} stroke="#4b5563" strokeDasharray="3 3" />
+              <Bar dataKey="accuracy" radius={[2, 2, 0, 0]}>
+                {data.monthly_accuracy.map((m, idx) => (
+                  <Cell key={idx} fill={m.accuracy >= 55 ? '#22c55e' : m.accuracy >= 50 ? '#f59e0b' : '#ef4444'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════
+// Live Signal Tracker (existing functionality)
+// ═══════════════════════════════════════
+
+function LiveTracker({ data, loading, load, filter, setFilter, classFilter, setClassFilter, signalFilter, setSignalFilter }: {
+  data: SignalTruthData | null
+  loading: boolean
+  load: () => void
+  filter: string
+  setFilter: (v: string) => void
+  classFilter: string
+  setClassFilter: (v: string) => void
+  signalFilter: string
+  setSignalFilter: (v: string) => void
+}) {
+  if (loading && !data) return <div className="text-gray-500 p-8">Loading live signals...</div>
 
   if (!data || data.total_signals === 0) {
     return (
       <div className="text-gray-500 p-8 text-center">
-        <p className="text-lg mb-2">No signal history yet</p>
+        <p className="text-lg mb-2">No live signal history yet</p>
         <p className="text-sm">
           Signals will be recorded automatically each hourly cycle.
         </p>
@@ -51,15 +305,7 @@ export default function Truth() {
   const uniqueAssets = [...new Set(signals.map(s => s.asset))].sort()
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h2 className="text-xl font-semibold text-white">Signal Truth</h2>
-        <p className="text-sm text-gray-500 mt-1">
-          Fully transparent, unfiltered track record. Every signal shown &mdash; good and bad.
-        </p>
-      </div>
-
+    <>
       {/* Summary stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="Total Signals" value={data.total_signals.toString()} sub={`${data.total_pending} pending`} color="text-white" />
@@ -213,9 +459,13 @@ export default function Truth() {
           <p className="text-gray-600 text-center py-8">No signals match the current filters.</p>
         )}
       </div>
-    </div>
+    </>
   )
 }
+
+// ═══════════════════════════════════════
+// Shared Components
+// ═══════════════════════════════════════
 
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) {
   return (

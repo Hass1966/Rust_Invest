@@ -178,6 +178,30 @@ export async function fetchSignalTruth(): Promise<SignalTruthData> {
   return res.json()
 }
 
+// ── Historical Signal Accuracy ──
+
+export interface HistoricalSignalAccuracy {
+  has_data: boolean
+  note?: string
+  frequency: string
+  total_signals: number
+  total_resolved: number
+  total_pending: number
+  total_correct: number
+  overall_accuracy: number
+  by_signal_type: { signal_type: string; correct: number; total: number; total_including_pending: number; accuracy: number }[]
+  by_asset_class: { asset_class: string; correct: number; total: number; accuracy: number }[]
+  per_asset: { asset: string; asset_class: string; correct: number; total: number; total_signals: number; accuracy: number; date_from: string; date_to: string }[]
+  monthly_accuracy: { month: string; correct: number; total: number; accuracy: number }[]
+  generated_at: string
+}
+
+export async function fetchHistoricalSignalAccuracy(frequency: string = 'weekly'): Promise<HistoricalSignalAccuracy> {
+  const res = await fetch(`${BASE}/api/v1/signals/truth/historical?frequency=${frequency}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 // ── User Portfolio Tracker ──
 
 export interface UserHolding {
@@ -268,13 +292,20 @@ export async function deleteUserHolding(id: number): Promise<void> {
 }
 
 export async function comparePortfolio(frequency: string = 'weekly'): Promise<PortfolioComparison> {
-  const res = await fetch(`${BASE}/api/v1/user-portfolio/compare`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ frequency }),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 120_000)
+  try {
+    const res = await fetch(`${BASE}/api/v1/user-portfolio/compare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frequency }),
+      signal: controller.signal,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 // ── Feedback ──

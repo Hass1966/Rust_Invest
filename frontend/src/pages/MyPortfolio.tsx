@@ -94,9 +94,13 @@ export default function MyPortfolio() {
   const handleSaveEdit = async (id: number) => {
     const qty = parseFloat(editQty)
     if (isNaN(qty) || qty <= 0) return
-    await updateUserHolding(id, qty, editDate)
-    setEditId(null)
-    loadHoldings()
+    try {
+      await updateUserHolding(id, qty, editDate)
+      setEditId(null)
+      loadHoldings()
+    } catch {
+      setAddError('Failed to update holding')
+    }
   }
 
   if (loading) return <div className="text-gray-500 p-8">Loading portfolio...</div>
@@ -250,7 +254,7 @@ export default function MyPortfolio() {
             {(['weekly', 'daily', 'hourly'] as const).map(f => (
               <button
                 key={f}
-                onClick={() => f !== 'hourly' && setFrequency(f)}
+                onClick={() => { if (f !== 'hourly') { setComparison(null); setFrequency(f); } }}
                 disabled={f === 'hourly'}
                 className={`px-4 py-1.5 rounded text-sm transition-colors ${
                   f === 'hourly'
@@ -332,13 +336,13 @@ export default function MyPortfolio() {
               <h3 className="text-sm font-medium text-gray-400 mb-1">Follow The Signals</h3>
               <p className="text-xs text-gray-600 mb-3">Trade on every BUY/SELL/HOLD signal</p>
               <div className="text-3xl font-bold text-white mb-1">
-                {formatCurrency(comparison.signal_value!)}
+                {formatCurrency(comparison.signal_value ?? 0)}
               </div>
-              <div className={`text-sm font-medium ${comparison.signal_return_pct! >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {comparison.signal_return_pct! >= 0 ? '+' : ''}{comparison.signal_return_pct!.toFixed(2)}%
+              <div className={`text-sm font-medium ${(comparison.signal_return_pct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {(comparison.signal_return_pct ?? 0) >= 0 ? '+' : ''}{(comparison.signal_return_pct ?? 0).toFixed(2)}%
               </div>
               <div className="text-xs text-gray-600 mt-1">
-                from {formatCurrency(comparison.total_cost!)} invested
+                from {formatCurrency(comparison.total_cost ?? 0)} invested
               </div>
             </div>
 
@@ -347,18 +351,19 @@ export default function MyPortfolio() {
               <h3 className="text-sm font-medium text-gray-400 mb-1">Buy &amp; Hold</h3>
               <p className="text-xs text-gray-600 mb-3">No trading, just hold from start date</p>
               <div className="text-3xl font-bold text-white mb-1">
-                {formatCurrency(comparison.buy_hold_value!)}
+                {formatCurrency(comparison.buy_hold_value ?? 0)}
               </div>
-              <div className={`text-sm font-medium ${comparison.buy_hold_return_pct! >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {comparison.buy_hold_return_pct! >= 0 ? '+' : ''}{comparison.buy_hold_return_pct!.toFixed(2)}%
+              <div className={`text-sm font-medium ${(comparison.buy_hold_return_pct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {(comparison.buy_hold_return_pct ?? 0) >= 0 ? '+' : ''}{(comparison.buy_hold_return_pct ?? 0).toFixed(2)}%
               </div>
               <div className="text-xs text-gray-600 mt-1">
-                from {formatCurrency(comparison.total_cost!)} invested
+                from {formatCurrency(comparison.total_cost ?? 0)} invested
               </div>
             </div>
           </div>
 
           {/* Per-asset breakdown */}
+          {comparison.per_asset && comparison.per_asset.length > 0 && (
           <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
             <h3 className="text-sm font-medium text-gray-400 mb-3">Per-Asset Breakdown</h3>
             <div className="overflow-x-auto">
@@ -378,13 +383,14 @@ export default function MyPortfolio() {
                   </tr>
                 </thead>
                 <tbody>
-                  {comparison.per_asset!.map(a => (
+                  {comparison.per_asset.map(a => (
                     <AssetRow key={a.symbol} asset={a} />
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
+          )}
         </>
       )}
 
@@ -407,8 +413,10 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 }
 
 function AssetRow({ asset: a }: { asset: AssetComparison }) {
-  const signalBetter = a.signal_return_pct > a.buy_hold_return_pct + 1
-  const holdBetter = a.buy_hold_return_pct > a.signal_return_pct + 1
+  const sigRet = a.signal_return_pct ?? 0
+  const bhRet = a.buy_hold_return_pct ?? 0
+  const signalBetter = sigRet > bhRet + 1
+  const holdBetter = bhRet > sigRet + 1
   const winner = signalBetter ? 'Signals' : holdBetter ? 'B&H' : 'Even'
   const winnerColor = signalBetter ? 'text-green-400' : holdBetter ? 'text-red-400' : 'text-amber-400'
 
@@ -420,18 +428,18 @@ function AssetRow({ asset: a }: { asset: AssetComparison }) {
         {a.note && <div className="text-xs text-amber-400/70">{a.note}</div>}
       </td>
       <td className="py-2 px-2 text-right text-gray-400">{a.quantity}</td>
-      <td className="py-2 px-2 text-right text-gray-400">{formatPrice(a.start_price)}</td>
-      <td className="py-2 px-2 text-right text-gray-300">{formatPrice(a.current_price)}</td>
-      <td className={`py-2 px-2 text-right ${a.buy_hold_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-        {a.buy_hold_return_pct >= 0 ? '+' : ''}{a.buy_hold_return_pct.toFixed(2)}%
+      <td className="py-2 px-2 text-right text-gray-400">{formatPrice(a.start_price ?? 0)}</td>
+      <td className="py-2 px-2 text-right text-gray-300">{formatPrice(a.current_price ?? 0)}</td>
+      <td className={`py-2 px-2 text-right ${bhRet >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+        {bhRet >= 0 ? '+' : ''}{bhRet.toFixed(2)}%
       </td>
-      <td className={`py-2 px-2 text-right ${a.signal_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-        {a.signal_return_pct >= 0 ? '+' : ''}{a.signal_return_pct.toFixed(2)}%
+      <td className={`py-2 px-2 text-right ${sigRet >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+        {sigRet >= 0 ? '+' : ''}{sigRet.toFixed(2)}%
       </td>
       <td className={`py-2 px-2 text-center font-medium ${winnerColor}`}>{winner}</td>
-      <td className="py-2 px-2 text-right text-gray-500 hidden sm:table-cell">{a.total_trades}</td>
-      <td className="py-2 px-2 text-right text-gray-500 hidden sm:table-cell">{a.win_rate_pct.toFixed(1)}%</td>
-      <td className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">{a.sharpe_signals.toFixed(2)}</td>
+      <td className="py-2 px-2 text-right text-gray-500 hidden sm:table-cell">{a.total_trades ?? 0}</td>
+      <td className="py-2 px-2 text-right text-gray-500 hidden sm:table-cell">{(a.win_rate_pct ?? 0).toFixed(1)}%</td>
+      <td className="py-2 px-2 text-right text-gray-500 hidden md:table-cell">{(a.sharpe_signals ?? 0).toFixed(2)}</td>
     </tr>
   )
 }

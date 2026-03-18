@@ -180,6 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/admin/assets/{symbol}", patch(toggle_asset))
         .route("/api/v1/predictions/history", get(get_predictions_history))
         .route("/api/v1/signals/truth", get(get_signal_truth))
+        .route("/api/v1/signals/truth/historical", get(get_signal_truth_historical))
         .route("/api/v1/user-portfolio", get(get_user_holdings))
         .route("/api/v1/user-portfolio", post(add_user_holding))
         .route("/api/v1/user-portfolio/compare", post(compare_portfolio))
@@ -202,8 +203,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app
     };
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8081").await?;
-    println!("\n  Server listening on http://0.0.0.0:8081");
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8081".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+    println!("\n  Server listening on http://0.0.0.0:{}", port);
     println!("  Endpoints:");
     println!("    GET  /health");
     println!("    GET  /api/v1/config/assets");
@@ -523,6 +525,261 @@ async fn get_signal_truth(
     }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
 
     Ok(result)
+}
+
+/// GET /api/v1/signals/truth/historical — backtest signal accuracy over portfolio holdings
+async fn get_signal_truth_historical(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let frequency = params.get("frequency").cloned().unwrap_or_else(|| "weekly".to_string());
+
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let holdings = database.get_user_holdings().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if holdings.is_empty() {
+            return Ok::<_, StatusCode>(Json(serde_json::json!({
+                "has_data": false,
+                "note": "No holdings in portfolio. Add holdings to see historical signal accuracy."
+            })));
+        }
+
+        let result = backtest_signal_accuracy(&database, &holdings, &frequency);
+        Ok(Json(result))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(result)
+}
+
+/// Backtest signal accuracy across all holdings from their start dates to today
+fn backtest_signal_accuracy(
+    database: &db::Database,
+    holdings: &[db::UserHolding],
+    frequency: &str,
+) -> serde_json::Value {
+    let market_context = simulator::build_market_context_from_db(database);
+    let today = chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string();
+
+    // Per-signal record for aggregation
+    struct SignalRecord {
+        date: String,
+        asset: String,
+        asset_class: String,
+        signal_type: String,
+        price_at_signal: f64,
+        outcome_price: Option<f64>,
+        was_correct: Option<bool>, // None = pending (no outcome yet)
+    }
+
+    let mut all_records: Vec<SignalRecord> = Vec::new();
+
+    for holding in holdings {
+        let all_prices = simulator::load_asset_prices(database, &holding.symbol, &holding.asset_class);
+        if all_prices.is_empty() { continue; }
+
+        // Find actual start date
+        let holding_start = &holding.start_date[..10.min(holding.start_date.len())];
+        let start_idx = match all_prices.iter().position(|(d, _)| d.as_str() >= holding_start) {
+            Some(i) => i,
+            None => continue,
+        };
+        let actual_start_date = &all_prices[start_idx].0;
+
+        // Build trading dates from start to end of available data (up to today)
+        let trading_dates: Vec<String> = all_prices.iter()
+            .filter(|(d, _)| d.as_str() >= actual_start_date.as_str() && d.as_str() <= today.as_str())
+            .map(|(d, _)| d.clone())
+            .collect();
+
+        if trading_dates.is_empty() { continue; }
+
+        // Determine signal dates
+        let signal_dates: std::collections::HashSet<String> = if frequency == "weekly" {
+            weekly_signal_dates(&trading_dates)
+        } else {
+            trading_dates.iter().cloned().collect()
+        };
+
+        // Load models and generate signals in bulk
+        let models = simulator::load_models_for_symbol(&holding.symbol);
+        if models.is_none() { continue; }
+        let signal_map = simulator::generate_signals_bulk(
+            &holding.symbol, &holding.asset_class,
+            &all_prices, &market_context, models.as_ref().unwrap(),
+        );
+
+        // Build price map for lookup
+        let price_map: std::collections::HashMap<&str, f64> = all_prices.iter()
+            .map(|(d, p)| (d.as_str(), *p))
+            .collect();
+
+        // Collect signal dates in order
+        let mut ordered_signal_dates: Vec<&String> = trading_dates.iter()
+            .filter(|d| signal_dates.contains(*d))
+            .collect();
+        ordered_signal_dates.sort();
+
+        // For each signal date, look ahead to the next signal date for outcome
+        for (i, &sig_date) in ordered_signal_dates.iter().enumerate() {
+            let signal = match signal_map.get(sig_date.as_str()) {
+                Some(s) => s.clone(),
+                None => continue, // generate_signal_cached returned None (< 100 points)
+            };
+
+            let price_at_signal = match price_map.get(sig_date.as_str()) {
+                Some(&p) if p > 0.0 => p,
+                _ => continue,
+            };
+
+            // Look ahead: next signal date's price is the outcome
+            let (outcome_price, was_correct) = if i + 1 < ordered_signal_dates.len() {
+                let next_date = ordered_signal_dates[i + 1];
+                match price_map.get(next_date.as_str()) {
+                    Some(&next_p) if next_p > 0.0 => {
+                        let price_up = next_p > price_at_signal;
+                        let price_down = next_p < price_at_signal;
+                        let correct = match signal.as_str() {
+                            "BUY" => price_up,
+                            "SELL" => price_down,
+                            _ => false, // HOLD: tracked but considered incorrect for accuracy
+                        };
+                        (Some(next_p), Some(correct))
+                    }
+                    _ => (None, None),
+                }
+            } else {
+                // Last signal period — no outcome yet, mark as pending
+                (None, None)
+            };
+
+            all_records.push(SignalRecord {
+                date: sig_date.clone(),
+                asset: holding.symbol.clone(),
+                asset_class: holding.asset_class.clone(),
+                signal_type: signal,
+                price_at_signal,
+                outcome_price,
+                was_correct,
+            });
+        }
+    }
+
+    // ── Aggregation ──
+
+    // Exclude HOLD from main accuracy calculation
+    let buy_sell_resolved: Vec<&SignalRecord> = all_records.iter()
+        .filter(|r| r.was_correct.is_some() && r.signal_type != "HOLD")
+        .collect();
+    let total_buy_sell = buy_sell_resolved.len();
+    let correct_buy_sell = buy_sell_resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+    let overall_accuracy = if total_buy_sell > 0 {
+        correct_buy_sell as f64 / total_buy_sell as f64 * 100.0
+    } else { 0.0 };
+
+    let total_signals = all_records.len();
+    let total_pending = all_records.iter().filter(|r| r.was_correct.is_none()).count();
+    let total_resolved = all_records.iter().filter(|r| r.was_correct.is_some()).count();
+
+    // ── By signal type ──
+    let mut by_signal: HashMap<String, (usize, usize)> = HashMap::new(); // (correct, total_resolved)
+    for r in all_records.iter().filter(|r| r.was_correct.is_some()) {
+        let entry = by_signal.entry(r.signal_type.clone()).or_insert((0, 0));
+        entry.1 += 1;
+        if r.was_correct == Some(true) { entry.0 += 1; }
+    }
+    let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SELL", "HOLD"].iter().map(|&st| {
+        let (correct, total) = by_signal.get(st).copied().unwrap_or((0, 0));
+        let total_incl_pending = all_records.iter().filter(|r| r.signal_type == st).count();
+        serde_json::json!({
+            "signal_type": st,
+            "correct": correct,
+            "total": total,
+            "total_including_pending": total_incl_pending,
+            "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+        })
+    }).collect();
+
+    // ── By asset class ──
+    let mut by_class: HashMap<String, (usize, usize)> = HashMap::new();
+    for r in buy_sell_resolved.iter() {
+        let entry = by_class.entry(r.asset_class.clone()).or_insert((0, 0));
+        entry.1 += 1;
+        if r.was_correct == Some(true) { entry.0 += 1; }
+    }
+    let asset_class_accuracy: Vec<serde_json::Value> = ["stock", "fx", "crypto"].iter().map(|&ac| {
+        let (correct, total) = by_class.get(ac).copied().unwrap_or((0, 0));
+        serde_json::json!({
+            "asset_class": ac,
+            "correct": correct,
+            "total": total,
+            "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+        })
+    }).collect();
+
+    // ── Per-asset ──
+    let mut per_asset_map: HashMap<String, (String, usize, usize, String, String)> = HashMap::new();
+    // (asset_class, correct, total_resolved_buy_sell, earliest_date, latest_date)
+    for r in &all_records {
+        let entry = per_asset_map.entry(r.asset.clone()).or_insert_with(|| {
+            (r.asset_class.clone(), 0, 0, r.date.clone(), r.date.clone())
+        });
+        if r.signal_type != "HOLD" && r.was_correct.is_some() {
+            entry.2 += 1; // total
+            if r.was_correct == Some(true) { entry.1 += 1; } // correct
+        }
+        if r.date < entry.3 { entry.3 = r.date.clone(); }
+        if r.date > entry.4 { entry.4 = r.date.clone(); }
+    }
+    let mut per_asset_vec: Vec<serde_json::Value> = per_asset_map.iter().map(|(asset, (ac, correct, total, from, to))| {
+        let total_signals_for_asset = all_records.iter().filter(|r| r.asset == *asset).count();
+        serde_json::json!({
+            "asset": asset,
+            "asset_class": ac,
+            "correct": correct,
+            "total": total,
+            "total_signals": total_signals_for_asset,
+            "accuracy": if *total > 0 { *correct as f64 / *total as f64 * 100.0 } else { 0.0 },
+            "date_from": from,
+            "date_to": to,
+        })
+    }).collect();
+    per_asset_vec.sort_by(|a, b| a["asset"].as_str().cmp(&b["asset"].as_str()));
+
+    // ── Monthly breakdown ──
+    let mut monthly: std::collections::BTreeMap<String, (usize, usize)> = std::collections::BTreeMap::new();
+    for r in buy_sell_resolved.iter() {
+        let month_key = if r.date.len() >= 7 { &r.date[..7] } else { &r.date };
+        let entry = monthly.entry(month_key.to_string()).or_insert((0, 0));
+        entry.1 += 1;
+        if r.was_correct == Some(true) { entry.0 += 1; }
+    }
+    let monthly_accuracy: Vec<serde_json::Value> = monthly.iter().map(|(month, (correct, total))| {
+        serde_json::json!({
+            "month": month,
+            "correct": correct,
+            "total": total,
+            "accuracy": if *total > 0 { *correct as f64 / *total as f64 * 100.0 } else { 0.0 },
+        })
+    }).collect();
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
+    serde_json::json!({
+        "has_data": true,
+        "frequency": frequency,
+        "total_signals": total_signals,
+        "total_resolved": total_resolved,
+        "total_pending": total_pending,
+        "total_correct": correct_buy_sell,
+        "overall_accuracy": round2(overall_accuracy),
+        "by_signal_type": signal_type_accuracy,
+        "by_asset_class": asset_class_accuracy,
+        "per_asset": per_asset_vec,
+        "monthly_accuracy": monthly_accuracy,
+        "generated_at": timestamp,
+    })
 }
 
 async fn get_all_signals(
@@ -1993,29 +2250,18 @@ fn backtest_holding(
     frequency: &str,
     market_context: &features::MarketContext,
 ) -> Option<BacktestResult> {
-    // 1. Get price history
+    // 1. Get full price history (dates are 10-char "YYYY-MM-DD")
     let all_prices = simulator::load_asset_prices(database, &holding.symbol, &holding.asset_class);
     if all_prices.is_empty() { return None; }
 
-    // Also get start/current price from DB (handles exact date lookup)
-    let (start_price, actual_start_date, current_price) = match holding.asset_class.as_str() {
-        "stock" => {
-            let (date, price) = database.get_stock_price_at_date(&holding.symbol, &holding.start_date).ok()??;
-            let current = database.get_latest_stock_price(&holding.symbol).ok()??;
-            (price, date, current)
-        }
-        "fx" => {
-            let (date, price) = database.get_fx_price_at_date(&holding.symbol, &holding.start_date).ok()??;
-            let current = database.get_latest_fx_price(&holding.symbol).ok()??;
-            (price, date, current)
-        }
-        "crypto" => {
-            let (date, price) = database.get_crypto_price_at_date(&holding.symbol, &holding.start_date).ok()??;
-            let current = database.get_latest_crypto_price(&holding.symbol).ok()??;
-            (price, date, current)
-        }
-        _ => return None,
-    };
+    // 2. Find actual start date from price array directly (avoids DB timestamp format issues)
+    let holding_start = &holding.start_date[..10.min(holding.start_date.len())];
+    let start_idx = all_prices.iter()
+        .position(|(d, _)| d.as_str() >= holding_start)
+        .unwrap_or(0);
+    let actual_start_date = all_prices[start_idx].0.clone();
+    let start_price = all_prices[start_idx].1;
+    let current_price = all_prices.last()?.1;
 
     if start_price <= 0.0 { return None; }
 
@@ -2023,16 +2269,26 @@ fn backtest_holding(
     let buy_hold_value = holding.quantity * current_price;
     let buy_hold_return_pct = (current_price - start_price) / start_price * 100.0;
 
-    let note = if actual_start_date != holding.start_date {
-        Some(format!("Exact date unavailable. Using nearest: {}", actual_start_date))
+    // 3. Only show note if actual date differs by more than 7 calendar days
+    let note = if actual_start_date.as_str() != holding_start {
+        let requested = chrono::NaiveDate::parse_from_str(holding_start, "%Y-%m-%d").ok();
+        let actual = chrono::NaiveDate::parse_from_str(&actual_start_date, "%Y-%m-%d").ok();
+        match (requested, actual) {
+            (Some(req), Some(act)) if (act - req).num_days().abs() > 7 => {
+                Some(format!("Nearest trading date: {} ({} days from {})",
+                    actual_start_date, (act - req).num_days().abs(), holding_start))
+            }
+            _ => None, // Silently use nearest trading day for small gaps (weekends/holidays)
+        }
     } else {
         None
     };
 
-    // 2. Build price lookup & date list from actual_start_date onwards
+    // 4. Build trading dates from actual_start_date onwards
     let price_map: std::collections::HashMap<String, f64> = all_prices.iter().cloned().collect();
+    let actual_start_short = &actual_start_date[..10.min(actual_start_date.len())];
     let trading_dates: Vec<String> = all_prices.iter()
-        .filter(|(d, _)| d.as_str() >= actual_start_date.as_str())
+        .filter(|(d, _)| d.as_str() >= actual_start_short)
         .map(|(d, _)| d.clone())
         .collect();
 
@@ -2053,21 +2309,48 @@ fn backtest_holding(
         });
     }
 
-    // 3. Determine signal dates based on frequency
+    // 5. Determine signal dates based on frequency
     let signal_dates: std::collections::HashSet<String> = if frequency == "weekly" {
         weekly_signal_dates(&trading_dates)
     } else {
         trading_dates.iter().cloned().collect()
     };
 
-    // 4. Try to load models (may fail for crypto or untrained assets)
+    // 6. Generate ALL signals at once using bulk method (builds features once, O(n) not O(n²))
     let models = simulator::load_models_for_symbol(&holding.symbol);
+    if models.is_none() {
+        // No trained models — return buy-and-hold only (no signal loop)
+        let equity_curve: Vec<(String, f64, f64)> = trading_dates.iter()
+            .filter_map(|d| price_map.get(d.as_str()).filter(|&&p| p > 0.0).map(|&p| {
+                let v = round2(holding.quantity * p);
+                (d.clone(), v, v)
+            }))
+            .collect();
+        let annualise = if frequency == "weekly" { 52.0_f64.sqrt() } else { 252.0_f64.sqrt() };
+        let bh_values: Vec<f64> = equity_curve.iter().map(|(_, _, b)| *b).collect();
+        let sharpe_bh = compute_sharpe(&bh_values, annualise);
+        return Some(BacktestResult {
+            symbol: holding.symbol.clone(),
+            asset_class: holding.asset_class.clone(),
+            quantity: holding.quantity,
+            start_date: holding.start_date.clone(),
+            actual_start_date,
+            start_price, current_price, cost_basis,
+            buy_hold_value, buy_hold_return_pct,
+            signal_value: buy_hold_value,
+            signal_return_pct: buy_hold_return_pct,
+            signals_used: 0, total_trades: 0, wins: 0, trade_signals: 0,
+            win_rate_pct: 0.0, sharpe_signals: 0.0, sharpe_buy_hold: sharpe_bh,
+            equity_curve,
+            note: Some("No trained models found — showing buy & hold only".to_string()),
+        });
+    }
+    let signal_map = simulator::generate_signals_bulk(
+        &holding.symbol, &holding.asset_class,
+        &all_prices, market_context, models.as_ref().unwrap(),
+    );
 
-    // 5. Build asset_prices map for generate_signal_cached
-    let mut asset_prices_map: std::collections::HashMap<String, Vec<(String, f64)>> = std::collections::HashMap::new();
-    asset_prices_map.insert(holding.symbol.clone(), all_prices);
-
-    // 6. Walk through all trading dates, generating signals on signal_dates
+    // 7. Walk through all trading dates, executing trades on signal dates
     let mut in_position = true;
     let mut shares = holding.quantity;
     let mut cash = 0.0_f64;
@@ -2076,9 +2359,7 @@ fn backtest_holding(
     let mut wins = 0_usize;
     let mut trade_signals = 0_usize;
     let mut equity_curve: Vec<(String, f64, f64)> = Vec::new();
-
-    // Track last signal price for win/loss calculation
-    let mut last_trade_price: Option<(String, f64)> = None; // (signal_type, price)
+    let mut last_trade_price: Option<(String, f64)> = None;
 
     for date in &trading_dates {
         let price = match price_map.get(date.as_str()) {
@@ -2086,22 +2367,15 @@ fn backtest_holding(
             _ => continue,
         };
 
-        // Generate signal on signal dates
         if signal_dates.contains(date) {
-            let signal = if let Some(ref m) = models {
-                simulator::generate_signal_cached(
-                    &holding.symbol, &holding.asset_class, date,
-                    &asset_prices_map, market_context, m,
-                ).unwrap_or_else(|| "HOLD".to_string())
-            } else {
-                "HOLD".to_string()
-            };
+            let signal = signal_map.get(date.as_str())
+                .cloned()
+                .unwrap_or_else(|| "HOLD".to_string());
 
             signals_used += 1;
 
             match signal.as_str() {
                 "SELL" if in_position => {
-                    // Check if previous BUY was a win
                     if let Some((ref sig_type, prev_price)) = last_trade_price {
                         if sig_type == "BUY" && price > prev_price { wins += 1; }
                         trade_signals += 1;
@@ -2113,7 +2387,6 @@ fn backtest_holding(
                     last_trade_price = Some(("SELL".to_string(), price));
                 }
                 "BUY" if !in_position => {
-                    // Check if previous SELL was a win
                     if let Some((ref sig_type, prev_price)) = last_trade_price {
                         if sig_type == "SELL" && price < prev_price { wins += 1; }
                         trade_signals += 1;
@@ -2130,18 +2403,12 @@ fn backtest_holding(
             }
         }
 
-        // Record equity curve point
         let signal_val = if in_position { shares * price } else { cash };
         let bh_val = holding.quantity * price;
         equity_curve.push((date.clone(), round2(signal_val), round2(bh_val)));
     }
 
-    // Final values
-    let signal_value = if in_position {
-        shares * current_price
-    } else {
-        cash
-    };
+    let signal_value = if in_position { shares * current_price } else { cash };
     let signal_return_pct = if cost_basis > 0.0 {
         (signal_value - cost_basis) / cost_basis * 100.0
     } else { 0.0 };
@@ -2150,7 +2417,6 @@ fn backtest_holding(
         wins as f64 / trade_signals as f64 * 100.0
     } else { 0.0 };
 
-    // Compute Sharpe ratios from equity curve
     let annualise = if frequency == "weekly" { 52.0_f64.sqrt() } else { 252.0_f64.sqrt() };
     let sig_values: Vec<f64> = equity_curve.iter().map(|(_, s, _)| *s).collect();
     let bh_values: Vec<f64> = equity_curve.iter().map(|(_, _, b)| *b).collect();

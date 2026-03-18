@@ -6,7 +6,6 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use crate::*;
-use chrono::Duration;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SimResult {
@@ -82,6 +81,10 @@ pub fn load_asset_prices(
             .map(|p| (p.timestamp[..10].to_string(), p.price))
             .collect(),
         "fx" => database.get_fx_history(symbol)
+            .unwrap_or_default().into_iter()
+            .map(|p| (p.timestamp[..10].to_string(), p.price))
+            .collect(),
+        "crypto" => database.get_coin_history(symbol)
             .unwrap_or_default().into_iter()
             .map(|p| (p.timestamp[..10].to_string(), p.price))
             .collect(),
@@ -208,6 +211,118 @@ pub fn norm(features: &[f64], means: &[f64], stds: &[f64]) -> Vec<f64> {
     }).collect()
 }
 
+// ── Bulk signal generation (builds features once for all dates) ──
+
+/// Pre-generate signals for ALL dates in the price history at once.
+/// Returns a map of date → signal ("BUY"/"SELL"/"HOLD").
+/// This is O(n) instead of O(n²) compared to calling generate_signal_cached per-date.
+pub fn generate_signals_bulk(
+    symbol: &str,
+    asset_class: &str,
+    all_prices: &[(String, f64)],
+    market_context: &features::MarketContext,
+    models: &CachedModels,
+) -> std::collections::HashMap<String, String> {
+    let mut signal_map = std::collections::HashMap::new();
+
+    if all_prices.len() < 261 { return signal_map; }
+
+    // Build features ONCE from full price history
+    let prices_vec: Vec<f64> = all_prices.iter().map(|(_, p)| *p).collect();
+    let volumes_vec: Vec<Option<f64>> = vec![None; all_prices.len()];
+    let timestamps_vec: Vec<String> = all_prices.iter().map(|(d, _)| d.clone()).collect();
+
+    let all_samples = features::build_rich_features(
+        &prices_vec, &volumes_vec, &timestamps_vec,
+        Some(market_context), asset_class,
+        if asset_class == "stock" { features::sector_etf_for(symbol) } else { None },
+        None, None,
+    );
+
+    if all_samples.is_empty() { return signal_map; }
+
+    // Pre-compute SMA for trend detection
+    let sma_7 = analysis::sma(&prices_vec, 7);
+    let sma_30 = analysis::sma(&prices_vec, 30);
+
+    // build_rich_features starts at index 260, so:
+    // sample[k] has features using data through prices[260 + k]
+    // For signal on date at index j, use sample[j - 1 - 260]
+    //   (features through j-1, avoiding look-ahead bias)
+    let sample_offset: usize = 260;
+
+    let n_features = all_samples[0].features.len();
+
+    // Generate signal for each eligible date
+    // Start from sample_offset + 1 (need at least one sample before the signal date)
+    for j in (sample_offset + 1)..all_prices.len() {
+        let sample_idx = j - 1 - sample_offset;
+        if sample_idx >= all_samples.len() { break; }
+
+        let feat = &all_samples[sample_idx].features;
+
+        // Run inference with cached models
+        let lin_feat = norm(feat, &models.linreg.norm_means, &models.linreg.norm_stds);
+        let raw_lin: f64 = models.linreg.bias + models.linreg.weights.iter().zip(lin_feat.iter()).map(|(w, f)| w * f).sum::<f64>();
+        let lin_prob = (1.0 / (1.0 + (-raw_lin).exp())).clamp(0.15, 0.85);
+
+        let log_feat = norm(feat, &models.logreg.norm_means, &models.logreg.norm_stds);
+        let log_z: f64 = models.logreg.bias + models.logreg.weights.iter().zip(log_feat.iter()).map(|(w, f)| w * f).sum::<f64>();
+        let log_prob = (1.0 / (1.0 + (-log_z).exp())).clamp(0.15, 0.85);
+
+        let gbt_feat = norm(feat, &models.gbt_saved.norm_means, &models.gbt_saved.norm_stds);
+        let gbt_prob = models.gbt_classifier.predict_proba(&gbt_feat).clamp(0.15, 0.85);
+
+        let wf = ensemble::WalkForwardResult {
+            symbol: symbol.to_string(),
+            linear_accuracy: models.linreg.meta.walk_forward_accuracy,
+            logistic_accuracy: models.logreg.meta.walk_forward_accuracy,
+            gbt_accuracy: models.gbt_saved.meta.walk_forward_accuracy,
+            lstm_accuracy: 50.0,
+            gru_accuracy: 50.0,
+            rf_accuracy: 50.0,
+            n_folds: 1,
+            total_test_samples: 0,
+            linear_recent: models.linreg.meta.walk_forward_accuracy,
+            logistic_recent: models.logreg.meta.walk_forward_accuracy,
+            gbt_recent: models.gbt_saved.meta.walk_forward_accuracy,
+            lstm_recent: 50.0,
+            gru_recent: 50.0,
+            rf_recent: 50.0,
+            final_linear_prob: lin_prob,
+            final_logistic_prob: log_prob,
+            final_gbt_prob: gbt_prob,
+            final_lstm_prob: 0.5,
+            final_gru_prob: 0.5,
+            final_rf_prob: 0.5,
+            gbt_importance: Vec::new(),
+            n_features,
+            has_lstm: false,
+            has_gru: false,
+            has_rf: false,
+            stacking_weights: None,
+        };
+
+        // Trend at j-1 (data available before signal date)
+        let trend_idx = (j - 1).min(sma_7.len().saturating_sub(1));
+        let trend = match (sma_7.get(trend_idx), sma_30.get(trend_idx)) {
+            (Some(&s), Some(&l)) if s > l => "BULLISH",
+            _ => "BEARISH",
+        };
+
+        // RSI at j-1
+        let rsi = analysis::rsi(&prices_vec[..j], 14).unwrap_or(50.0);
+
+        let signal = ensemble::ensemble_signal(
+            symbol, &wf, prices_vec[j - 1], rsi, trend,
+        );
+
+        signal_map.insert(all_prices[j].0.clone(), signal.signal.clone());
+    }
+
+    signal_map
+}
+
 // ── Original simulation (uses uncached path for backward compat) ──
 
 pub fn run_simulation(
@@ -258,10 +373,7 @@ pub fn run_simulation(
         }
     }
 
-    // Determine trading days
-    let today = chrono::Utc::now().date_naive();
-    let start_date = today - Duration::days((days as i64) + 5);
-
+    // Determine trading days — use ALL available history, then limit output to `days`
     let mut all_dates: Vec<String> = {
         let first_asset = match asset_prices.values().next() {
             Some(v) => v,
@@ -269,16 +381,12 @@ pub fn run_simulation(
         };
         first_asset.iter()
             .map(|(d, _)| d.clone())
-            .filter(|d| {
-                let nd = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
-                    .unwrap_or(chrono::NaiveDate::MIN);
-                nd >= start_date && nd < today
-            })
             .collect()
     };
     all_dates.sort();
     all_dates.dedup();
 
+    // Trim to the requested number of days (from the end of history)
     if all_dates.len() > days {
         all_dates = all_dates[all_dates.len() - days..].to_vec();
     }
@@ -327,8 +435,10 @@ pub fn run_simulation(
     }
 
     for (day_idx, date) in all_dates.iter().enumerate() {
-        let next_date = all_dates.get(day_idx + 1).cloned()
-            .unwrap_or_else(|| today.format("%Y-%m-%d").to_string());
+        let next_date = match all_dates.get(day_idx + 1) {
+            Some(d) => d.clone(),
+            None => continue, // skip last day (no next-day price to evaluate)
+        };
 
         let mut day_weighted_return = 0.0_f64;
         let mut day_correct = 0_usize;
