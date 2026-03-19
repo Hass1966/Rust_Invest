@@ -308,6 +308,26 @@ export async function comparePortfolio(frequency: string = 'weekly'): Promise<Po
   }
 }
 
+// ── Asset Config ──
+
+export interface AssetEntry {
+  symbol: string
+  name: string
+  enabled: boolean
+}
+
+export interface AssetConfig {
+  stocks: AssetEntry[]
+  fx: AssetEntry[]
+  crypto: AssetEntry[]
+}
+
+export async function fetchAssetConfig(): Promise<AssetConfig> {
+  const res = await fetch(`${BASE}/api/v1/config/assets`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 // ── Feedback ──
 
 export async function submitSignalFeedback(asset: string, signalType: string, reaction: 'up' | 'down'): Promise<void> {

@@ -1,40 +1,18 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import { useState } from 'react'
-import { BarChart3, TrendingUp, DollarSign, Briefcase, Cpu, MessageSquare, X, Clock, Bot, PlayCircle, Bitcoin, GraduationCap, Target, ShieldCheck, Wallet, Info, MessageCircle } from 'lucide-react'
-import Overview from './pages/Overview'
-import Stocks from './pages/Stocks'
-import FX from './pages/FX'
-import Crypto from './pages/Crypto'
-import Portfolio from './pages/Portfolio'
-import History from './pages/History'
-import Training from './pages/Training'
-import Diagnostics from './pages/Diagnostics'
-import Advisor from './pages/Advisor'
-import Simulate from './pages/Simulate'
-import Admin from './pages/Admin'
-import Predictions from './pages/Predictions'
-import Truth from './pages/Truth'
+import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X } from 'lucide-react'
+import Dashboard from './pages/Dashboard'
 import MyPortfolio from './pages/MyPortfolio'
-import About from './pages/About'
-import Feedback from './pages/Feedback'
+import TrackRecord from './pages/TrackRecord'
+import Explore from './pages/Explore'
+import Settings from './pages/Settings'
 import ChatPanel from './components/ChatPanel'
 
 const tabs = [
-  { path: '/', label: 'Overview', icon: BarChart3 },
-  { path: '/stocks', label: 'Stocks', icon: TrendingUp },
-  { path: '/fx', label: 'FX', icon: DollarSign },
-  { path: '/crypto', label: 'Crypto', icon: Bitcoin },
-  { path: '/portfolio', label: 'Portfolio', icon: Briefcase },
+  { path: '/', label: 'Dashboard', icon: BarChart3 },
   { path: '/my-portfolio', label: 'My Portfolio', icon: Wallet },
-  { path: '/history', label: 'History', icon: Clock },
-  { path: '/simulate', label: 'Simulate', icon: PlayCircle },
-  { path: '/advisor', label: 'Advisor', icon: Bot },
-  { path: '/predictions', label: 'Predictions', icon: Target },
-  { path: '/truth', label: 'Signal Truth', icon: ShieldCheck },
-  { path: '/training', label: 'Training', icon: GraduationCap },
-  { path: '/diagnostics', label: 'Diagnostics', icon: Cpu },
-  { path: '/feedback', label: 'Feedback', icon: MessageCircle },
-  { path: '/about', label: 'About', icon: Info },
+  { path: '/track-record', label: 'Track Record', icon: Target },
+  { path: '/explore', label: 'Explore', icon: Compass },
 ]
 
 export default function App() {
@@ -44,7 +22,7 @@ export default function App() {
 
   const currentTab = tabs.find(t =>
     t.path === '/' ? location.pathname === '/' : location.pathname.startsWith(t.path)
-  )?.label.toLowerCase() || 'overview'
+  )?.label.toLowerCase() || 'dashboard'
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -75,6 +53,20 @@ export default function App() {
               {label}
             </NavLink>
           ))}
+
+          {/* Settings - subtle last item */}
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              `flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                isActive
+                  ? 'bg-cyan-500/15 text-cyan-400'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
+              }`
+            }
+          >
+            <SettingsIcon className="w-4 h-4" />
+          </NavLink>
         </nav>
 
         <button
@@ -107,22 +99,11 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <main className={`flex-1 overflow-y-auto p-6 transition-all ${chatOpen ? 'mr-96' : ''}`}>
           <Routes>
-            <Route path="/" element={<Overview />} />
-            <Route path="/stocks" element={<Stocks />} />
-            <Route path="/fx" element={<FX />} />
-            <Route path="/crypto" element={<Crypto />} />
-            <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/" element={<Dashboard />} />
             <Route path="/my-portfolio" element={<MyPortfolio />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/simulate" element={<Simulate />} />
-            <Route path="/advisor" element={<Advisor />} />
-            <Route path="/predictions" element={<Predictions />} />
-            <Route path="/truth" element={<Truth />} />
-            <Route path="/training" element={<Training />} />
-            <Route path="/diagnostics" element={<Diagnostics />} />
-            <Route path="/admin" element={<Admin />} />
-            <Route path="/feedback" element={<Feedback />} />
-            <Route path="/about" element={<About />} />
+            <Route path="/track-record" element={<TrackRecord />} />
+            <Route path="/explore" element={<Explore />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
 

@@ -167,7 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/signals/current/stocks", get(get_stock_signals))
         .route("/api/v1/signals/current/fx", get(get_fx_signals))
         .route("/api/v1/signals/current/crypto", get(get_crypto_signals))
-        .route("/api/v1/signals/history/{asset}", get(get_signal_history))
+        .route("/api/v1/signals/history/:asset", get(get_signal_history))
         .route("/api/v1/portfolio/simulate", get(simulate_portfolio))
         .route("/api/v1/portfolio/daily-tracker", get(get_daily_tracker))
         .route("/api/v1/history/portfolio", get(get_portfolio_history))
@@ -177,28 +177,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/training/results", get(get_training_results))
         .route("/api/v1/chat", post(chat_handler))
         .route("/api/v1/admin/assets", post(add_asset))
-        .route("/api/v1/admin/assets/{symbol}", patch(toggle_asset))
+        .route("/api/v1/admin/assets/:symbol", patch(toggle_asset))
         .route("/api/v1/predictions/history", get(get_predictions_history))
         .route("/api/v1/signals/truth", get(get_signal_truth))
         .route("/api/v1/signals/truth/historical", get(get_signal_truth_historical))
-        .route("/api/v1/user-portfolio", get(get_user_holdings))
-        .route("/api/v1/user-portfolio", post(add_user_holding))
+        .route("/api/v1/user-portfolio", get(get_user_holdings).post(add_user_holding))
         .route("/api/v1/user-portfolio/compare", post(compare_portfolio))
-        .route("/api/v1/user-portfolio/{id}", put(update_user_holding).delete(delete_user_holding))
+        .route("/api/v1/user-portfolio/:id", put(update_user_holding).delete(delete_user_holding))
         .route("/api/v1/feedback/signal", post(submit_signal_feedback))
         .route("/api/v1/feedback/survey", post(submit_survey_feedback))
         .route("/api/v1/feedback", get(get_feedback))
         .layer(cors.clone())
         .with_state(state);
 
-    // Nest static file serving outside the API router so CORS doesn't interfere
+    // Add static file serving — API routes take priority, SPA fallback for client-side routing
     let app = if serve_frontend {
         let index = frontend_dist.join("index.html");
-        Router::new()
+        app
             .nest_service("/assets", ServeDir::new(frontend_dist.join("assets")))
-            .route_service("/", ServeFile::new(&index))
             .fallback_service(ServeFile::new(&index))
-            .merge(app)
     } else {
         app
     };
@@ -2380,7 +2377,7 @@ fn backtest_holding(
                         if sig_type == "BUY" && price > prev_price { wins += 1; }
                         trade_signals += 1;
                     }
-                    cash = shares * price;
+                    cash = shares * price * (1.0 - 0.001); // 0.1% transaction cost
                     shares = 0.0;
                     in_position = false;
                     total_trades += 1;
@@ -2392,7 +2389,8 @@ fn backtest_holding(
                         trade_signals += 1;
                     }
                     if price > 0.0 {
-                        shares = cash / price;
+                        let cost_adjusted_cash = cash * (1.0 - 0.001); // 0.1% transaction cost
+                        shares = cost_adjusted_cash / price;
                     }
                     cash = 0.0;
                     in_position = true;

@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import {
   fetchUserHoldings, addUserHolding, updateUserHolding,
-  deleteUserHolding, comparePortfolio,
+  deleteUserHolding, comparePortfolio, fetchAssetConfig,
 } from '../lib/api'
 import type { UserHolding, PortfolioComparison, AssetComparison } from '../lib/api'
 
@@ -26,12 +26,24 @@ export default function MyPortfolio() {
   const [newQty, setNewQty] = useState('')
   const [newDate, setNewDate] = useState('')
   const [addError, setAddError] = useState('')
+  const [universe, setUniverse] = useState<Set<string>>(new Set())
 
   const loadHoldings = useCallback(() => {
     fetchUserHoldings()
       .then(setHoldings)
       .catch(() => setHoldings([]))
       .finally(() => setLoading(false))
+  }, [])
+
+  // Load asset universe on mount
+  useEffect(() => {
+    fetchAssetConfig().then(cfg => {
+      const syms = new Set<string>()
+      cfg.stocks?.forEach(a => syms.add(a.symbol.toUpperCase()))
+      cfg.fx?.forEach(a => syms.add(a.symbol.toUpperCase()))
+      cfg.crypto?.forEach(a => syms.add(a.symbol.toLowerCase()))
+      setUniverse(syms)
+    }).catch(() => {})
   }, [])
 
   const runComparison = useCallback(() => {
@@ -203,7 +215,14 @@ export default function MyPortfolio() {
               <tbody>
                 {holdings.map(h => (
                   <tr key={h.id} className="border-b border-[#1f2937]/50 hover:bg-white/[0.02]">
-                    <td className="py-2 px-2 text-gray-200 font-medium">{h.symbol}</td>
+                    <td className="py-2 px-2 text-gray-200 font-medium">
+                      {h.symbol}
+                      {universe.size > 0 && !isTracked(h.symbol, h.asset_class, universe) && (
+                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 whitespace-nowrap">
+                          No model — price only
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 px-2 text-gray-500 text-xs capitalize">{h.asset_class}</td>
                     <td className="py-2 px-2 text-right text-gray-300">
                       {editId === h.id ? (
@@ -453,4 +472,11 @@ function formatPrice(price: number): string {
 
 function formatCurrency(val: number): string {
   return val.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function isTracked(symbol: string, assetClass: string, universe: Set<string>): boolean {
+  if (assetClass === 'crypto') {
+    return universe.has(symbol.toLowerCase())
+  }
+  return universe.has(symbol.toUpperCase())
 }
