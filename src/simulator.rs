@@ -121,15 +121,17 @@ pub fn generate_signal_cached(
     let volumes: Vec<Option<f64>> = cutoff_points.iter().map(|_| None).collect();
     let timestamps: Vec<String> = cutoff_points.iter().map(|p| p.timestamp.clone()).collect();
 
-    let samples = match asset_class {
-        "stock" | "fx" => features::build_rich_features(
-            &prices, &volumes, &timestamps,
-            Some(market_context), asset_class,
-            if asset_class == "stock" { features::sector_etf_for(symbol) } else { None },
-            None, None,
-        ),
-        _ => return None,
+    let se: Option<&str> = match asset_class {
+        "stock" => features::sector_etf_for(symbol),
+        "fx" => Some(symbol),
+        _ => None,
     };
+    let samples = features::build_rich_features(
+        &prices, &volumes, &timestamps,
+        Some(market_context), asset_class,
+        se,
+        None, None,
+    );
 
     if samples.is_empty() { return None; }
 
@@ -232,10 +234,15 @@ pub fn generate_signals_bulk(
     let volumes_vec: Vec<Option<f64>> = vec![None; all_prices.len()];
     let timestamps_vec: Vec<String> = all_prices.iter().map(|(d, _)| d.clone()).collect();
 
+    let sector_etf: Option<&str> = match asset_class {
+        "stock" => features::sector_etf_for(symbol),
+        "fx" => Some(symbol),
+        _ => None,
+    };
     let all_samples = features::build_rich_features(
         &prices_vec, &volumes_vec, &timestamps_vec,
         Some(market_context), asset_class,
-        if asset_class == "stock" { features::sector_etf_for(symbol) } else { None },
+        sector_etf,
         None, None,
     );
 
@@ -571,15 +578,17 @@ fn generate_signal_for_date(
     let volumes: Vec<Option<f64>> = cutoff_points.iter().map(|_| None).collect();
     let timestamps: Vec<String> = cutoff_points.iter().map(|p| p.timestamp.clone()).collect();
 
-    let samples = match asset_class {
-        "stock" | "fx" => features::build_rich_features(
-            &prices, &volumes, &timestamps,
-            Some(market_context), asset_class,
-            if asset_class == "stock" { features::sector_etf_for(symbol) } else { None },
-            None, None,
-        ),
-        _ => return None,
+    let se2: Option<&str> = match asset_class {
+        "stock" => features::sector_etf_for(symbol),
+        "fx" => Some(symbol),
+        _ => None,
     };
+    let samples = features::build_rich_features(
+        &prices, &volumes, &timestamps,
+        Some(market_context), asset_class,
+        se2,
+        None, None,
+    );
 
     if samples.is_empty() { return None; }
 

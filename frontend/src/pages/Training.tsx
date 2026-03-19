@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchTrainingResults, fetchModels } from '../lib/api'
 import type { TrainingResults, ModelManifest } from '../lib/types'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, Cell } from 'recharts'
+import { classifyAsset } from '../lib/classify'
 
 const MODEL_COLORS: Record<string, string> = {
   linreg: '#60a5fa',
@@ -80,9 +81,9 @@ export default function Training() {
     ...Object.fromEntries(models.map(m => [m, Number((a[m] ?? 0).toFixed(1))])),
   }))
 
-  const stockAssets = assets.filter(([s]) => !s.includes('=X') && !['bitcoin', 'ethereum', 'solana'].includes(s))
-  const fxAssets = assets.filter(([s]) => s.includes('=X'))
-  const cryptoAssets = assets.filter(([s]) => ['bitcoin', 'ethereum', 'solana'].includes(s))
+  const stockAssets = assets.filter(([s]) => classifyAsset(s) === 'stock')
+  const fxAssets = assets.filter(([s]) => classifyAsset(s) === 'fx')
+  const cryptoAssets = assets.filter(([s]) => classifyAsset(s) === 'crypto')
 
   return (
     <div className="space-y-6">
@@ -167,7 +168,7 @@ export default function Training() {
           <tbody>
             {assets.map(([symbol, a]) => {
               const best = bestModel(a as unknown as Record<string, number>)
-              const assetClass = symbol.includes('=X') ? 'FX' : ['bitcoin', 'ethereum', 'solana'].includes(symbol) ? 'Crypto' : 'Stock'
+              const assetClass = classifyAsset(symbol) === 'fx' ? 'FX' : classifyAsset(symbol) === 'crypto' ? 'Crypto' : 'Stock'
               return (
                 <tr key={symbol} className="border-b border-[#1f2937]/50 hover:bg-white/[0.02]">
                   <td className="px-6 py-3 text-white font-medium">{symbol}</td>

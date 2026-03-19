@@ -8,6 +8,7 @@ import {
   deleteUserHolding, comparePortfolio, fetchAssetConfig,
 } from '../lib/api'
 import type { UserHolding, PortfolioComparison, AssetComparison } from '../lib/api'
+import { classifyAsset, quantityLabel } from '../lib/classify'
 
 type Frequency = 'weekly' | 'daily' | 'hourly'
 
@@ -207,7 +208,7 @@ export default function MyPortfolio() {
                 <tr className="text-gray-500 border-b border-[#1f2937]">
                   <th className="text-left py-2 px-2">Symbol</th>
                   <th className="text-left py-2 px-2">Class</th>
-                  <th className="text-right py-2 px-2">Quantity</th>
+                  <th className="text-right py-2 px-2">Qty</th>
                   <th className="text-left py-2 px-2">Start Date</th>
                   <th className="text-center py-2 px-2">Actions</th>
                 </tr>
@@ -223,12 +224,17 @@ export default function MyPortfolio() {
                         </span>
                       )}
                     </td>
-                    <td className="py-2 px-2 text-gray-500 text-xs capitalize">{h.asset_class}</td>
+                    <td className="py-2 px-2 text-gray-500 text-xs capitalize">{classifyAsset(h.symbol)}</td>
                     <td className="py-2 px-2 text-right text-gray-300">
                       {editId === h.id ? (
                         <input type="number" value={editQty} onChange={e => setEditQty(e.target.value)}
                           step="any" className="bg-[#0a0e17] border border-[#1f2937] rounded px-2 py-1 text-sm text-gray-200 w-24 text-right" />
-                      ) : h.quantity}
+                      ) : (
+                        <span>
+                          {h.quantity}
+                          <span className="text-gray-600 text-xs ml-1">{quantityLabel(classifyAsset(h.symbol))}</span>
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 px-2 text-gray-400 text-xs">
                       {editId === h.id ? (
@@ -474,8 +480,9 @@ function formatCurrency(val: number): string {
   return val.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function isTracked(symbol: string, assetClass: string, universe: Set<string>): boolean {
-  if (assetClass === 'crypto') {
+function isTracked(symbol: string, _assetClass: string, universe: Set<string>): boolean {
+  const cls = classifyAsset(symbol)
+  if (cls === 'crypto') {
     return universe.has(symbol.toLowerCase())
   }
   return universe.has(symbol.toUpperCase())

@@ -2080,12 +2080,15 @@ fn detect_asset_class(symbol: &str) -> String {
     }
 }
 
-/// Check if a symbol is a known CoinGecko crypto ID
+/// Check if a symbol is a known CoinGecko crypto ID or short ticker
 fn is_crypto_id(s: &str) -> bool {
     matches!(s, "bitcoin" | "ethereum" | "solana" | "ripple" | "dogecoin"
         | "cardano" | "avalanche-2" | "chainlink" | "polkadot" | "near"
         | "sui" | "aptos" | "arbitrum" | "the-open-network" | "uniswap"
         | "tron" | "litecoin" | "shiba-inu" | "stellar" | "matic-network")
+    || matches!(s, "BTC" | "ETH" | "DOGE" | "ADA" | "XRP" | "SOL" | "TRX"
+        | "AVAX" | "LINK" | "DOT" | "NEAR" | "SUI" | "APT" | "ARB"
+        | "TON" | "UNI" | "LTC" | "SHIB" | "XLM" | "MATIC")
 }
 
 /// POST /api/v1/user-portfolio/compare — run Follow Signals vs Buy & Hold comparison
@@ -2266,16 +2269,16 @@ fn backtest_holding(
     let buy_hold_value = holding.quantity * current_price;
     let buy_hold_return_pct = (current_price - start_price) / start_price * 100.0;
 
-    // 3. Only show note if actual date differs by more than 7 calendar days
+    // 3. Snap to nearest market trading day; only warn if gap > 7 calendar days
     let note = if actual_start_date.as_str() != holding_start {
         let requested = chrono::NaiveDate::parse_from_str(holding_start, "%Y-%m-%d").ok();
         let actual = chrono::NaiveDate::parse_from_str(&actual_start_date, "%Y-%m-%d").ok();
         match (requested, actual) {
             (Some(req), Some(act)) if (act - req).num_days().abs() > 7 => {
-                Some(format!("Nearest trading date: {} ({} days from {})",
-                    actual_start_date, (act - req).num_days().abs(), holding_start))
+                Some(format!("Snapped to market open: {} (requested {} was {} days away)",
+                    actual_start_date, holding_start, (act - req).num_days().abs()))
             }
-            _ => None, // Silently use nearest trading day for small gaps (weekends/holidays)
+            _ => None, // Silently snap to nearest trading day for weekends/holidays
         }
     } else {
         None
@@ -2313,10 +2316,35 @@ fn backtest_holding(
         trading_dates.iter().cloned().collect()
     };
 
-    // 6. Generate ALL signals at once using bulk method (builds features once, O(n) not O(n²))
+    // 6. Generate signals: try model-based bulk, then fall back to signal_history
+    let mut signal_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut note_suffix: Option<String> = None;
+
     let models = simulator::load_models_for_symbol(&holding.symbol);
-    if models.is_none() {
-        // No trained models — return buy-and-hold only (no signal loop)
+    if let Some(ref m) = models {
+        signal_map = simulator::generate_signals_bulk(
+            &holding.symbol, &holding.asset_class,
+            &all_prices, market_context, m,
+        );
+    }
+
+    // Fallback: if model signals are empty, use actual signal_history from the database
+    if signal_map.is_empty() {
+        if let Ok(history) = database.get_signal_history_for_asset_from(
+            &holding.symbol, actual_start_short,
+        ) {
+            for rec in &history {
+                let date = rec.timestamp[..10.min(rec.timestamp.len())].to_string();
+                signal_map.insert(date, rec.signal_type.clone());
+            }
+            if !signal_map.is_empty() {
+                note_suffix = Some("Using recorded signal history".to_string());
+            }
+        }
+    }
+
+    if signal_map.is_empty() {
+        // No signals at all — return buy-and-hold only
         let equity_curve: Vec<(String, f64, f64)> = trading_dates.iter()
             .filter_map(|d| price_map.get(d.as_str()).filter(|&&p| p > 0.0).map(|&p| {
                 let v = round2(holding.quantity * p);
@@ -2339,13 +2367,9 @@ fn backtest_holding(
             signals_used: 0, total_trades: 0, wins: 0, trade_signals: 0,
             win_rate_pct: 0.0, sharpe_signals: 0.0, sharpe_buy_hold: sharpe_bh,
             equity_curve,
-            note: Some("No trained models found — showing buy & hold only".to_string()),
+            note: Some("No trained models or signal history found — showing buy & hold only".to_string()),
         });
     }
-    let signal_map = simulator::generate_signals_bulk(
-        &holding.symbol, &holding.asset_class,
-        &all_prices, market_context, models.as_ref().unwrap(),
-    );
 
     // 7. Walk through all trading dates, executing trades on signal dates
     let mut in_position = true;
@@ -2421,6 +2445,14 @@ fn backtest_holding(
     let sharpe_signals = compute_sharpe(&sig_values, annualise);
     let sharpe_buy_hold = compute_sharpe(&bh_values, annualise);
 
+    // Combine note and note_suffix
+    let final_note = match (note, note_suffix) {
+        (Some(n), Some(s)) => Some(format!("{} · {}", n, s)),
+        (Some(n), None) => Some(n),
+        (None, Some(s)) => Some(s),
+        (None, None) => None,
+    };
+
     Some(BacktestResult {
         symbol: holding.symbol.clone(),
         asset_class: holding.asset_class.clone(),
@@ -2432,7 +2464,7 @@ fn backtest_holding(
         signal_value, signal_return_pct,
         signals_used, total_trades, wins, trade_signals,
         win_rate_pct, sharpe_signals, sharpe_buy_hold,
-        equity_curve, note,
+        equity_curve, note: final_note,
     })
 }
 
