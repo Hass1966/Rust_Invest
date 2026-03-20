@@ -60,7 +60,16 @@
     {"symbol": "MCD", "name": "McDonald's", "enabled": true},
     {"symbol": "XOM", "name": "ExxonMobil", "enabled": true},
     {"symbol": "CVX", "name": "Chevron", "enabled": true},
-    {"symbol": "COP", "name": "ConocoPhillips", "enabled": true}
+    {"symbol": "COP", "name": "ConocoPhillips", "enabled": true},
+    {"symbol": "GLD", "name": "SPDR Gold Trust", "enabled": true},
+    {"symbol": "USO", "name": "US Oil Fund", "enabled": true},
+    {"symbol": "SLV", "name": "iShares Silver Trust", "enabled": true},
+    {"symbol": "CPER", "name": "US Copper Index Fund", "enabled": true},
+    {"symbol": "HSBA.L", "name": "HSBC Holdings", "enabled": true},
+    {"symbol": "BP.L", "name": "BP plc", "enabled": true},
+    {"symbol": "SHEL.L", "name": "Shell plc", "enabled": true},
+    {"symbol": "RR.L", "name": "Rolls-Royce", "enabled": true},
+    {"symbol": "AZN.L", "name": "AstraZeneca", "enabled": true}
   ],
   "fx": [
     {"symbol": "EURUSD=X", "name": "EUR/USD", "enabled": true},
@@ -84,8 +93,8 @@
     {"symbol": "USDINR=X", "name": "USD/INR", "enabled": true}
   ],
   "crypto": [
-    {"symbol": "bitcoin", "name": "Bitcoin", "enabled": false},
-    {"symbol": "ethereum", "name": "Ethereum", "enabled": false},
+    {"symbol": "bitcoin", "name": "Bitcoin", "enabled": true},
+    {"symbol": "ethereum", "name": "Ethereum", "enabled": true},
     {"symbol": "solana", "name": "Solana", "enabled": true},
     {"symbol": "ripple", "name": "XRP", "enabled": false},
     {"symbol": "dogecoin", "name": "Dogecoin", "enabled": true},

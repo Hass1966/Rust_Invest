@@ -977,6 +977,39 @@ impl Database {
         Ok(())
     }
 
+    // ── User-scoped holdings (with user_id) ──
+
+    pub fn get_user_holdings_for(&self, user_id: i64) -> Result<Vec<UserHolding>> {
+        // If user_id is 0, return all (backwards compat for unauthenticated)
+        if user_id == 0 {
+            return self.get_user_holdings();
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, symbol, quantity, start_date, asset_class, created_at
+             FROM user_holdings WHERE user_id = ?1 ORDER BY created_at ASC"
+        )?;
+        let rows = stmt.query_map(params![user_id], |row| {
+            Ok(UserHolding {
+                id: row.get(0)?,
+                symbol: row.get(1)?,
+                quantity: row.get(2)?,
+                start_date: row.get(3)?,
+                asset_class: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn insert_user_holding_for(&self, user_id: i64, symbol: &str, quantity: f64, start_date: &str, asset_class: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO user_holdings (symbol, quantity, start_date, asset_class, user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![symbol, quantity, start_date, asset_class, user_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
     /// Get the price at or before a given date from stock_history
     pub fn get_stock_price_at_date(&self, symbol: &str, date: &str) -> Result<Option<(String, f64)>> {
         let mut stmt = self.conn.prepare(

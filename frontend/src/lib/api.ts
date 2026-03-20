@@ -259,8 +259,17 @@ export interface PortfolioComparison {
   per_asset?: AssetComparison[]
 }
 
+// Token getter — set by auth module
+let _authToken: string | null = null
+export function setAuthToken(token: string | null) { _authToken = token }
+function authHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (_authToken) h['Authorization'] = `Bearer ${_authToken}`
+  return h
+}
+
 export async function fetchUserHoldings(): Promise<UserHolding[]> {
-  const res = await fetch(`${BASE}/api/v1/user-portfolio`)
+  const res = await fetch(`${BASE}/api/v1/user-portfolio`, { headers: authHeaders() })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
@@ -268,7 +277,7 @@ export async function fetchUserHoldings(): Promise<UserHolding[]> {
 export async function addUserHolding(symbol: string, quantity: number, start_date: string): Promise<void> {
   const res = await fetch(`${BASE}/api/v1/user-portfolio`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ symbol, quantity, start_date }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -277,14 +286,14 @@ export async function addUserHolding(symbol: string, quantity: number, start_dat
 export async function updateUserHolding(id: number, quantity: number, start_date: string): Promise<void> {
   const res = await fetch(`${BASE}/api/v1/user-portfolio/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ quantity, start_date }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
 export async function deleteUserHolding(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/api/v1/user-portfolio/${id}`, { method: 'DELETE' })
+  const res = await fetch(`${BASE}/api/v1/user-portfolio/${id}`, { method: 'DELETE', headers: authHeaders() })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `Server returned ${res.status}`)
@@ -297,7 +306,7 @@ export async function comparePortfolio(frequency: string = 'weekly'): Promise<Po
   try {
     const res = await fetch(`${BASE}/api/v1/user-portfolio/compare`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ frequency }),
       signal: controller.signal,
     })

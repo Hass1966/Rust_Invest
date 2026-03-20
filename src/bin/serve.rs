@@ -11,7 +11,7 @@
 use rust_invest::*;
 use axum::{
     Router,
-    routing::{get, post, patch, put},
+    routing::{get, post, patch, put, delete},
     extract::{Path, Query, State},
     Json,
     http::StatusCode,
@@ -33,6 +33,7 @@ struct AppState {
     db_path: String,
     llm_provider: Option<llm::LlmProvider>,
     http_client: reqwest::Client,
+    rate_limiter: auth::RateLimiter,
 }
 
 // ════════════════════════════════════════
@@ -81,6 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_path: "rust_invest.db".to_string(),
         llm_provider,
         http_client: reqwest::Client::new(),
+        rate_limiter: auth::RateLimiter::new(),
     };
 
     // ── Startup database migrations ──
@@ -181,6 +183,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/predictions/history", get(get_predictions_history))
         .route("/api/v1/signals/truth", get(get_signal_truth))
         .route("/api/v1/signals/truth/historical", get(get_signal_truth_historical))
+        .route("/api/v1/auth/register", post(auth_register))
+        .route("/api/v1/auth/login", post(auth_login))
+        .route("/api/v1/auth/logout", post(auth_logout))
+        .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/user-portfolio", get(get_user_holdings).post(add_user_holding))
         .route("/api/v1/user-portfolio/compare", post(compare_portfolio))
         .route("/api/v1/user-portfolio/:id", put(update_user_holding).delete(delete_user_holding))
@@ -2002,11 +2008,13 @@ fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched
 
 async fn get_user_holdings(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Vec<db::UserHolding>>, StatusCode> {
+    let user_id = extract_user_id(&headers);
     let db_path = state.db_path.clone();
     let result = tokio::task::spawn_blocking(move || {
         let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        database.get_user_holdings().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        database.get_user_holdings_for(user_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
     }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
     Ok(Json(result))
 }
@@ -2020,8 +2028,10 @@ struct AddHoldingRequest {
 
 async fn add_user_holding(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<AddHoldingRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let user_id = extract_user_id(&headers);
     let symbol = req.symbol.trim().to_string();
     let asset_class = detect_asset_class(&symbol);
     let db_path = state.db_path.clone();
@@ -2030,7 +2040,7 @@ async fn add_user_holding(
 
     let id = tokio::task::spawn_blocking(move || {
         let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        database.insert_user_holding(&symbol, quantity, &start_date, &asset_class)
+        database.insert_user_holding_for(user_id, &symbol, quantity, &start_date, &asset_class)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
     }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
 
@@ -2652,6 +2662,88 @@ fn record_signal_history(database: &db::Database, sig: &enriched_signals::Enrich
     );
 }
 
+// ════════════════════════════════════════
+// Auth Handlers
+// ════════════════════════════════════════
+
+async fn auth_register(
+    State(state): State<AppState>,
+    Json(req): Json<auth::RegisterRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let key = req.email.clone();
+    if !state.rate_limiter.check(&key).await {
+        return Err((StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({"error": "Too many attempts. Try again in 1 minute."}))));
+    }
+
+    let db_path = state.db_path.clone();
+    let email = req.email.clone();
+    let password = req.password.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("DB: {}", e))?;
+        auth::register(&conn, &email, &password)
+    }).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))))?;
+
+    match result {
+        Ok(resp) => Ok(Json(serde_json::json!({"token": resp.token, "user": resp.user}))),
+        Err(e) => Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e})))),
+    }
+}
+
+async fn auth_login(
+    State(state): State<AppState>,
+    Json(req): Json<auth::LoginRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let key = req.email.clone();
+    if !state.rate_limiter.check(&key).await {
+        return Err((StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({"error": "Too many attempts. Try again in 1 minute."}))));
+    }
+
+    let db_path = state.db_path.clone();
+    let email = req.email.clone();
+    let password = req.password.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("DB: {}", e))?;
+        auth::login(&conn, &email, &password)
+    }).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))))?;
+
+    match result {
+        Ok(resp) => Ok(Json(serde_json::json!({"token": resp.token, "user": resp.user}))),
+        Err(e) => Err((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": e})))),
+    }
+}
+
+async fn auth_logout() -> Json<serde_json::Value> {
+    // JWT is stateless — client just discards the token
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn auth_me(
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_header = headers.get("authorization").and_then(|v| v.to_str().ok());
+    let token = auth::extract_token(auth_header)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": e}))))?;
+    let claims = auth::verify_token(&token)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": e}))))?;
+
+    Ok(Json(serde_json::json!({
+        "id": claims.sub,
+        "email": claims.email,
+    })))
+}
+
+/// Extract user_id from Authorization header, returns 0 if not authenticated (backwards compat)
+fn extract_user_id(headers: &axum::http::HeaderMap) -> i64 {
+    headers.get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| auth::extract_token(Some(h)).ok())
+        .and_then(|t| auth::verify_token(&t).ok())
+        .map(|c| c.sub)
+        .unwrap_or(0)
+}
+
 fn run_startup_migrations(db_path: &str) {
     let database = match db::Database::new(db_path) {
         Ok(d) => d,
@@ -2660,6 +2752,17 @@ fn run_startup_migrations(db_path: &str) {
             return;
         }
     };
+
+    // Auth tables
+    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+        if let Err(e) = auth::create_auth_tables(&conn) {
+            eprintln!("  [Migration] Auth table error: {}", e);
+        }
+        match auth::ensure_admin_user(&conn, "hassan@hassanshuman.co.uk", "changeme123") {
+            Ok(id) => println!("  [Migration] Admin user ready (id={})", id),
+            Err(e) => eprintln!("  [Migration] Admin user error: {}", e),
+        }
+    }
 
     // Ensure user_holdings table exists
     let _ = database.execute_raw(

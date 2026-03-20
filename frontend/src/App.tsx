@@ -1,28 +1,49 @@
-import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
+import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
 import { useState } from 'react'
-import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X } from 'lucide-react'
+import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X, LogOut, LogIn } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import MyPortfolio from './pages/MyPortfolio'
 import TrackRecord from './pages/TrackRecord'
 import Explore from './pages/Explore'
 import Settings from './pages/Settings'
+import Login from './pages/Login'
+import Register from './pages/Register'
 import ChatPanel from './components/ChatPanel'
+import { useAuth } from './lib/auth'
 
 const tabs = [
   { path: '/', label: 'Dashboard', icon: BarChart3 },
-  { path: '/my-portfolio', label: 'My Portfolio', icon: Wallet },
+  { path: '/my-portfolio', label: 'My Portfolio', icon: Wallet, protected: true },
   { path: '/track-record', label: 'Track Record', icon: Target },
   { path: '/explore', label: 'Explore', icon: Compass },
 ]
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  if (!user) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
 
 export default function App() {
   const [chatOpen, setChatOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const location = useLocation()
+  const { user, logout } = useAuth()
 
   const currentTab = tabs.find(t =>
     t.path === '/' ? location.pathname === '/' : location.pathname.startsWith(t.path)
   )?.label.toLowerCase() || 'dashboard'
+
+  // Full-page auth routes (no nav)
+  if (location.pathname === '/login' || location.pathname === '/register') {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+      </Routes>
+    )
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -54,7 +75,7 @@ export default function App() {
             </NavLink>
           ))}
 
-          {/* Settings - subtle last item */}
+          {/* Settings */}
           <NavLink
             to="/settings"
             className={({ isActive }) =>
@@ -69,15 +90,35 @@ export default function App() {
           </NavLink>
         </nav>
 
-        <button
-          onClick={() => setChatOpen(!chatOpen)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-            chatOpen ? 'bg-cyan-500/15 text-cyan-400' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-          }`}
-        >
-          {chatOpen ? <X className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
-          Chat
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setChatOpen(!chatOpen)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+              chatOpen ? 'bg-cyan-500/15 text-cyan-400' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+            }`}
+          >
+            {chatOpen ? <X className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
+            Chat
+          </button>
+
+          {user ? (
+            <button
+              onClick={logout}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+              title={user.email}
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          ) : (
+            <NavLink
+              to="/login"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors"
+            >
+              <LogIn className="w-4 h-4" />
+              Sign In
+            </NavLink>
+          )}
+        </div>
       </header>
 
       {/* Beta Banner */}
@@ -100,7 +141,7 @@ export default function App() {
         <main className={`flex-1 overflow-y-auto p-6 transition-all ${chatOpen ? 'mr-96' : ''}`}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/my-portfolio" element={<MyPortfolio />} />
+            <Route path="/my-portfolio" element={<ProtectedRoute><MyPortfolio /></ProtectedRoute>} />
             <Route path="/track-record" element={<TrackRecord />} />
             <Route path="/explore" element={<Explore />} />
             <Route path="/settings" element={<Settings />} />

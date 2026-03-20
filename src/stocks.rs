@@ -68,6 +68,22 @@ pub const STOCK_LIST: &[StockInfo] = &[
     StockInfo { symbol: "XOM", name: "ExxonMobil" },
     StockInfo { symbol: "CVX", name: "Chevron" },
     StockInfo { symbol: "COP", name: "ConocoPhillips" },
+    // Commodities ETFs
+    StockInfo { symbol: "GLD", name: "SPDR Gold Trust" },
+    StockInfo { symbol: "USO", name: "US Oil Fund" },
+    StockInfo { symbol: "SLV", name: "iShares Silver Trust" },
+    StockInfo { symbol: "CPER", name: "US Copper Index Fund" },
+    // UK Stocks
+    StockInfo { symbol: "HSBA.L", name: "HSBC Holdings" },
+    StockInfo { symbol: "BP.L", name: "BP plc" },
+    StockInfo { symbol: "SHEL.L", name: "Shell plc" },
+    StockInfo { symbol: "RR.L", name: "Rolls-Royce" },
+    StockInfo { symbol: "AZN.L", name: "AstraZeneca" },
+    // Defensive US Sectors
+    StockInfo { symbol: "XLP", name: "Consumer Staples ETF" },
+    StockInfo { symbol: "XLU", name: "Utilities ETF" },
+    StockInfo { symbol: "XLRE", name: "Real Estate ETF" },
+    StockInfo { symbol: "XLK", name: "Technology ETF" },
 ];
 
 pub const FX_LIST: &[StockInfo] = &[
