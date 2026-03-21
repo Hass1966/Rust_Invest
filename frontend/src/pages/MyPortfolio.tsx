@@ -28,6 +28,7 @@ export default function MyPortfolio() {
   const [newDate, setNewDate] = useState('')
   const [addError, setAddError] = useState('')
   const [universe, setUniverse] = useState<Set<string>>(new Set())
+  const [showAddForm, setShowAddForm] = useState(false)
 
   const loadHoldings = useCallback(() => {
     fetchUserHoldings()
@@ -117,6 +118,77 @@ export default function MyPortfolio() {
   }
 
   if (loading) return <div className="text-gray-500 p-8">Loading portfolio...</div>
+
+  // Empty state for new users
+  if (holdings.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-xl font-semibold text-white">My Portfolio</h2>
+        </div>
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="text-6xl mb-6">&#128202;</div>
+          <h3 className="text-2xl font-bold text-white mb-3">Welcome to Alpha Signal</h3>
+          <p className="text-gray-400 max-w-md mb-8 leading-relaxed">
+            Add your first holding to start receiving AI-powered buy, hold, and sell
+            signals tailored to your portfolio.
+          </p>
+          <button
+            onClick={() => {
+              const el = document.getElementById('add-holding-section')
+              if (el) el.scrollIntoView({ behavior: 'smooth' })
+              else setShowAddForm(true)
+            }}
+            className="bg-cyan-500 hover:bg-cyan-400 text-black font-semibold px-8 py-3 rounded-xl text-base transition-colors cursor-pointer"
+          >
+            Add Your First Holding
+          </button>
+          <p className="text-gray-600 text-sm mt-4">
+            We track 91 assets across stocks, FX, and crypto. Free during beta.
+          </p>
+        </div>
+        {showAddForm && (
+          <div id="add-holding-section" className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Add Holding</h3>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                type="text"
+                placeholder="Symbol (e.g. AAPL, bitcoin, EURUSD=X)"
+                value={newSymbol}
+                onChange={e => setNewSymbol(e.target.value)}
+                className="bg-[#0a0e17] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-gray-200 flex-1 min-w-0"
+              />
+              <input
+                type="number"
+                placeholder="Quantity"
+                value={newQty}
+                onChange={e => setNewQty(e.target.value)}
+                step="any"
+                min="0"
+                className="bg-[#0a0e17] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-gray-200 w-full sm:w-28"
+              />
+              <input
+                type="date"
+                value={newDate}
+                onChange={e => setNewDate(e.target.value)}
+                className="bg-[#0a0e17] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-gray-200 w-full sm:w-40"
+              />
+              <button
+                onClick={handleAdd}
+                className="flex items-center justify-center gap-2 bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 rounded-lg px-4 py-2 text-sm transition-colors cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Add
+              </button>
+            </div>
+            {addError && <p className="text-red-400 text-xs mt-2">{addError}</p>}
+            <p className="text-xs text-gray-600 mt-2">
+              Stocks: use ticker (AAPL, MSFT) &middot; FX: use pair (EURUSD=X) &middot; Crypto: use CoinGecko ID (bitcoin, ethereum, solana)
+            </p>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const verdictColor = comparison?.verdict === 'signals_win' ? 'text-green-400'
     : comparison?.verdict === 'buy_hold_wins' ? 'text-red-400'

@@ -1,4 +1,4 @@
-/// serve — Web API server for Rust Invest
+/// serve — Web API server for Alpha Signal
 /// ========================================
 /// Loads pre-trained model weights, runs inference on current market data,
 /// and serves enriched trading signals via an Axum web server on port 8080.
@@ -44,7 +44,7 @@ struct AppState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║         RUST INVEST — SERVE MODE (Web API Server)              ║");
+    println!("║         ALPHA SIGNAL — SERVE MODE (Web API Server)             ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
 
     // Check that we have trained models
@@ -148,6 +148,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }).await.ok();
             }
 
+            // Send daily email alerts at 7am UTC
+            if now.hour() == 7 {
+                let sigs = scheduler_state.signals.read().await;
+                let signals_clone = sigs.clone();
+                drop(sigs);
+                let db_path_clone = scheduler_state.db_path.clone();
+                if let Some(email_cfg) = email_alerts::EmailConfig::from_env() {
+                    tokio::task::spawn_blocking(move || {
+                        let database = match db::Database::new(&db_path_clone) {
+                            Ok(d) => d,
+                            Err(_) => return,
+                        };
+                        let rt = tokio::runtime::Handle::current();
+                        rt.block_on(email_alerts::send_daily_alerts(&database, &signals_clone, &email_cfg));
+                    }).await.ok();
+                }
+            }
+
             let sigs = scheduler_state.signals.read().await;
             println!("  [Scheduler] Refresh complete. {} signals cached.", sigs.len());
         }
@@ -203,6 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/user-portfolio/compare", post(compare_portfolio))
         .route("/api/v1/user-portfolio/:id", put(update_user_holding).delete(delete_user_holding))
         .route("/api/v1/sentiment/:symbol", get(get_sentiment))
+        .route("/api/v1/email/unsubscribe", get(email_unsubscribe))
         .route("/api/v1/feedback/signal", post(submit_signal_feedback))
         .route("/api/v1/feedback/survey", post(submit_survey_feedback))
         .route("/api/v1/feedback", get(get_feedback))
@@ -1234,7 +1253,7 @@ async fn chat_handler(
     // Build system prompt — specialised for morning briefing vs generic chat
     let system_prompt = if is_morning_briefing {
         format!(
-            "You are a concise financial morning briefing generator for Rust Invest. \
+            "You are a concise financial morning briefing generator for Alpha Signal. \
              Given today's signals, generate a 3-paragraph briefing in plain English \
              (no jargon without explanation):\n\
              Para 1: What markets are doing today in one sentence, then the overall mood \
@@ -1250,7 +1269,7 @@ async fn chat_handler(
         )
     } else {
         format!(
-            "You are an AI analyst for a quantitative investment system (Rust_Invest).\n\
+            "You are an AI analyst for a quantitative investment system (Alpha Signal).\n\
              Here is the current portfolio state:\n\n\
              === PORTFOLIO ===\n{}\n\
              === TODAY'S SIGNALS ===\n{}\n\
@@ -1873,6 +1892,28 @@ struct SignalFeedbackRequest {
     asset: String,
     signal_type: String,
     reaction: String,  // "up" or "down"
+}
+
+async fn email_unsubscribe(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> axum::response::Html<String> {
+    let email = params.get("email").cloned().unwrap_or_default();
+    if !email.is_empty() {
+        let db_path = state.db_path.clone();
+        let email_clone = email.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(database) = db::Database::new(&db_path) {
+                let _ = database.disable_email_alerts_by_email(&email_clone);
+            }
+        }).await;
+    }
+    axum::response::Html(format!(
+        r#"<!DOCTYPE html><html><head><title>Unsubscribed</title></head>
+        <body style="background:#0a0e17;color:#e5e7eb;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">
+        <div style="text-align:center"><h1>Unsubscribed</h1><p>You will no longer receive email alerts from Alpha Signal.</p></div>
+        </body></html>"#
+    ))
 }
 
 async fn submit_signal_feedback(
@@ -3032,6 +3073,12 @@ fn run_startup_migrations(db_path: &str) {
             Err(e) => eprintln!("  [Migration] Insert {} error: {}", date, e),
         }
     }
+
+    // Email alert columns
+    let _ = database.execute_raw("ALTER TABLE users ADD COLUMN email_alerts INTEGER DEFAULT 1");
+    let _ = database.execute_raw("ALTER TABLE users ADD COLUMN last_signal_hash TEXT");
+    // user_id column on user_holdings if missing
+    let _ = database.execute_raw("ALTER TABLE user_holdings ADD COLUMN user_id INTEGER DEFAULT 0");
 }
 
 /// Build a default asset config from the existing STOCK_LIST/FX_LIST

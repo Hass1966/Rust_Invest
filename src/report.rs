@@ -169,7 +169,7 @@ fn report_head() -> String {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rust_Invest — AI Trading Intelligence</title>
+<title>Alpha Signal — AI Trading Intelligence</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap');
 :root {{
@@ -352,7 +352,7 @@ footer a {{ color: var(--teal); text-decoration: none; }}
 fn report_nav() -> String {
     String::from(
         "<nav>\
-         <div class='nav-brand'>RUST_INVEST <span>v7.0</span></div>\
+         <div class='nav-brand'>ALPHA SIGNAL <span>v7.0</span></div>\
          <div class='nav-links'>\
          <a href='#overview'>Overview</a>\
          <a href='#backtest'>Backtest</a>\

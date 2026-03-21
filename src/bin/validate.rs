@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Config::from_args();
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║         RUST INVEST — VALIDATION (Retrospective Simulation)    ║");
+    println!("║         ALPHA SIGNAL — VALIDATION (Retrospective Simulation)   ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
     println!("  Period:  Last {} trading days", cfg.days);
     println!("  Capital: £{:.0}", cfg.capital);

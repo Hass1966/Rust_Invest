@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { TrendingUp } from 'lucide-react'
 
 export default function Login() {
@@ -63,7 +63,10 @@ export default function Login() {
 
           <div className="mt-6 pt-4 border-t border-[#1f2937]">
             <p className="text-gray-500 text-xs text-center">
-              By signing in, you agree to our terms of service.
+              By signing in, you agree to our{' '}
+              <Link to="/terms" className="text-cyan-400 hover:underline">terms of service</Link>
+              {' '}and{' '}
+              <Link to="/privacy" className="text-cyan-400 hover:underline">privacy policy</Link>.
               <br />
               Not financial advice.
             </p>

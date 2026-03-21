@@ -85,7 +85,7 @@ echo "━━━ Creating systemd service ━━━"
 # ── 6. Create systemd service ──
 cat > /etc/systemd/system/rustinvest.service << SVCEOF
 [Unit]
-Description=Alpha Signal - Rust Invest Signal Server
+Description=Alpha Signal - AI Trading Signal Server
 After=network.target
 
 [Service]
@@ -102,6 +102,9 @@ Environment="MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}"
 Environment="MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI}"
 Environment="NEWSAPI_KEY=${NEWSAPI_KEY}"
 Environment="JWT_SECRET=${JWT_SECRET}"
+Environment="SMTP_FROM=alerts@alphasignal.co.uk"
+Environment="SMTP_PASSWORD=placeholder"
+Environment="APP_URL=https://${DOMAIN}"
 
 [Install]
 WantedBy=multi-user.target

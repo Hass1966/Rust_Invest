@@ -3,7 +3,7 @@ export default function About() {
     <div className="space-y-8 max-w-4xl mx-auto">
       {/* Hero */}
       <div>
-        <h2 className="text-2xl font-bold text-white">About Rust Invest</h2>
+        <h2 className="text-2xl font-bold text-white">About Alpha Signal</h2>
         <p className="text-gray-400 mt-2 leading-relaxed">
           An ML-powered market signal engine built entirely in Rust. It trains a 6-model ensemble
           on 7 years of historical data, generates daily BUY / SELL / HOLD signals for stocks,

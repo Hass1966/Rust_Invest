@@ -40,6 +40,7 @@ pub struct EnrichedSignal {
     pub asset_class: String,
     pub signal: String,
     pub reason: String,
+    pub explanation: String,
     pub risk_context: RiskContext,
     pub suggested_action: String,
     pub technical: TechnicalDetail,
@@ -180,11 +181,23 @@ pub fn enrich_signal(
         vote: if signal.gbt_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
     });
 
+    // Build explanation line
+    let explanation = build_explanation(
+        &signal.signal,
+        signal.confidence,
+        signal.models_agree,
+        signal.n_models,
+        signal.gbt_prob,
+        signal.linear_prob,
+        signal.logistic_prob,
+    );
+
     EnrichedSignal {
         asset: signal.symbol.clone(),
         asset_class: asset_class.to_string(),
         signal: signal.signal.clone(),
         reason,
+        explanation,
         risk_context: RiskContext {
             volatility_regime: vol_regime.to_string(),
             drawdown_risk: drawdown_risk.to_string(),
@@ -253,6 +266,47 @@ fn build_suggested_action(
             }
         }
         _ => "Monitor position. No actionable signal.".to_string(),
+    }
+}
+
+fn build_explanation(
+    signal: &str,
+    confidence: f64,
+    models_agree: usize,
+    n_models: usize,
+    gbt_prob: f64,
+    linreg_prob: f64,
+    logreg_prob: f64,
+) -> String {
+    let conf_pct = (confidence * 10.0).round() as i64; // confidence is 0-10, display as %
+
+    // Determine primary reason
+    let gbt_conf = ((gbt_prob - 0.5).abs() * 200.0).round() as i64;
+    let linreg_up = linreg_prob > 0.5;
+    let logreg_up = logreg_prob > 0.5;
+
+    let primary_reason = if gbt_conf > 65 {
+        "strong trend signal"
+    } else if linreg_up == logreg_up {
+        "consensus signal"
+    } else if conf_pct > 70 {
+        "high confidence signal"
+    } else if conf_pct < 55 {
+        "weak signal — use caution"
+    } else {
+        "quantitative momentum signal"
+    };
+
+    match signal {
+        "BUY" => format!(
+            "{} of {} models bullish · {}% confidence · {}",
+            models_agree, n_models, conf_pct, primary_reason
+        ),
+        "SELL" => format!(
+            "{} of {} models bearish · {}% confidence · {}",
+            models_agree, n_models, conf_pct, primary_reason
+        ),
+        _ => "Models disagree or signal too weak to act".to_string(),
     }
 }
 

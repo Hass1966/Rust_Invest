@@ -182,7 +182,7 @@ export default function Dashboard() {
           <button onClick={() => window.location.reload()} className="text-cyan-400 text-xs mt-2 hover:underline cursor-pointer">Retry</button>
         </div>
       ) : loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
             <div key={i} className="bg-[#111827] border border-[#1f2937] rounded-lg p-4 space-y-3">
               <div className="h-5 bg-gray-700/50 rounded w-24 animate-pulse" />
@@ -192,7 +192,7 @@ export default function Dashboard() {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(s => <DashboardCard key={s.asset} signal={s} />)}
         </div>
       )}
@@ -275,6 +275,11 @@ function DashboardCard({ signal: s }: { signal: EnrichedSignal }) {
           </div>
         </div>
       </div>
+
+      {/* Signal explanation */}
+      {s.explanation && (
+        <p className="text-gray-400 text-xs mb-2 font-mono leading-relaxed">{s.explanation}</p>
+      )}
 
       {/* Expand indicator */}
       <div className="flex items-center justify-between text-xs text-gray-500">

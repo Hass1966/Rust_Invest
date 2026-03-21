@@ -1,4 +1,4 @@
-/// Rust_Invest — Shared Library
+/// Alpha Signal — Shared Library
 /// ==============================
 /// Exposes all modules for use by train, signal, and main binaries.
 
@@ -37,3 +37,4 @@ pub mod simulator;
 pub mod backtest_compare;
 pub mod auth;
 pub mod news_sentiment;
+pub mod email_alerts;

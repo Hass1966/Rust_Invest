@@ -27,6 +27,7 @@ export interface EnrichedSignal {
   asset_class: string
   signal: string
   reason: string
+  explanation: string
   risk_context: RiskContext
   suggested_action: string
   technical: TechnicalDetail

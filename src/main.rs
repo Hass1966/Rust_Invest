@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // PART 1: Fetch and store live crypto
     // ════════════════════════════════════════
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║            RUST INVEST - Market Dashboard                       ║");
+    println!("║            ALPHA SIGNAL - Market Dashboard                      ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
 
     println!("━━━ TOP 20 CRYPTOCURRENCIES ━━━\n");

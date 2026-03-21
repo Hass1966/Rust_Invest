@@ -29,13 +29,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if test_lstm {
         println!("╔══════════════════════════════════════════════════════════════════╗");
-        println!("║    RUST INVEST — LSTM TEST MODE (SPY + MSFT only)              ║");
+        println!("║    ALPHA SIGNAL — LSTM TEST MODE (SPY + MSFT only)             ║");
         println!("╚══════════════════════════════════════════════════════════════════╝\n");
         return run_lstm_test(&database).await;
     }
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║         RUST INVEST — TRAIN MODE (Weekly Heavy Job)            ║");
+    println!("║         ALPHA SIGNAL — TRAIN MODE (Weekly Heavy Job)           ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
 
     let now = Utc::now().to_rfc3339();

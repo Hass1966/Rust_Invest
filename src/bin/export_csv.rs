@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = db::Database::new("rust_invest.db")?;
 
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║         RUST INVEST — CSV EXPORT                           ║");
+    println!("║         ALPHA SIGNAL — CSV EXPORT                          ║");
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
     export_signals_all(&database, export_dir)?;

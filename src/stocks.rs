@@ -79,6 +79,23 @@ pub const STOCK_LIST: &[StockInfo] = &[
     StockInfo { symbol: "SHEL.L", name: "Shell plc" },
     StockInfo { symbol: "RR.L", name: "Rolls-Royce" },
     StockInfo { symbol: "AZN.L", name: "AstraZeneca" },
+    // New US Stocks
+    StockInfo { symbol: "SHOP", name: "Shopify" },
+    StockInfo { symbol: "UBER", name: "Uber" },
+    StockInfo { symbol: "COIN", name: "Coinbase" },
+    StockInfo { symbol: "PLTR", name: "Palantir" },
+    // UK Stocks (FTSE 100)
+    StockInfo { symbol: "ISF.L", name: "iShares FTSE 100 ETF" },
+    StockInfo { symbol: "GSK.L", name: "GSK" },
+    StockInfo { symbol: "ULVR.L", name: "Unilever" },
+    StockInfo { symbol: "DGE.L", name: "Diageo" },
+    StockInfo { symbol: "VOD.L", name: "Vodafone" },
+    StockInfo { symbol: "BT-A.L", name: "BT Group" },
+    StockInfo { symbol: "LLOY.L", name: "Lloyds Banking Group" },
+    StockInfo { symbol: "BARC.L", name: "Barclays" },
+    StockInfo { symbol: "NWG.L", name: "NatWest Group" },
+    StockInfo { symbol: "REL.L", name: "RELX" },
+    StockInfo { symbol: "CPG.L", name: "Compass Group" },
     // Defensive US Sectors
     StockInfo { symbol: "XLP", name: "Consumer Staples ETF" },
     StockInfo { symbol: "XLU", name: "Utilities ETF" },

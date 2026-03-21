@@ -1387,6 +1387,48 @@ pub struct UserHolding {
     pub created_at: Option<String>,
 }
 
+impl Database {
+    /// Get users with email alerts enabled
+    pub fn get_alert_users(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, email FROM users WHERE email_alerts = 1 AND is_active = 1"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    /// Get user's last signal hash
+    pub fn get_user_signal_hash(&self, user_id: i64) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT last_signal_hash FROM users WHERE id = ?1"
+        )?;
+        let result = stmt.query_row(params![user_id], |row| {
+            row.get::<_, Option<String>>(0)
+        }).ok().flatten();
+        Ok(result)
+    }
+
+    /// Set user's last signal hash
+    pub fn set_user_signal_hash(&self, user_id: i64, hash: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE users SET last_signal_hash = ?1 WHERE id = ?2",
+            params![hash, user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Disable email alerts for user by email
+    pub fn disable_email_alerts_by_email(&self, email: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE users SET email_alerts = 0 WHERE email = ?1",
+            params![email],
+        )?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SignalHistoryRow {
     pub id: i64,

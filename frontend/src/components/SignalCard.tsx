@@ -111,8 +111,8 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
       </div>
 
       {/* Price + confidence */}
-      <div className="flex items-center gap-4 text-sm mb-2">
-        <span className="text-gray-400">Price: <span className="text-white font-mono">${s.price.toFixed(2)}</span> <span className="text-gray-600 text-xs">(USD)</span></span>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mb-2">
+        <span className="text-gray-400">Price: <span className="text-white font-mono">${s.price.toFixed(2)}</span></span>
         <span className={conf.color} title={`${s.technical.confidence.toFixed(1)}%`}>
           {conf.text}
         </span>
@@ -121,6 +121,11 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
           {s.technical.quality}
         </span>
       </div>
+
+      {/* Signal explanation */}
+      {s.explanation && (
+        <p className="text-gray-300 text-xs mb-2 font-mono">{s.explanation}</p>
+      )}
 
       {/* Plain English reason */}
       <p className="text-gray-400 text-sm mb-2">{plainReason}</p>
@@ -153,7 +158,7 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
       {expanded && (
         <div className="mt-4 pt-4 border-t border-[#1f2937]">
           <h4 className="text-gray-400 text-xs uppercase tracking-wider mb-3">Model Breakdown</h4>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {Object.entries(s.models).map(([name, model]) => (
               <div key={name} className="bg-[#0a0e17] rounded p-3">
                 <div className="text-gray-500 text-xs uppercase mb-1">{name}</div>

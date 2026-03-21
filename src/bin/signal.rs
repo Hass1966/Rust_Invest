@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = db::Database::new("rust_invest.db")?;
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║       RUST INVEST — SIGNAL MODE (Inference Only)               ║");
+    println!("║       ALPHA SIGNAL — SIGNAL MODE (Inference Only)              ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
 
     // Check that we have trained models

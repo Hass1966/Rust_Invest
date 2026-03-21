@@ -33,7 +33,7 @@ export default function Feedback() {
       <div className="max-w-2xl mx-auto text-center py-20">
         <div className="text-4xl mb-4">&#10003;</div>
         <h2 className="text-xl font-semibold text-white mb-2">Thank you for your feedback</h2>
-        <p className="text-gray-400">Your responses help us improve Rust Invest.</p>
+        <p className="text-gray-400">Your responses help us improve Alpha Signal.</p>
         <button
           onClick={() => { setSubmitted(false); setUnderstand(''); setCheckDaily(''); setTrustMore(''); setMissing(''); setWouldPay('') }}
           className="mt-6 text-cyan-400 hover:text-cyan-300 text-sm cursor-pointer"
@@ -49,7 +49,7 @@ export default function Feedback() {
       <div>
         <h2 className="text-xl font-semibold text-white">Feedback</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Help us improve Rust Invest. All responses are anonymous.
+          Help us improve Alpha Signal. All responses are anonymous.
         </p>
       </div>
 
