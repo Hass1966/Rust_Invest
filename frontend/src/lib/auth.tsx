@@ -13,8 +13,8 @@ interface AuthState {
   token: string | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string) => Promise<void>
   logout: () => void
+  setOAuthToken: (token: string) => void
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -26,8 +26,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Check for existing session on mount
   useEffect(() => {
-    // Token is stored in memory only — no localStorage
     setLoading(false)
+  }, [])
+
+  // When token changes, fetch user info
+  const fetchMe = useCallback(async (t: string) => {
+    try {
+      const res = await fetch(`${BASE}/api/v1/auth/me`, {
+        headers: { Authorization: `Bearer ${t}` },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setUser({ id: data.id, email: data.email })
+      }
+    } catch {
+      // ignore
+    }
   }, [])
 
   const login = useCallback(async (email: string, password: string) => {
@@ -43,18 +57,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user)
   }, [])
 
-  const register = useCallback(async (email: string, password: string) => {
-    const res = await fetch(`${BASE}/api/v1/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error || 'Registration failed')
-    setToken(data.token)
-    setAuthToken(data.token)
-    setUser(data.user)
-  }, [])
+  const setOAuthToken = useCallback((t: string) => {
+    setToken(t)
+    setAuthToken(t)
+    fetchMe(t)
+  }, [fetchMe])
 
   const logout = useCallback(() => {
     setToken(null)
@@ -64,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, logout, setOAuthToken }}>
       {children}
     </AuthContext.Provider>
   )

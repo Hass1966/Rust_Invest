@@ -289,6 +289,12 @@ pub fn feature_names() -> Vec<String> {
     names.push("is_friday".into());             // Friday position squaring (binary)
     names.push("days_since_52w_high".into());   // Momentum exhaustion signal (normalised)
 
+    // O. News & Sentiment features (4 features)
+    names.push("news_sentiment_3d".into());    // 3-day rolling avg news score
+    names.push("reddit_mentions_norm".into()); // Normalised reddit mention count (0-1)
+    names.push("reddit_sentiment".into());     // Reddit sentiment score (-1 to 1)
+    names.push("sentiment_momentum".into());   // Today vs yesterday sentiment change
+
     names
 }
 
@@ -1043,6 +1049,13 @@ pub fn build_rich_features_ext(
             (days as f64 / 252.0).min(1.0)
         };
         f.push(days_since_high);                                       // days_since_52w_high
+
+        // O. News & Sentiment features (4 features) — default 0.0
+        // These are populated from the news_sentiment table at inference time
+        f.push(0.0); // news_sentiment_3d
+        f.push(0.0); // reddit_mentions_norm
+        f.push(0.0); // reddit_sentiment
+        f.push(0.0); // sentiment_momentum
 
         // ══ Label: next day return ══
         let label = prices[i+1] - prices[i]; // positive = up

@@ -365,6 +365,12 @@ export async function submitSurveyFeedback(survey: SurveyFeedback): Promise<void
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
+export async function fetchSentiment(symbol: string): Promise<{ symbol: string; data: { news_score: number; reddit_mentions: number; reddit_score: number; combined_score: number; date: string }[] }> {
+  const res = await fetch(`${BASE}/api/v1/sentiment/${encodeURIComponent(symbol)}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 export async function sendChat(message: string, tabContext: string): Promise<string> {
   const res = await fetch(`${BASE}/api/v1/chat`, {
     method: 'POST',

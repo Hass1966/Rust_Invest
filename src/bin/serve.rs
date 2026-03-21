@@ -34,6 +34,7 @@ struct AppState {
     llm_provider: Option<llm::LlmProvider>,
     http_client: reqwest::Client,
     rate_limiter: auth::RateLimiter,
+    oauth_config: Option<auth::OAuthConfig>,
 }
 
 // ════════════════════════════════════════
@@ -76,6 +77,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  LLM: Not configured (set LLM_PROVIDER in .env)"),
     }
 
+    let oauth_config = auth::OAuthConfig::from_env();
+    match &oauth_config {
+        Some(_) => println!("  OAuth: Google + Microsoft configured"),
+        None => println!("  OAuth: Not configured (set GOOGLE_CLIENT_ID etc.)"),
+    }
+
     let state = AppState {
         signals: Arc::new(RwLock::new(HashMap::new())),
         asset_config: Arc::new(RwLock::new(asset_config)),
@@ -83,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         llm_provider,
         http_client: reqwest::Client::new(),
         rate_limiter: auth::RateLimiter::new(),
+        oauth_config,
     };
 
     // ── Startup database migrations ──
@@ -187,9 +195,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/auth/login", post(auth_login))
         .route("/api/v1/auth/logout", post(auth_logout))
         .route("/api/v1/auth/me", get(auth_me))
+        .route("/api/v1/auth/google", get(auth_google_redirect))
+        .route("/api/v1/auth/google/callback", get(auth_google_callback))
+        .route("/api/v1/auth/microsoft", get(auth_microsoft_redirect))
+        .route("/api/v1/auth/microsoft/callback", get(auth_microsoft_callback))
         .route("/api/v1/user-portfolio", get(get_user_holdings).post(add_user_holding))
         .route("/api/v1/user-portfolio/compare", post(compare_portfolio))
         .route("/api/v1/user-portfolio/:id", put(update_user_holding).delete(delete_user_holding))
+        .route("/api/v1/sentiment/:symbol", get(get_sentiment))
         .route("/api/v1/feedback/signal", post(submit_signal_feedback))
         .route("/api/v1/feedback/survey", post(submit_survey_feedback))
         .route("/api/v1/feedback", get(get_feedback))
@@ -1942,6 +1955,25 @@ async fn get_feedback(
 }
 
 // ════════════════════════════════════════
+// Sentiment Handler
+// ════════════════════════════════════════
+
+async fn get_sentiment(
+    State(state): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let data = news_sentiment::get_sentiment_history(&conn, &symbol, 30);
+        Ok::<_, StatusCode>(Json(serde_json::json!({
+            "symbol": symbol,
+            "data": data,
+        })))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+// ════════════════════════════════════════
 // Startup Database Migrations
 // ════════════════════════════════════════
 
@@ -2734,6 +2766,130 @@ async fn auth_me(
     })))
 }
 
+// ════════════════════════════════════════
+// OAuth Handlers
+// ════════════════════════════════════════
+
+#[derive(serde::Deserialize)]
+struct OAuthCallbackQuery {
+    code: Option<String>,
+    error: Option<String>,
+}
+
+async fn auth_google_redirect(
+    State(state): State<AppState>,
+) -> Result<axum::response::Redirect, (StatusCode, Json<serde_json::Value>)> {
+    let config = state.oauth_config.as_ref()
+        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "OAuth not configured"}))))?;
+    let url = auth::google_auth_url(config);
+    Ok(axum::response::Redirect::temporary(&url))
+}
+
+async fn auth_google_callback(
+    State(state): State<AppState>,
+    Query(params): Query<OAuthCallbackQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if let Some(err) = params.error {
+        return axum::response::Redirect::temporary(&format!("/login?error={}", err)).into_response();
+    }
+
+    let code = match params.code {
+        Some(c) => c,
+        None => return axum::response::Redirect::temporary("/login?error=no_code").into_response(),
+    };
+
+    let config = match state.oauth_config.as_ref() {
+        Some(c) => c,
+        None => return axum::response::Redirect::temporary("/login?error=oauth_not_configured").into_response(),
+    };
+
+    match auth::exchange_google_code(&state.http_client, config, &code).await {
+        Ok((email, oauth_id)) => {
+            let db_path = state.db_path.clone();
+            let email_c = email.clone();
+            let oauth_id_c = oauth_id.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("DB: {}", e))?;
+                auth::find_or_create_oauth_user(&conn, &email_c, "google", &oauth_id_c)
+            }).await;
+
+            match result {
+                Ok(Ok(resp)) => {
+                    axum::response::Redirect::temporary(&format!("/auth/callback?token={}", resp.token)).into_response()
+                }
+                Ok(Err(e)) => {
+                    axum::response::Redirect::temporary(&format!("/login?error={}", urlencoding::encode(&e))).into_response()
+                }
+                Err(e) => {
+                    axum::response::Redirect::temporary(&format!("/login?error={}", urlencoding::encode(&e.to_string()))).into_response()
+                }
+            }
+        }
+        Err(e) => {
+            axum::response::Redirect::temporary(&format!("/login?error={}", urlencoding::encode(&e))).into_response()
+        }
+    }
+}
+
+async fn auth_microsoft_redirect(
+    State(state): State<AppState>,
+) -> Result<axum::response::Redirect, (StatusCode, Json<serde_json::Value>)> {
+    let config = state.oauth_config.as_ref()
+        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "OAuth not configured"}))))?;
+    let url = auth::microsoft_auth_url(config);
+    Ok(axum::response::Redirect::temporary(&url))
+}
+
+async fn auth_microsoft_callback(
+    State(state): State<AppState>,
+    Query(params): Query<OAuthCallbackQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if let Some(err) = params.error {
+        return axum::response::Redirect::temporary(&format!("/login?error={}", err)).into_response();
+    }
+
+    let code = match params.code {
+        Some(c) => c,
+        None => return axum::response::Redirect::temporary("/login?error=no_code").into_response(),
+    };
+
+    let config = match state.oauth_config.as_ref() {
+        Some(c) => c,
+        None => return axum::response::Redirect::temporary("/login?error=oauth_not_configured").into_response(),
+    };
+
+    match auth::exchange_microsoft_code(&state.http_client, config, &code).await {
+        Ok((email, oauth_id)) => {
+            let db_path = state.db_path.clone();
+            let email_c = email.clone();
+            let oauth_id_c = oauth_id.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("DB: {}", e))?;
+                auth::find_or_create_oauth_user(&conn, &email_c, "microsoft", &oauth_id_c)
+            }).await;
+
+            match result {
+                Ok(Ok(resp)) => {
+                    axum::response::Redirect::temporary(&format!("/auth/callback?token={}", resp.token)).into_response()
+                }
+                Ok(Err(e)) => {
+                    axum::response::Redirect::temporary(&format!("/login?error={}", urlencoding::encode(&e))).into_response()
+                }
+                Err(e) => {
+                    axum::response::Redirect::temporary(&format!("/login?error={}", urlencoding::encode(&e.to_string()))).into_response()
+                }
+            }
+        }
+        Err(e) => {
+            axum::response::Redirect::temporary(&format!("/login?error={}", urlencoding::encode(&e))).into_response()
+        }
+    }
+}
+
 /// Extract user_id from Authorization header, returns 0 if not authenticated (backwards compat)
 fn extract_user_id(headers: &axum::http::HeaderMap) -> i64 {
     headers.get("authorization")
@@ -2761,6 +2917,10 @@ fn run_startup_migrations(db_path: &str) {
         match auth::ensure_admin_user(&conn, "hassan@hassanshuman.co.uk", "changeme123") {
             Ok(id) => println!("  [Migration] Admin user ready (id={})", id),
             Err(e) => eprintln!("  [Migration] Admin user error: {}", e),
+        }
+        // Sentiment table
+        if let Err(e) = news_sentiment::create_sentiment_table(&conn) {
+            eprintln!("  [Migration] Sentiment table error: {}", e);
         }
     }
 

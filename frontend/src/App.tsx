@@ -7,7 +7,7 @@ import TrackRecord from './pages/TrackRecord'
 import Explore from './pages/Explore'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
-import Register from './pages/Register'
+import AuthCallback from './pages/AuthCallback'
 import ChatPanel from './components/ChatPanel'
 import { useAuth } from './lib/auth'
 
@@ -36,11 +36,11 @@ export default function App() {
   )?.label.toLowerCase() || 'dashboard'
 
   // Full-page auth routes (no nav)
-  if (location.pathname === '/login' || location.pathname === '/register') {
+  if (location.pathname === '/login' || location.pathname === '/auth/callback') {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
       </Routes>
     )
   }
@@ -53,7 +53,7 @@ export default function App() {
           <div className="w-8 h-8 rounded bg-cyan-500/20 flex items-center justify-center">
             <TrendingUp className="w-5 h-5 text-cyan-400" />
           </div>
-          <h1 className="text-lg font-semibold text-white">Rust Invest</h1>
+          <h1 className="text-lg font-semibold text-white">Alpha Signal</h1>
         </div>
 
         <nav className="flex gap-1 overflow-x-auto scrollbar-hide">

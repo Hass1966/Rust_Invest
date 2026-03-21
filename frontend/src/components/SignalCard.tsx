@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { EnrichedSignal } from '../lib/types'
 import { translateSignalSummary, confidenceLabel } from '../lib/plain-english'
@@ -13,6 +13,13 @@ const signalBorder: Record<string, string> = {
   BUY: 'border-l-emerald-500',
   SELL: 'border-l-red-500',
   HOLD: 'border-l-amber-500',
+}
+
+interface SentimentEntry {
+  news_score: number
+  reddit_mentions: number
+  reddit_score: number
+  combined_score: number
 }
 
 function TrafficLight({ signal }: { signal: string }) {
@@ -44,11 +51,42 @@ function TrafficLight({ signal }: { signal: string }) {
   )
 }
 
+function SentimentBar({ score, label }: { score: number; label: string }) {
+  // score is -1 to 1, map to 0-10 for bar display
+  const filled = Math.round((score + 1) * 5)
+  const barColor = score > 0.1 ? 'bg-emerald-500' : score < -0.1 ? 'bg-red-500' : 'bg-gray-500'
+  const textColor = score > 0.1 ? 'text-emerald-400' : score < -0.1 ? 'text-red-400' : 'text-gray-400'
+
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs">
+      <span className="text-gray-500">{label}:</span>
+      <span className="inline-flex gap-px">
+        {Array.from({ length: 10 }, (_, i) => (
+          <span key={i} className={`w-1 h-2.5 rounded-sm ${i < filled ? barColor : 'bg-[#1f2937]'}`} />
+        ))}
+      </span>
+      <span className={textColor}>{score > 0 ? '+' : ''}{score.toFixed(2)}</span>
+    </span>
+  )
+}
+
 export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
   const [expanded, setExpanded] = useState(false)
+  const [sentiment, setSentiment] = useState<SentimentEntry | null>(null)
   const s = signal
   const plainReason = translateSignalSummary(s.reason, s.signal, s.asset)
   const conf = confidenceLabel(s.technical.confidence)
+
+  useEffect(() => {
+    fetch(`/api/v1/sentiment/${encodeURIComponent(s.asset)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.data?.length > 0) {
+          setSentiment(data.data[0])
+        }
+      })
+      .catch(() => {})
+  }, [s.asset])
 
   return (
     <div
@@ -86,6 +124,20 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
 
       {/* Plain English reason */}
       <p className="text-gray-400 text-sm mb-2">{plainReason}</p>
+
+      {/* Sentiment indicator */}
+      {sentiment && (
+        <div className="flex flex-wrap gap-4 text-xs mb-2">
+          <SentimentBar score={sentiment.news_score} label="News" />
+          <span className="inline-flex items-center gap-1 text-xs">
+            <span className="text-gray-500">Reddit:</span>
+            <span className={sentiment.reddit_score > 0.1 ? 'text-emerald-400' : sentiment.reddit_score < -0.1 ? 'text-red-400' : 'text-gray-400'}>
+              {sentiment.reddit_score > 0.1 ? 'bullish' : sentiment.reddit_score < -0.1 ? 'bearish' : 'neutral'}
+            </span>
+            <span className="text-gray-600">({sentiment.reddit_mentions} mentions)</span>
+          </span>
+        </div>
+      )}
 
       {/* Risk context */}
       <div className="flex gap-3 text-xs text-gray-500">

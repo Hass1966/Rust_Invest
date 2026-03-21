@@ -36,3 +36,4 @@ pub mod random_forest;
 pub mod simulator;
 pub mod backtest_compare;
 pub mod auth;
+pub mod news_sentiment;
