@@ -1,6 +1,7 @@
 import { Routes, Route, NavLink, useLocation, Navigate, Link } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X, LogOut, LogIn, Menu } from 'lucide-react'
+import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X, LogOut, LogIn, Menu, Home as HomeIcon } from 'lucide-react'
+import Home from './pages/Home'
 import Dashboard from './pages/Dashboard'
 import MyPortfolio from './pages/MyPortfolio'
 import TrackRecord from './pages/TrackRecord'
@@ -14,7 +15,8 @@ import ChatPanel from './components/ChatPanel'
 import { useAuth } from './lib/auth'
 
 const tabs = [
-  { path: '/', label: 'Dashboard', icon: BarChart3 },
+  { path: '/', label: 'Home', icon: HomeIcon },
+  { path: '/dashboard', label: 'Dashboard', icon: BarChart3 },
   { path: '/my-portfolio', label: 'My Portfolio', icon: Wallet, protected: true },
   { path: '/track-record', label: 'Track Record', icon: Target },
   { path: '/explore', label: 'Explore', icon: Compass },
@@ -41,7 +43,7 @@ export default function App() {
 
   const currentTab = tabs.find(t =>
     t.path === '/' ? location.pathname === '/' : location.pathname.startsWith(t.path)
-  )?.label.toLowerCase() || 'dashboard'
+  )?.label.toLowerCase() || 'home'
 
   // Full-page auth routes (no nav)
   if (location.pathname === '/login' || location.pathname === '/auth/callback') {
@@ -194,7 +196,8 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <main className={`flex-1 overflow-y-auto p-4 sm:p-6 transition-all ${chatOpen ? 'sm:mr-96' : ''}`}>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Home />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/my-portfolio" element={<ProtectedRoute><MyPortfolio /></ProtectedRoute>} />
             <Route path="/track-record" element={<TrackRecord />} />
             <Route path="/explore" element={<Explore />} />
