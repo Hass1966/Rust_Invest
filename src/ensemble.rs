@@ -637,6 +637,8 @@ pub struct TradingSignal {
     pub has_lstm: bool,
     pub has_gru: bool,
     pub has_rf: bool,
+    pub llm_sentiment: f64,
+    pub llm_analysis: Option<String>,
 }
 
 /// Per-asset signal thresholds — noisy assets need higher confidence
@@ -836,6 +838,32 @@ pub fn ensemble_signal_with_override(
         has_lstm: lstm_useful,
         has_gru: gru_useful,
         has_rf: rf_useful,
+        llm_sentiment: 0.0,
+        llm_analysis: None,
+    }
+}
+
+/// Apply LLM sentiment adjustment to a signal.
+/// Sentiment score (-1 to +1) shifts confidence and can flip marginal signals.
+pub fn apply_sentiment_adjustment(signal: &mut TradingSignal, sentiment: f64, analysis: Option<String>) {
+    signal.llm_sentiment = sentiment;
+    signal.llm_analysis = analysis;
+
+    // Sentiment alignment bonus: if LLM agrees with model direction, boost confidence
+    let model_direction = if signal.ensemble_prob > 0.5 { 1.0 } else { -1.0 };
+    let alignment = sentiment * model_direction; // positive = LLM agrees with models
+
+    if alignment > 0.0 {
+        // LLM agrees: boost confidence by up to 5 points
+        signal.confidence += alignment * 5.0;
+    } else if alignment < -0.3 {
+        // LLM strongly disagrees: reduce confidence
+        signal.confidence = (signal.confidence + alignment * 3.0).max(0.0);
+
+        // If sentiment is very strong and models are marginal, flip to HOLD
+        if sentiment.abs() > 0.6 && (signal.ensemble_prob - 0.5).abs() < 0.08 {
+            signal.signal = "HOLD".to_string();
+        }
     }
 }
 
@@ -847,8 +875,8 @@ pub fn print_signals(signals: &[TradingSignal]) {
     println!("╔════════════════════════════════════════════════════════════════════════════════════════════════╗");
     println!("║                          TRADING SIGNALS — Ensemble Consensus (4 Models)                      ║");
     println!("╠════════════════════════════════════════════════════════════════════════════════════════════════╣");
-    println!("║ {:<8} {:>8} {:>8} {:>6}  {:>6} {:>6} {:>6} {:>6}  {:>5} {:>7} {:>6} {:>7} ║",
-        "Symbol", "Price", "Signal", "Conf%", "LinR", "LogR", "GBT", "LSTM", "Agree", "WF Acc", "RSI", "Quality");
+    println!("║ {:<8} {:>8} {:>8} {:>6}  {:>6} {:>6} {:>6} {:>6}  {:>5} {:>7} {:>6} {:>5} {:>7} ║",
+        "Symbol", "Price", "Signal", "Conf%", "LinR", "LogR", "GBT", "LSTM", "Agree", "WF Acc", "RSI", "Sent", "Quality");
     println!("╠════════════════════════════════════════════════════════════════════════════════════════════════╣");
 
     for s in signals {
@@ -862,17 +890,23 @@ pub fn print_signals(signals: &[TradingSignal]) {
         } else {
             "  n/a".to_string()
         };
-        println!("║ {:<8} {:>8.2} {} {:>5.1}%  {:>5.1}% {:>5.1}% {:>5.1}% {}  {}/{}   {:>5.1}% {:>5.1} {:>7} ║",
+        let sent_str = if s.llm_sentiment != 0.0 {
+            format!("{:>+5.2}", s.llm_sentiment)
+        } else {
+            "  n/a".to_string()
+        };
+        println!("║ {:<8} {:>8.2} {} {:>5.1}%  {:>5.1}% {:>5.1}% {:>5.1}% {}  {}/{}   {:>5.1}% {:>5.1} {} {:>7} ║",
             s.symbol, s.current_price, signal_icon, s.confidence,
             s.linear_prob * 100.0, s.logistic_prob * 100.0, s.gbt_prob * 100.0,
             lstm_str,
-            s.models_agree, s.n_models, s.walk_forward_accuracy, s.rsi, s.signal_quality);
+            s.models_agree, s.n_models, s.walk_forward_accuracy, s.rsi, sent_str, s.signal_quality);
     }
 
     println!("╚════════════════════════════════════════════════════════════════════════════════════════════════╝");
     println!("  Quality: HIGH (>55%) = trustworthy | MEDIUM (52-55%) = marginal edge");
     println!("           LOW (50-52%) = barely above chance | NO EDGE (<50%) = forced HOLD");
-    println!("  Conf% = distance from 50/50, capped by walk-forward accuracy\n");
+    println!("  Conf% = distance from 50/50, capped by walk-forward accuracy");
+    println!("  Sent = LLM sentiment (-1 bearish to +1 bullish)\n");
 }
 
 // ════════════════════════════════════════

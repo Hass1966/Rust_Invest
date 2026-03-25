@@ -108,6 +108,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n  Initial signals generated: {}", sigs.len());
     }
 
+    // ── Batch-resolve all stale signal_history on startup ──
+    {
+        let sigs = state.signals.read().await;
+        let signals_map = sigs.clone();
+        drop(sigs);
+        let db_path = state.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            batch_resolve_signal_history(&db_path, &signals_map);
+            resolve_pending_predictions(&db_path, &signals_map);
+        }).await.ok();
+    }
+
     // Start hourly scheduler
     let scheduler_state = state.clone();
     tokio::spawn(async move {
@@ -137,13 +149,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }).await.ok();
             }
 
-            // Resolve pending predictions with current prices
+            // Batch-resolve all pending signal_history + predictions
             {
                 let sigs = scheduler_state.signals.read().await;
                 let signals_map = sigs.clone();
                 drop(sigs);
                 let db_path = scheduler_state.db_path.clone();
                 tokio::task::spawn_blocking(move || {
+                    batch_resolve_signal_history(&db_path, &signals_map);
                     resolve_pending_predictions(&db_path, &signals_map);
                 }).await.ok();
             }
@@ -209,6 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/predictions/history", get(get_predictions_history))
         .route("/api/v1/signals/truth", get(get_signal_truth))
         .route("/api/v1/signals/truth/historical", get(get_signal_truth_historical))
+        .route("/api/v1/signals/resolve", post(force_resolve_signals))
         .route("/api/v1/auth/register", post(auth_register))
         .route("/api/v1/auth/login", post(auth_login))
         .route("/api/v1/auth/logout", post(auth_logout))
@@ -815,6 +829,39 @@ fn backtest_signal_accuracy(
         "monthly_accuracy": monthly_accuracy,
         "generated_at": timestamp,
     })
+}
+
+/// POST /api/v1/signals/resolve — Force-resolve all pending signal_history + predictions
+async fn force_resolve_signals(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let sigs = state.signals.read().await;
+    let signals_map = sigs.clone();
+    drop(sigs);
+    let db_path = state.db_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        // Get counts before
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let before_unresolved = database.get_all_unresolved_signals().unwrap_or_default().len();
+        let before_pending = database.get_pending_predictions().unwrap_or_default().len();
+
+        batch_resolve_signal_history(&db_path, &signals_map);
+        resolve_pending_predictions(&db_path, &signals_map);
+
+        // Get counts after
+        let after_unresolved = database.get_all_unresolved_signals().unwrap_or_default().len();
+        let after_pending = database.get_pending_predictions().unwrap_or_default().len();
+
+        Ok::<_, StatusCode>(Json(serde_json::json!({
+            "signals_resolved": before_unresolved - after_unresolved,
+            "predictions_resolved": before_pending - after_pending,
+            "signals_still_pending": after_unresolved,
+            "predictions_still_pending": after_pending,
+        })))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(result)
 }
 
 async fn get_all_signals(
@@ -1709,6 +1756,17 @@ fn generate_signals_filtered(
         }
     }
 
+    // ── Apply cached LLM sentiment from news_sentiment table ──
+    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+        for sig in enriched_signals.iter_mut() {
+            let data = news_sentiment::get_recent_sentiment(&conn, &sig.asset, 1);
+            if let Some(latest) = data.first() {
+                sig.llm_sentiment = latest.combined_score;
+                sig.llm_analysis = latest.llm_analysis.clone();
+            }
+        }
+    }
+
     println!("  Generated {} enriched signals (inference only)", enriched_signals.len());
     Ok(enriched_signals)
 }
@@ -2018,8 +2076,65 @@ async fn get_sentiment(
 // Startup Database Migrations
 // ════════════════════════════════════════
 
+/// Batch-resolve ALL unresolved signal_history entries using current prices from the cache.
+/// Unlike record_signal_history() which resolves one per asset per cycle, this resolves everything.
+/// Only requires signals to be 4+ hours old (drops the end-of-day market hours restriction).
+fn batch_resolve_signal_history(db_path: &str, signals: &HashMap<String, enriched_signals::EnrichedSignal>) {
+    let database = match db::Database::new(db_path) {
+        Ok(d) => d,
+        Err(e) => { eprintln!("  [BatchResolve] DB error: {}", e); return; }
+    };
+
+    let unresolved = match database.get_all_unresolved_signals() {
+        Ok(u) => u,
+        Err(e) => { eprintln!("  [BatchResolve] Error fetching unresolved: {}", e); return; }
+    };
+
+    if unresolved.is_empty() { return; }
+
+    let now = Utc::now();
+    let resolve_ts = now.to_rfc3339();
+    let mut resolved = 0;
+
+    for sig in &unresolved {
+        // Must be at least 4 hours old
+        let signal_dt = match chrono::DateTime::parse_from_rfc3339(&sig.timestamp) {
+            Ok(t) => t.with_timezone(&Utc),
+            Err(_) => continue,
+        };
+        if (now - signal_dt).num_hours() < 4 { continue; }
+
+        // Get current price from signals cache
+        let current_price = if let Some(cached) = signals.get(&sig.asset) {
+            cached.price
+        } else {
+            continue; // No current price available
+        };
+
+        if sig.price_at_signal <= 0.0 || current_price <= 0.0 { continue; }
+
+        let pct_change = (current_price - sig.price_at_signal) / sig.price_at_signal * 100.0;
+        let was_correct = match sig.signal_type.as_str() {
+            "BUY" => current_price > sig.price_at_signal,
+            "SELL" => current_price < sig.price_at_signal,
+            "HOLD" => pct_change.abs() < 1.0,
+            _ => false,
+        };
+
+        if let Err(e) = database.resolve_signal_history(sig.id, current_price, pct_change, was_correct, &resolve_ts) {
+            eprintln!("  [BatchResolve] Error resolving signal {}: {}", sig.id, e);
+        } else {
+            resolved += 1;
+        }
+    }
+
+    if resolved > 0 {
+        println!("  [BatchResolve] Resolved {} of {} unresolved signal_history entries", resolved, unresolved.len());
+    }
+}
+
 /// Resolve pending predictions by comparing prediction price to current price.
-/// Uses market-hours-aware resolution logic (same rules as signal_history).
+/// Uses simplified 4-hour minimum rule (no end-of-day gating for scorecard accuracy).
 fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched_signals::EnrichedSignal>) {
     let database = match db::Database::new(db_path) {
         Ok(d) => d,
@@ -2038,19 +2153,19 @@ fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched
     let mut resolved = 0;
 
     for pred in &pending {
-        // Determine asset class from the current signals cache
-        let sig = match signals.get(&pred.asset) {
-            Some(s) => s,
+        // Must be at least 4 hours old
+        let pred_dt = match chrono::DateTime::parse_from_rfc3339(&pred.timestamp) {
+            Ok(t) => t.with_timezone(&Utc),
+            Err(_) => continue,
+        };
+        if (now - pred_dt).num_hours() < 4 { continue; }
+
+        // Get current price from signals cache
+        let current_price = match signals.get(&pred.asset) {
+            Some(s) => s.price,
             None => continue,
         };
-        let asset_class = sig.asset_class.as_str();
 
-        // Apply market-hours-aware resolution rules
-        if !can_resolve_signal(asset_class, &pred.signal, &pred.timestamp, now) {
-            continue;
-        }
-
-        let current_price = sig.price;
         let price_change = current_price - pred.price_at_prediction;
         let actual_direction = if price_change.abs() < pred.price_at_prediction * 0.001 {
             "FLAT"

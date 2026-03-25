@@ -1188,6 +1188,37 @@ impl Database {
         Ok(())
     }
 
+    /// Get ALL unresolved signals (for batch resolution)
+    pub fn get_all_unresolved_signals(&self) -> Result<Vec<SignalHistoryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, asset, asset_class, signal_type, price_at_signal,
+                    confidence, linreg_prob, logreg_prob, gbt_prob,
+                    outcome_price, pct_change, was_correct, resolution_ts
+             FROM signal_history
+             WHERE resolution_ts IS NULL
+             ORDER BY timestamp ASC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SignalHistoryRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                asset: row.get(2)?,
+                asset_class: row.get(3)?,
+                signal_type: row.get(4)?,
+                price_at_signal: row.get(5)?,
+                confidence: row.get(6)?,
+                linreg_prob: row.get(7)?,
+                logreg_prob: row.get(8)?,
+                gbt_prob: row.get(9)?,
+                outcome_price: row.get(10)?,
+                pct_change: row.get(11)?,
+                was_correct: row.get::<_, Option<i32>>(12)?.map(|v| v != 0),
+                resolution_ts: row.get(13)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
     /// Get signal history for the truth page with optional limit
     pub fn get_signal_history_all(&self, limit: usize) -> Result<Vec<SignalHistoryRow>> {
         let mut stmt = self.conn.prepare(

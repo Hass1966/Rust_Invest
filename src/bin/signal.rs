@@ -1,6 +1,7 @@
 /// signal — Fast daily/twice-daily signal generation (INFERENCE ONLY)
 /// ==================================================================
 /// Loads saved models, fetches latest prices from DB, generates trading signals.
+/// Now includes Claude LLM sentiment analysis via Serper + NewsAPI + Reddit.
 /// NO training happens here — only forward-pass inference on saved weights.
 /// Usage: cargo run --release --bin signal
 
@@ -10,12 +11,17 @@ use chrono::{Datelike, Timelike};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
     let database = db::Database::new("rust_invest.db")?;
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║       ALPHA SIGNAL — SIGNAL MODE (Inference Only)              ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
+
+    // Load .env for API keys
+    llm::load_provider(); // triggers dotenv loading
 
     // Check that we have trained models
     let cached = model_store::list_cached_models();
@@ -25,6 +31,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     println!("  Found {} cached model files\n", cached.len());
+
+    // ── Initialise sentiment table ──
+    {
+        let conn = rusqlite::Connection::open("rust_invest.db")?;
+        news_sentiment::create_sentiment_table(&conn)?;
+    }
 
     // ── Build market context from stored data ──
     let mut market_histories: HashMap<String, Vec<f64>> = HashMap::new();
@@ -157,6 +169,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             signals.push(ensemble::ensemble_signal(coin_id, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
         }
+    }
+
+    // ── LLM Sentiment Analysis (Claude) ──
+    // Fetch news + Reddit for each signal, analyse with Claude, adjust signals
+    println!("\n━━━ FETCHING NEWS & LLM SENTIMENT ANALYSIS ━━━\n");
+    let newsapi_key = std::env::var("NEWSAPI_KEY").unwrap_or_default();
+    let has_newsapi = !newsapi_key.is_empty() && newsapi_key != "REPLACE_WHEN_YOU_HAVE_IT";
+
+    if has_newsapi || std::env::var("SERPER_API_KEY").is_ok() {
+        let conn = rusqlite::Connection::open("rust_invest.db")?;
+        let mut sentiment_count = 0;
+
+        for signal in signals.iter_mut() {
+            // Skip if we already have today's sentiment cached
+            if news_sentiment::has_today_sentiment(&conn, &signal.symbol) {
+                // Load existing sentiment
+                let data = news_sentiment::get_recent_sentiment(&conn, &signal.symbol, 1);
+                if let Some(latest) = data.first() {
+                    ensemble::apply_sentiment_adjustment(
+                        signal,
+                        latest.combined_score,
+                        latest.llm_analysis.clone(),
+                    );
+                    sentiment_count += 1;
+                }
+                continue;
+            }
+
+            // Fetch fresh sentiment (Serper + NewsAPI + Reddit → Claude analysis)
+            let newsapi = if has_newsapi { &newsapi_key } else { "" };
+            match news_sentiment::fetch_and_store_sentiment(&client, &conn, &signal.symbol, newsapi).await {
+                Ok(data) => {
+                    ensemble::apply_sentiment_adjustment(
+                        signal,
+                        data.combined_score,
+                        data.llm_analysis,
+                    );
+                    sentiment_count += 1;
+                }
+                Err(e) => {
+                    eprintln!("  Sentiment fetch failed for {}: {}", signal.symbol, e);
+                }
+            }
+
+            // Rate limit: small delay between API calls
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        println!("  Analysed sentiment for {} assets\n", sentiment_count);
+    } else {
+        println!("  Skipping (no NEWSAPI_KEY or SERPER_API_KEY configured)\n");
     }
 
     // ── Print signals ──

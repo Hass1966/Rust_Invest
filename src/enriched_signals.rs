@@ -47,6 +47,8 @@ pub struct EnrichedSignal {
     pub models: std::collections::HashMap<String, ModelDetail>,
     pub price: f64,
     pub timestamp: String,
+    pub llm_sentiment: f64,
+    pub llm_analysis: Option<String>,
 }
 
 /// Build an enriched signal from a raw TradingSignal
@@ -110,6 +112,13 @@ pub fn enrich_signal(
         "BULLISH" => reasons.push("trend is bullish (SMA crossover positive)".to_string()),
         "BEARISH" => reasons.push("trend is bearish (SMA crossover negative)".to_string()),
         _ => {}
+    }
+
+    // LLM sentiment reasoning
+    if signal.llm_sentiment > 0.3 {
+        reasons.push("AI news analysis is bullish".to_string());
+    } else if signal.llm_sentiment < -0.3 {
+        reasons.push("AI news analysis is bearish".to_string());
     }
 
     let reason = if reasons.is_empty() {
@@ -218,6 +227,8 @@ pub fn enrich_signal(
         models,
         price: (signal.current_price * 100.0).round() / 100.0,
         timestamp: chrono::Utc::now().to_rfc3339(),
+        llm_sentiment: signal.llm_sentiment,
+        llm_analysis: signal.llm_analysis.clone(),
     }
 }
 

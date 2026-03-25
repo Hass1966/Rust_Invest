@@ -1,276 +1,75 @@
 import { useEffect, useState, useCallback } from 'react'
-import { fetchSignalTruth, fetchHistoricalSignalAccuracy, submitSignalFeedback, fetchPredictions } from '../lib/api'
-import type { SignalTruthData, SignalTruthRecord, HistoricalSignalAccuracy, PredictionsData, PredictionRecord } from '../lib/api'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts'
-
-type Tab = 'backtest' | 'live' | 'predictions'
+import { fetchSignalTruth, forceResolveSignals } from '../lib/api'
+import type { SignalTruthData, SignalTruthRecord } from '../lib/api'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
 export default function TrackRecord() {
-  const [tab, setTab] = useState<Tab>('backtest')
   const [data, setData] = useState<SignalTruthData | null>(null)
-  const [historical, setHistorical] = useState<HistoricalSignalAccuracy | null>(null)
-  const [predictions, setPredictions] = useState<PredictionsData | null>(null)
-  const [histLoading, setHistLoading] = useState(true)
   const [loading, setLoading] = useState(true)
-  const [predLoading, setPredLoading] = useState(true)
+  const [resolving, setResolving] = useState(false)
   const [filter, setFilter] = useState<string>('all')
   const [classFilter, setClassFilter] = useState<string>('all')
   const [signalFilter, setSignalFilter] = useState<string>('all')
+  const [sortBy, setSortBy] = useState<'accuracy' | 'total' | 'asset'>('accuracy')
 
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
     setLoading(true)
-    fetchSignalTruth()
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false))
+    try {
+      const d = await fetchSignalTruth()
+      setData(d)
+    } catch {
+      setData(null)
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
-  const loadHistorical = useCallback(() => {
-    setHistLoading(true)
-    fetchHistoricalSignalAccuracy('weekly')
-      .then(setHistorical)
-      .catch(() => setHistorical(null))
-      .finally(() => setHistLoading(false))
-  }, [])
+  const handleForceResolve = async () => {
+    setResolving(true)
+    try {
+      await forceResolveSignals()
+      await load()
+    } catch { /* ignore */ }
+    setResolving(false)
+  }
 
-  const loadPredictions = useCallback(() => {
-    setPredLoading(true)
-    fetchPredictions()
-      .then(setPredictions)
-      .catch(() => setPredictions(null))
-      .finally(() => setPredLoading(false))
-  }, [])
+  useEffect(() => { load() }, [load])
 
-  useEffect(() => { load(); loadHistorical(); loadPredictions() }, [load, loadHistorical, loadPredictions])
-
+  // Auto-refresh every hour
   useEffect(() => {
-    const interval = setInterval(load, 60_000)
+    const interval = setInterval(load, 3600_000)
     return () => clearInterval(interval)
   }, [load])
 
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-white">Track Record</h2>
-        <p className="text-sm text-gray-500 mt-1">
-          Fully transparent, unfiltered track record. Every signal shown — good and bad.
-        </p>
-      </div>
-
-      {/* Tab selector */}
-      <div className="flex gap-2">
-        {([
-          { key: 'backtest' as Tab, label: 'Historical Backtest' },
-          { key: 'live' as Tab, label: 'Live Tracker' },
-          { key: 'predictions' as Tab, label: 'Prediction Log' },
-        ]).map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
-              tab === t.key
-                ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
-                : 'text-gray-400 hover:text-gray-200 bg-[#111827] border border-[#1f2937]'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'backtest' && (
-        <HistoricalBacktest data={historical} loading={histLoading} onRefresh={loadHistorical} />
-      )}
-
-      {tab === 'live' && (
-        <LiveTracker data={data} loading={loading} load={load}
-          filter={filter} setFilter={setFilter}
-          classFilter={classFilter} setClassFilter={setClassFilter}
-          signalFilter={signalFilter} setSignalFilter={setSignalFilter}
-        />
-      )}
-
-      {tab === 'predictions' && (
-        <PredictionTracker data={predictions} loading={predLoading} onRefresh={loadPredictions} />
-      )}
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════
-// Historical Backtest Section
-// ═══════════════════════════════════════
-
-function HistoricalBacktest({ data, loading, onRefresh }: {
-  data: HistoricalSignalAccuracy | null
-  loading: boolean
-  onRefresh: () => void
-}) {
   if (loading && !data) {
-    return <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6 text-gray-500 text-center">Loading historical backtest...</div>
+    return <div className="text-gray-500 p-8 text-center">Loading track record...</div>
   }
 
-  if (!data || !data.has_data) {
+  if (!data || data.total_signals === 0) {
     return (
-      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
-        <h3 className="text-lg font-semibold text-white mb-2">Historical Signal Accuracy</h3>
-        <p className="text-gray-500 text-sm">{data?.note || 'No holdings in portfolio. Add holdings to see historical signal accuracy.'}</p>
+      <div className="text-gray-500 p-8 text-center">
+        <p>No signals recorded yet. Run the serve binary to start generating and tracking signals.</p>
       </div>
     )
   }
 
-  const accColor = (acc: number) => acc >= 55 ? 'text-green-400' : acc >= 50 ? 'text-amber-400' : 'text-red-400'
-  const buyStats = data.by_signal_type.find(s => s.signal_type === 'BUY')
-  const sellStats = data.by_signal_type.find(s => s.signal_type === 'SELL')
-  const holdStats = data.by_signal_type.find(s => s.signal_type === 'HOLD')
+  const { rolling, by_signal_type, by_asset_class, per_asset, signals } = data
+  const totalWrong = data.total_resolved - data.total_correct
+  const accColor = (acc: number, resolved: number) =>
+    resolved === 0 ? 'text-gray-600' : acc >= 57 ? 'text-green-400' : acc >= 50 ? 'text-amber-400' : 'text-red-400'
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-gray-500">Retrospective backtest across all portfolio holdings</p>
-        <button onClick={onRefresh} className="text-xs text-cyan-400 hover:text-cyan-300 cursor-pointer">Refresh</button>
-      </div>
+  // Per-asset sorted
+  const sortedAssets = [...per_asset].filter(a => a.total > 0).sort((a, b) => {
+    if (sortBy === 'accuracy') return b.accuracy - a.accuracy
+    if (sortBy === 'total') return b.total - a.total
+    return a.asset.localeCompare(b.asset)
+  })
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <div className="text-xs text-gray-500 mb-1">Overall Accuracy</div>
-          <div className={`text-2xl font-bold ${accColor(data.overall_accuracy)}`}>
-            {data.total_resolved > 0 ? `${data.overall_accuracy.toFixed(1)}%` : '--'}
-          </div>
-          <div className="text-xs text-gray-600 mt-1">{data.total_correct}/{data.total_resolved - (holdStats?.total || 0)} BUY/SELL correct</div>
-        </div>
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <div className="text-xs text-gray-500 mb-1">Total Signals</div>
-          <div className="text-2xl font-bold text-white">{data.total_signals.toLocaleString()}</div>
-          <div className="text-xs text-gray-600 mt-1">{data.total_pending} pending</div>
-        </div>
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <div className="text-xs text-gray-500 mb-1">BUY Accuracy</div>
-          <div className={`text-2xl font-bold ${buyStats && buyStats.total > 0 ? accColor(buyStats.accuracy) : 'text-gray-600'}`}>
-            {buyStats && buyStats.total > 0 ? `${buyStats.accuracy.toFixed(1)}%` : '--'}
-          </div>
-          <div className="text-xs text-gray-600 mt-1">{buyStats?.correct || 0}/{buyStats?.total || 0}</div>
-        </div>
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <div className="text-xs text-gray-500 mb-1">SELL Accuracy</div>
-          <div className={`text-2xl font-bold ${sellStats && sellStats.total > 0 ? accColor(sellStats.accuracy) : 'text-gray-600'}`}>
-            {sellStats && sellStats.total > 0 ? `${sellStats.accuracy.toFixed(1)}%` : '--'}
-          </div>
-          <div className="text-xs text-gray-600 mt-1">{sellStats?.correct || 0}/{sellStats?.total || 0}</div>
-        </div>
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <div className="text-xs text-gray-500 mb-1">HOLD Signals</div>
-          <div className="text-2xl font-bold text-amber-400">{holdStats?.total_including_pending || 0}</div>
-          <div className="text-xs text-gray-600 mt-1">excluded from accuracy</div>
-        </div>
-      </div>
+  // Best/worst assets
+  const bestAssets = sortedAssets.filter(a => a.total >= 3).slice(0, 5)
+  const worstAssets = [...sortedAssets].filter(a => a.total >= 3).sort((a, b) => a.accuracy - b.accuracy).slice(0, 5)
 
-      {/* Accuracy by asset class + per-asset */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <h4 className="text-sm font-medium text-gray-400 mb-3">Accuracy by Asset Class</h4>
-          <div className="space-y-2">
-            {data.by_asset_class.map(ac => (
-              <div key={ac.asset_class} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium w-14 text-gray-300 capitalize">{ac.asset_class}</span>
-                  <div className="w-32 bg-[#0a0e17] rounded-full h-2">
-                    <div
-                      className={`h-2 rounded-full ${ac.accuracy >= 50 ? 'bg-cyan-500' : 'bg-red-500'}`}
-                      style={{ width: `${Math.min(ac.accuracy, 100)}%` }}
-                    />
-                  </div>
-                </div>
-                <span className="text-sm text-gray-400">
-                  {ac.total > 0 ? `${ac.accuracy.toFixed(1)}%` : '--'}{' '}
-                  <span className="text-gray-600">({ac.correct}/{ac.total})</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <h4 className="text-sm font-medium text-gray-400 mb-3">Per-Asset Accuracy</h4>
-          <div className="overflow-y-auto max-h-48">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-gray-500 border-b border-[#1f2937]">
-                  <th className="text-left py-1 px-1">Asset</th>
-                  <th className="text-left py-1 px-1">Class</th>
-                  <th className="text-right py-1 px-1">Signals</th>
-                  <th className="text-right py-1 px-1">Accuracy</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.per_asset.map(a => (
-                  <tr key={a.asset} className="border-b border-[#1f2937]/30">
-                    <td className="py-1 px-1 text-gray-300 font-medium">{a.asset}</td>
-                    <td className="py-1 px-1 text-gray-500 text-xs capitalize">{a.asset_class}</td>
-                    <td className="py-1 px-1 text-right text-gray-400">{a.total_signals}</td>
-                    <td className={`py-1 px-1 text-right font-medium ${a.total > 0 ? accColor(a.accuracy) : 'text-gray-600'}`}>
-                      {a.total > 0 ? `${a.accuracy.toFixed(1)}%` : '--'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      {/* Monthly accuracy chart */}
-      {data.monthly_accuracy.length > 0 && (
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <h4 className="text-sm font-medium text-gray-400 mb-3">Monthly Accuracy Timeline</h4>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={data.monthly_accuracy.map(m => ({
-              month: m.month,
-              accuracy: Number(m.accuracy.toFixed(1)),
-              total: m.total,
-            }))}>
-              <XAxis dataKey="month" tick={{ fill: '#6b7280', fontSize: 10 }}
-                interval={Math.max(0, Math.floor(data.monthly_accuracy.length / 12) - 1)}
-                angle={-45} textAnchor="end" height={50} />
-              <YAxis domain={[0, 100]} tick={{ fill: '#6b7280', fontSize: 11 }} width={35} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }}
-                labelStyle={{ color: '#9ca3af' }}
-                formatter={(value: unknown, _name: unknown, props: unknown) => {
-                  const v = value as number
-                  const p = props as { payload: { total: number } }
-                  return [`${v}% (${p.payload.total} signals)`, 'Accuracy']
-                }}
-              />
-              <ReferenceLine y={50} stroke="#4b5563" strokeDasharray="3 3" />
-              <Bar dataKey="accuracy" radius={[2, 2, 0, 0]}>
-                {data.monthly_accuracy.map((m, idx) => (
-                  <Cell key={idx} fill={m.accuracy >= 55 ? '#22c55e' : m.accuracy >= 50 ? '#f59e0b' : '#ef4444'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════
-// Live Signal Tracker
-// ═══════════════════════════════════════
-
-function LiveTracker({ data, loading, load, filter, setFilter, classFilter, setClassFilter, signalFilter, setSignalFilter }: {
-  data: SignalTruthData | null; loading: boolean; load: () => void
-  filter: string; setFilter: (v: string) => void
-  classFilter: string; setClassFilter: (v: string) => void
-  signalFilter: string; setSignalFilter: (v: string) => void
-}) {
-  if (loading && !data) return <div className="text-gray-500 p-8">Loading live signals...</div>
-  if (!data || data.total_signals === 0) {
-    return <div className="text-gray-500 p-8 text-center"><p>No live signal history yet. Signals will be recorded automatically each hourly cycle.</p></div>
-  }
-
-  const { rolling, by_signal_type, by_asset_class, signals } = data
+  // Filtered signals for the table
   const filtered = signals.filter(s => {
     if (filter !== 'all' && s.asset !== filter) return false
     if (classFilter !== 'all' && s.asset_class !== classFilter) return false
@@ -280,62 +79,217 @@ function LiveTracker({ data, loading, load, filter, setFilter, classFilter, setC
   const uniqueAssets = [...new Set(signals.map(s => s.asset))].sort()
 
   return (
-    <>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="Total Signals" value={data.total_signals.toString()} sub={`${data.total_pending} pending`} color="text-white" />
-        <StatCard label="Overall Accuracy"
-          value={data.total_resolved > 0 ? `${data.overall_accuracy.toFixed(1)}%` : '--'}
-          sub={`${data.total_correct}/${data.total_resolved} correct`}
-          color={data.overall_accuracy >= 55 ? 'text-green-400' : data.overall_accuracy >= 50 ? 'text-amber-400' : data.total_resolved === 0 ? 'text-gray-600' : 'text-red-400'}
-        />
-        <StatCard label="Resolved" value={data.total_resolved.toString()} sub={`${data.total_pending} still pending`} color="text-cyan-400" />
-        <StatCard label="Pending" value={data.total_pending.toString()} sub="awaiting next cycle" color="text-amber-400" />
+    <div className="space-y-6">
+      {/* ── Hero Banner ── */}
+      <div className="bg-gradient-to-r from-[#0f1729] to-[#111827] rounded-2xl border border-[#1f2937] p-6 sm:p-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white mb-1">Model Scorecard</h2>
+            <p className="text-sm text-gray-400">
+              Fully transparent. Every signal tracked — good and bad.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleForceResolve}
+              disabled={resolving}
+              className="px-4 py-2 rounded-lg text-sm bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {resolving ? 'Resolving...' : 'Resolve Pending'}
+            </button>
+            <button
+              onClick={load}
+              className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white bg-[#111827] border border-[#1f2937] transition-colors cursor-pointer"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Big accuracy number */}
+        <div className="mt-6 flex flex-col sm:flex-row sm:items-end gap-6">
+          <div>
+            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Overall Accuracy</div>
+            <div className={`text-5xl font-black ${accColor(data.overall_accuracy, data.total_resolved)}`}>
+              {data.total_resolved > 0 ? `${data.overall_accuracy.toFixed(1)}%` : '--'}
+            </div>
+          </div>
+          <div className="flex-1 text-sm text-gray-400 leading-relaxed">
+            {data.total_resolved > 0 ? (
+              <>
+                We analysed <span className="text-white font-semibold">{data.total_signals.toLocaleString()}</span> signals.{' '}
+                <span className="text-green-400 font-semibold">{data.total_correct.toLocaleString()}</span> predictions were correct,{' '}
+                <span className="text-red-400 font-semibold">{totalWrong.toLocaleString()}</span> were wrong.{' '}
+                {data.total_pending > 0 && <span className="text-amber-400">{data.total_pending.toLocaleString()} still pending resolution.</span>}
+              </>
+            ) : (
+              <span className="text-amber-400">All {data.total_signals.toLocaleString()} signals are awaiting resolution. Click "Resolve Pending" to score them against current prices.</span>
+            )}
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {/* ── Rolling Accuracy Cards ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <RollingCard label="Today" stats={rolling.today} />
         <RollingCard label="This Week" stats={rolling.this_week} />
         <RollingCard label="All Time" stats={rolling.all_time} />
       </div>
 
+      {/* ── By Signal Type & Asset Class ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3">By Signal Type</h3>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {by_signal_type.map(st => (
-              <div key={st.signal_type} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`text-sm font-medium w-12 ${st.signal_type === 'BUY' ? 'text-green-400' : st.signal_type === 'SELL' ? 'text-red-400' : 'text-amber-400'}`}>{st.signal_type}</span>
-                  <div className="w-32 bg-[#0a0e17] rounded-full h-2">
-                    <div className={`h-2 rounded-full ${st.accuracy >= 50 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(st.accuracy, 100)}%` }} />
-                  </div>
-                </div>
-                <span className="text-sm text-gray-400">{st.total > 0 ? `${st.accuracy.toFixed(1)}%` : '--'} <span className="text-gray-600">({st.correct}/{st.total})</span></span>
-              </div>
+              <AccuracyBar
+                key={st.signal_type}
+                label={st.signal_type}
+                correct={st.correct}
+                total={st.total}
+                accuracy={st.accuracy}
+                color={st.signal_type === 'BUY' ? 'bg-green-500' : st.signal_type === 'SELL' ? 'bg-red-500' : 'bg-amber-500'}
+                labelColor={st.signal_type === 'BUY' ? 'text-green-400' : st.signal_type === 'SELL' ? 'text-red-400' : 'text-amber-400'}
+              />
             ))}
           </div>
         </div>
         <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3">By Asset Class</h3>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {by_asset_class.map(ac => (
-              <div key={ac.asset_class} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium w-12 text-gray-300 capitalize">{ac.asset_class}</span>
-                  <div className="w-32 bg-[#0a0e17] rounded-full h-2">
-                    <div className={`h-2 rounded-full ${ac.accuracy >= 50 ? 'bg-cyan-500' : 'bg-red-500'}`} style={{ width: `${Math.min(ac.accuracy, 100)}%` }} />
-                  </div>
-                </div>
-                <span className="text-sm text-gray-400">{ac.total > 0 ? `${ac.accuracy.toFixed(1)}%` : '--'} <span className="text-gray-600">({ac.correct}/{ac.total})</span></span>
-              </div>
+              <AccuracyBar
+                key={ac.asset_class}
+                label={ac.asset_class}
+                correct={ac.correct}
+                total={ac.total}
+                accuracy={ac.accuracy}
+                color="bg-cyan-500"
+                labelColor="text-gray-300"
+              />
             ))}
           </div>
         </div>
       </div>
 
+      {/* ── Best & Worst Assets ── */}
+      {(bestAssets.length > 0 || worstAssets.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {bestAssets.length > 0 && (
+            <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+              <h3 className="text-sm font-medium text-green-400 mb-3">Best Performing Assets</h3>
+              <div className="space-y-2">
+                {bestAssets.map((a, i) => (
+                  <div key={a.asset} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-600 w-4">{i + 1}.</span>
+                      <span className="text-sm font-medium text-white">{a.asset}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-24 bg-[#0a0e17] rounded-full h-1.5">
+                        <div className="h-1.5 rounded-full bg-green-500" style={{ width: `${Math.min(a.accuracy, 100)}%` }} />
+                      </div>
+                      <span className="text-sm text-green-400 font-semibold w-14 text-right">{a.accuracy.toFixed(1)}%</span>
+                      <span className="text-xs text-gray-600 w-10 text-right">{a.correct}/{a.total}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {worstAssets.length > 0 && (
+            <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+              <h3 className="text-sm font-medium text-red-400 mb-3">Weakest Assets</h3>
+              <div className="space-y-2">
+                {worstAssets.map((a, i) => (
+                  <div key={a.asset} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-600 w-4">{i + 1}.</span>
+                      <span className="text-sm font-medium text-white">{a.asset}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-24 bg-[#0a0e17] rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full ${a.accuracy >= 50 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${Math.min(a.accuracy, 100)}%` }} />
+                      </div>
+                      <span className={`text-sm font-semibold w-14 text-right ${a.accuracy >= 50 ? 'text-amber-400' : 'text-red-400'}`}>{a.accuracy.toFixed(1)}%</span>
+                      <span className="text-xs text-gray-600 w-10 text-right">{a.correct}/{a.total}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Full Per-Asset Accuracy Grid ── */}
+      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-400">All Assets ({sortedAssets.length})</h3>
+          <div className="flex gap-1">
+            {(['accuracy', 'total', 'asset'] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => setSortBy(s)}
+                className={`px-2 py-1 text-xs rounded cursor-pointer ${sortBy === s ? 'text-cyan-400 bg-cyan-500/10' : 'text-gray-500 hover:text-gray-300'}`}
+              >
+                {s === 'accuracy' ? 'Best' : s === 'total' ? 'Most signals' : 'A-Z'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-80 overflow-y-auto">
+          {sortedAssets.map(a => (
+            <div key={a.asset} className="bg-[#0a0e17] rounded-lg p-3 text-center">
+              <div className="text-xs text-gray-500 truncate">{a.asset}</div>
+              <div className={`text-lg font-bold ${accColor(a.accuracy, a.total)}`}>
+                {a.accuracy.toFixed(1)}%
+              </div>
+              <div className="text-xs text-gray-600">{a.correct}/{a.total}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Per-Asset Accuracy Chart ── */}
+      {sortedAssets.length > 0 && (
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3">Accuracy by Asset (min 3 signals)</h3>
+          <ResponsiveContainer width="100%" height={Math.max(200, sortedAssets.filter(a => a.total >= 3).length * 24)}>
+            <BarChart
+              layout="vertical"
+              data={sortedAssets.filter(a => a.total >= 3).slice(0, 30).map(a => ({
+                asset: a.asset,
+                accuracy: Number(a.accuracy.toFixed(1)),
+                total: a.total,
+              }))}
+              margin={{ left: 60, right: 20 }}
+            >
+              <XAxis type="number" domain={[0, 100]} tick={{ fill: '#6b7280', fontSize: 11 }} />
+              <YAxis type="category" dataKey="asset" tick={{ fill: '#9ca3af', fontSize: 11 }} width={55} />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }}
+                labelStyle={{ color: '#e5e7eb' }}
+                formatter={(value: unknown, _name: unknown, props: unknown) => {
+                  const v = value as number
+                  const p = props as { payload: { total: number } }
+                  return [`${v}% (${p.payload.total} signals)`, 'Accuracy']
+                }}
+              />
+              <Bar dataKey="accuracy" radius={[0, 4, 4, 0]}>
+                {sortedAssets.filter(a => a.total >= 3).slice(0, 30).map((a, idx) => (
+                  <Cell key={idx} fill={a.accuracy >= 57 ? '#22c55e' : a.accuracy >= 50 ? '#f59e0b' : '#ef4444'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ── Signal History Table ── */}
       <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-          <h3 className="text-sm font-medium text-gray-400">Signal History</h3>
+          <h3 className="text-sm font-medium text-gray-400">Recent Signals</h3>
           <div className="flex flex-wrap items-center gap-2">
             <select value={classFilter} onChange={e => setClassFilter(e.target.value)} className="bg-[#0a0e17] border border-[#1f2937] rounded px-2 py-1 text-sm text-gray-300">
               <option value="all">All classes</option>
@@ -353,7 +307,6 @@ function LiveTracker({ data, loading, load, filter, setFilter, classFilter, setC
               <option value="all">All assets</option>
               {uniqueAssets.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
-            <button onClick={load} className="text-xs text-cyan-400 hover:text-cyan-300 px-2 py-1 cursor-pointer">Refresh</button>
           </div>
         </div>
         <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
@@ -362,222 +315,102 @@ function LiveTracker({ data, loading, load, filter, setFilter, classFilter, setC
               <tr className="text-gray-500 border-b border-[#1f2937]">
                 <th className="text-left py-2 px-2">Time</th>
                 <th className="text-left py-2 px-2">Asset</th>
+                <th className="text-left py-2 px-2">Class</th>
                 <th className="text-left py-2 px-2">Signal</th>
-                <th className="text-right py-2 px-2">Price</th>
+                <th className="text-right py-2 px-2">Entry Price</th>
                 <th className="text-right py-2 px-2">Outcome</th>
                 <th className="text-right py-2 px-2">Change</th>
                 <th className="text-center py-2 px-2">Result</th>
-                <th className="text-center py-2 px-2"></th>
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, 200).map(s => <SignalRow key={s.id} signal={s} />)}
+              {filtered.slice(0, 300).map(s => <SignalRow key={s.id} signal={s} />)}
             </tbody>
           </table>
         </div>
-        {filtered.length > 200 && <p className="text-xs text-gray-600 mt-2 text-center">Showing 200 of {filtered.length}</p>}
+        {filtered.length > 300 && <p className="text-xs text-gray-600 mt-2 text-center">Showing 300 of {filtered.length}</p>}
         {filtered.length === 0 && <p className="text-gray-600 text-center py-8">No signals match the current filters.</p>}
       </div>
-    </>
-  )
-}
-
-// ═══════════════════════════════════════
-// Prediction Tracker
-// ═══════════════════════════════════════
-
-function PredictionTracker({ data, loading, onRefresh }: {
-  data: PredictionsData | null; loading: boolean; onRefresh: () => void
-}) {
-  const [filter, setFilter] = useState<string>('all')
-
-  if (loading) return <div className="text-gray-500 p-8">Loading predictions...</div>
-  if (!data || data.predictions.length === 0) {
-    return <div className="text-gray-500 p-8 text-center"><p>No predictions yet. Run the signal binary to generate predictions.</p></div>
-  }
-
-  const { stats, per_asset, confidence_bands, predictions } = data
-  const filteredPredictions = filter === 'all' ? predictions : predictions.filter(p => p.asset === filter)
-  const uniqueAssets = [...new Set(predictions.map(p => p.asset))].sort()
-
-  return (
-    <>
-      <div className="grid grid-cols-4 gap-4">
-        <PredStatCard label="Overall" stats={{ resolved: stats.total_resolved, correct: stats.total_correct, accuracy: stats.overall_accuracy }} />
-        <PredStatCard label="Last 24h" stats={stats.last_24h} />
-        <PredStatCard label="Last 7 days" stats={stats.last_7d} />
-        <PredStatCard label="Last 30 days" stats={stats.last_30d} />
-      </div>
-
-      {confidence_bands.some(b => b.predictions > 0) && (
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Confidence Calibration</h3>
-          <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={confidence_bands.filter(b => b.predictions > 0)}>
-                <XAxis dataKey="band" tick={{ fill: '#9ca3af', fontSize: 12 }} />
-                <YAxis tick={{ fill: '#9ca3af', fontSize: 12 }} domain={[0, 100]} />
-                <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 8 }} labelStyle={{ color: '#e5e7eb' }}
-                  formatter={(value?: number, name?: string) => [`${(value ?? 0).toFixed(1)}%`, name === 'accuracy' ? 'Actual accuracy' : (name ?? '')]} />
-                <Bar dataKey="accuracy" name="Actual accuracy" radius={[4, 4, 0, 0]}>
-                  {confidence_bands.filter(b => b.predictions > 0).map((entry, i) => (
-                    <Cell key={i} fill={entry.accuracy >= 50 ? '#34d399' : '#f87171'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-        <h3 className="text-sm font-medium text-gray-400 mb-3">Per-Asset Accuracy</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-          {per_asset.map(a => (
-            <div key={a.asset} className="bg-[#0a0e17] rounded-lg p-3 text-center">
-              <div className="text-xs text-gray-500">{a.asset}</div>
-              <div className={`text-lg font-bold ${a.accuracy >= 55 ? 'text-green-400' : a.accuracy >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
-                {a.accuracy.toFixed(1)}%
-              </div>
-              <div className="text-xs text-gray-600">{a.correct}/{a.total}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-400">Predictions Log</h3>
-          <div className="flex items-center gap-2">
-            <select value={filter} onChange={e => setFilter(e.target.value)} className="bg-[#0a0e17] border border-[#1f2937] rounded px-2 py-1 text-sm text-gray-300">
-              <option value="all">All assets</option>
-              {uniqueAssets.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
-            <button onClick={onRefresh} className="text-xs text-cyan-400 hover:text-cyan-300 px-2 py-1 cursor-pointer">Refresh</button>
-          </div>
-        </div>
-        <div className="overflow-x-auto max-h-96 overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-[#111827]">
-              <tr className="text-gray-500 border-b border-[#1f2937]">
-                <th className="text-left py-2 px-2">Time</th>
-                <th className="text-left py-2 px-2">Asset</th>
-                <th className="text-left py-2 px-2">Signal</th>
-                <th className="text-right py-2 px-2">Confidence</th>
-                <th className="text-right py-2 px-2">Price</th>
-                <th className="text-left py-2 px-2">Actual</th>
-                <th className="text-center py-2 px-2">Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredPredictions.slice(0, 100).map(p => <PredictionRow key={p.id} prediction={p} />)}
-            </tbody>
-          </table>
-        </div>
-        {filteredPredictions.length > 100 && <p className="text-xs text-gray-600 mt-2 text-center">Showing 100 of {filteredPredictions.length}</p>}
-      </div>
-    </>
-  )
-}
-
-// ═══════════════════════════════════════
-// Shared Components
-// ═══════════════════════════════════════
-
-function StatCard({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) {
-  return (
-    <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-      <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className={`text-2xl font-bold ${color}`}>{value}</div>
-      <div className="text-xs text-gray-600 mt-1">{sub}</div>
     </div>
   )
 }
+
+// ═══════════════════════════════════════
+// Sub-components
+// ═══════════════════════════════════════
 
 function RollingCard({ label, stats }: { label: string; stats: { resolved: number; correct: number; accuracy: number } }) {
-  const color = stats.resolved === 0 ? 'text-gray-600' : stats.accuracy >= 55 ? 'text-green-400' : stats.accuracy >= 50 ? 'text-amber-400' : 'text-red-400'
+  const wrong = stats.resolved - stats.correct
+  const color = stats.resolved === 0 ? 'text-gray-600' : stats.accuracy >= 57 ? 'text-green-400' : stats.accuracy >= 50 ? 'text-amber-400' : 'text-red-400'
+
   return (
-    <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-      <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className={`text-2xl font-bold ${color}`}>{stats.resolved > 0 ? `${stats.accuracy.toFixed(1)}%` : '--'}</div>
-      <div className="text-xs text-gray-600 mt-1">{stats.correct}/{stats.resolved} correct</div>
+    <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-5">
+      <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">{label}</div>
+      <div className={`text-3xl font-bold ${color}`}>
+        {stats.resolved > 0 ? `${stats.accuracy.toFixed(1)}%` : '--'}
+      </div>
+      {stats.resolved > 0 && (
+        <div className="mt-2 flex items-center gap-3 text-xs">
+          <span className="text-green-400">{stats.correct} correct</span>
+          <span className="text-red-400">{wrong} wrong</span>
+          <span className="text-gray-600">{stats.resolved} total</span>
+        </div>
+      )}
+      {stats.resolved > 0 && (
+        <div className="mt-2 w-full bg-[#0a0e17] rounded-full h-1.5">
+          <div
+            className={`h-1.5 rounded-full ${stats.accuracy >= 50 ? 'bg-green-500' : 'bg-red-500'}`}
+            style={{ width: `${Math.min(stats.accuracy, 100)}%` }}
+          />
+        </div>
+      )}
     </div>
   )
 }
 
-function PredStatCard({ label, stats }: { label: string; stats: { resolved: number; correct: number; accuracy: number } }) {
+function AccuracyBar({ label, correct, total, accuracy, color, labelColor }: {
+  label: string; correct: number; total: number; accuracy: number; color: string; labelColor: string
+}) {
   return (
-    <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-      <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className={`text-2xl font-bold ${stats.accuracy >= 55 ? 'text-green-400' : stats.accuracy >= 50 ? 'text-yellow-400' : stats.resolved === 0 ? 'text-gray-600' : 'text-red-400'}`}>
-        {stats.resolved > 0 ? `${stats.accuracy.toFixed(1)}%` : '--'}
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <span className={`text-sm font-medium w-14 capitalize ${labelColor}`}>{label}</span>
+        <div className="w-32 bg-[#0a0e17] rounded-full h-2">
+          <div className={`h-2 rounded-full ${total > 0 && accuracy < 50 ? 'bg-red-500' : color}`} style={{ width: `${total > 0 ? Math.min(accuracy, 100) : 0}%` }} />
+        </div>
       </div>
-      <div className="text-xs text-gray-600 mt-1">{stats.correct}/{stats.resolved} correct</div>
+      <span className="text-sm text-gray-400">
+        {total > 0 ? `${accuracy.toFixed(1)}%` : '--'}{' '}
+        <span className="text-gray-600">({correct}/{total})</span>
+      </span>
     </div>
   )
 }
 
 function SignalRow({ signal: s }: { signal: SignalTruthRecord }) {
-  const [voted, setVoted] = useState<'up' | 'down' | null>(null)
   const time = new Date(s.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   const signalColor = s.signal_type === 'BUY' ? 'text-green-400' : s.signal_type === 'SELL' ? 'text-red-400' : 'text-amber-400'
 
   let resultIcon: React.ReactNode
-  if (s.was_correct === null) resultIcon = <span className="text-amber-400 text-lg" title="Pending">&#9679;</span>
-  else if (s.was_correct) resultIcon = <span className="text-green-400 text-lg" title="Correct">&#10003;</span>
-  else resultIcon = <span className="text-red-400 text-lg" title="Incorrect">&#10007;</span>
+  if (s.was_correct === null) resultIcon = <span className="text-amber-400/60 text-xs">pending</span>
+  else if (s.was_correct) resultIcon = <span className="text-green-400 font-bold">&#10003;</span>
+  else resultIcon = <span className="text-red-400 font-bold">&#10007;</span>
 
   const pctStr = s.pct_change != null ? `${s.pct_change >= 0 ? '+' : ''}${s.pct_change.toFixed(2)}%` : '--'
   const pctColor = s.pct_change == null ? 'text-gray-600' : s.pct_change > 0 ? 'text-green-400' : s.pct_change < 0 ? 'text-red-400' : 'text-gray-400'
-
-  const handleVote = (reaction: 'up' | 'down') => {
-    setVoted(reaction)
-    submitSignalFeedback(s.asset, s.signal_type, reaction).catch(() => {})
-  }
 
   return (
     <tr className="border-b border-[#1f2937]/50 hover:bg-white/[0.02]">
       <td className="py-1.5 px-2 text-gray-400 text-xs whitespace-nowrap">{time}</td>
       <td className="py-1.5 px-2 text-gray-300 font-medium">{s.asset}</td>
+      <td className="py-1.5 px-2 text-gray-500 text-xs capitalize">{s.asset_class}</td>
       <td className={`py-1.5 px-2 font-medium ${signalColor}`}>{s.signal_type}</td>
       <td className="py-1.5 px-2 text-right text-gray-400">{formatPrice(s.price_at_signal)}</td>
       <td className="py-1.5 px-2 text-right text-gray-400">
-        {s.outcome_price != null ? formatPrice(s.outcome_price) : <span className="text-amber-400/60">pending</span>}
+        {s.outcome_price != null ? formatPrice(s.outcome_price) : <span className="text-amber-400/40">--</span>}
       </td>
       <td className={`py-1.5 px-2 text-right ${pctColor}`}>{pctStr}</td>
       <td className="py-1.5 px-2 text-center">{resultIcon}</td>
-      <td className="py-1.5 px-2 text-center">
-        {voted ? (
-          <span className={voted === 'up' ? 'text-green-400' : 'text-red-400'}>{voted === 'up' ? '\u{1F44D}' : '\u{1F44E}'}</span>
-        ) : (
-          <span className="inline-flex gap-1">
-            <button onClick={() => handleVote('up')} className="text-gray-600 hover:text-green-400 cursor-pointer" title="Thumbs up">&#x1F44D;</button>
-            <button onClick={() => handleVote('down')} className="text-gray-600 hover:text-red-400 cursor-pointer" title="Thumbs down">&#x1F44E;</button>
-          </span>
-        )}
-      </td>
-    </tr>
-  )
-}
-
-function PredictionRow({ prediction: p }: { prediction: PredictionRecord }) {
-  const time = new Date(p.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  const signalColor = p.signal === 'BUY' ? 'text-green-400' : p.signal === 'SELL' ? 'text-red-400' : 'text-yellow-400'
-  const resultIcon = p.was_correct === null
-    ? <span className="text-gray-500" title="Pending">&#9203;</span>
-    : p.was_correct
-      ? <span className="text-green-400" title="Correct">&#10003;</span>
-      : <span className="text-red-400" title="Wrong">&#10007;</span>
-
-  return (
-    <tr className="border-b border-[#1f2937]/50 hover:bg-white/[0.02]">
-      <td className="py-1.5 px-2 text-gray-400 text-xs">{time}</td>
-      <td className="py-1.5 px-2 text-gray-300 font-medium">{p.asset}</td>
-      <td className={`py-1.5 px-2 font-medium ${signalColor}`}>{p.signal}</td>
-      <td className="py-1.5 px-2 text-right text-gray-400">{p.confidence.toFixed(1)}%</td>
-      <td className="py-1.5 px-2 text-right text-gray-400">{p.price_at_prediction.toFixed(2)}</td>
-      <td className="py-1.5 px-2 text-gray-400">{p.actual_direction || '-'}</td>
-      <td className="py-1.5 px-2 text-center text-lg">{resultIcon}</td>
     </tr>
   )
 }

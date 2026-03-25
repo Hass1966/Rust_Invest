@@ -173,7 +173,13 @@ export interface SignalTruthRecord {
 }
 
 export async function fetchSignalTruth(): Promise<SignalTruthData> {
-  const res = await fetch(`${BASE}/api/v1/signals/truth?limit=1000`)
+  const res = await fetch(`${BASE}/api/v1/signals/truth?limit=5000`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function forceResolveSignals(): Promise<{ signals_resolved: number; predictions_resolved: number }> {
+  const res = await fetch(`${BASE}/api/v1/signals/resolve`, { method: 'POST' })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
