@@ -1,26 +1,24 @@
 import { useState } from 'react'
-import Simulate from './Simulate'
 import Advisor from './Advisor'
 import History from './History'
 
-type Tab = 'simulate' | 'advisor' | 'history'
+type Tab = 'advisor' | 'history'
 
 export default function Explore() {
-  const [tab, setTab] = useState<Tab>('simulate')
+  const [tab, setTab] = useState<Tab>('advisor')
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-white">Explore</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Simulate strategies, ask the AI advisor, or review signal history.
+          Ask the AI advisor or review signal history.
         </p>
       </div>
 
       {/* Tab selector */}
       <div className="flex gap-2">
         {([
-          { key: 'simulate' as Tab, label: 'What-If Simulator' },
           { key: 'advisor' as Tab, label: 'AI Advisor' },
           { key: 'history' as Tab, label: 'Signal History' },
         ]).map(t => (
@@ -38,7 +36,6 @@ export default function Explore() {
         ))}
       </div>
 
-      {tab === 'simulate' && <Simulate />}
       {tab === 'advisor' && <Advisor />}
       {tab === 'history' && <History />}
     </div>
