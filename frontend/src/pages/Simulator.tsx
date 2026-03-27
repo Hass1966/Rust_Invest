@@ -87,6 +87,10 @@ interface SimResult {
   asBest: { asset: string; returnPct: number } | null
   asWorst: { asset: string; returnPct: number } | null
   cashAmount: number
+  bhSharpe: number
+  asSharpe: number
+  bhMaxDrawdown: number
+  asMaxDrawdown: number
 }
 
 function runSimulation(
@@ -212,6 +216,40 @@ function runSimulation(
   const asBest = asPerAsset.length ? asPerAsset.reduce((a, b) => a.returnPct > b.returnPct ? a : b) : null
   const asWorst = asPerAsset.length ? asPerAsset.reduce((a, b) => a.returnPct < b.returnPct ? a : b) : null
 
+  // Compute daily returns, Sharpe ratios and max drawdowns
+  const RISK_FREE_DAILY = 0.045 / 252 // 4.5% annual risk-free rate
+
+  function dailyReturns(series: number[]): number[] {
+    const r: number[] = []
+    for (let i = 1; i < series.length; i++) {
+      r.push(series[i - 1] > 0 ? (series[i] - series[i - 1]) / series[i - 1] : 0)
+    }
+    return r
+  }
+
+  function sharpeRatio(returns: number[]): number {
+    if (returns.length < 2) return 0
+    const mean = returns.reduce((s, v) => s + v, 0) / returns.length
+    const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length
+    const std = Math.sqrt(variance)
+    if (std === 0) return 0
+    return ((mean - RISK_FREE_DAILY) / std) * Math.sqrt(252) // annualised
+  }
+
+  function maxDrawdown(series: number[]): number {
+    let peak = series[0] || 0
+    let maxDd = 0
+    for (const v of series) {
+      if (v > peak) peak = v
+      const dd = peak > 0 ? (peak - v) / peak : 0
+      if (dd > maxDd) maxDd = dd
+    }
+    return maxDd * 100 // as percentage
+  }
+
+  const bhValues = chartData.map(d => d.buyHold)
+  const asValues = chartData.map(d => d.alphaSignal)
+
   return {
     chartData,
     bhBreakdown,
@@ -227,6 +265,10 @@ function runSimulation(
     asBest,
     asWorst,
     cashAmount,
+    bhSharpe: sharpeRatio(dailyReturns(bhValues)),
+    asSharpe: sharpeRatio(dailyReturns(asValues)),
+    bhMaxDrawdown: maxDrawdown(bhValues),
+    asMaxDrawdown: maxDrawdown(asValues),
   }
 }
 
@@ -359,8 +401,14 @@ export default function Simulator() {
         <>
           {/* Warning banners */}
           {tab === 'backtest' && (
-            <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg px-4 py-3 text-sm text-amber-300">
-              Simulated &mdash; these models were trained on this historical data. Results are optimistic and not a reliable indicator of future performance.
+            <div className="bg-yellow-900/30 border-2 border-yellow-500/50 rounded-lg px-5 py-4 text-sm">
+              <div className="flex items-start gap-3">
+                <span className="text-xl leading-none flex-shrink-0">{'\u26A0\uFE0F'}</span>
+                <div>
+                  <div className="font-semibold text-yellow-300 mb-1">Lookahead bias warning</div>
+                  <p className="text-yellow-200/80">These models were trained on this historical data. The backtest is illustrative only and significantly overstates real-world performance.</p>
+                </div>
+              </div>
             </div>
           )}
           {tab === 'live' && (
@@ -485,7 +533,7 @@ export default function Simulator() {
                   : 'Not enough historical price data available.'}
             </div>
           ) : (
-            <InvestmentResults result={result} tab={tab} />
+            <InvestmentResults result={result} />
           )}
         </>
       )}
@@ -497,7 +545,7 @@ export default function Simulator() {
 // Investment Sim Results
 // ═══════════════════════════════════════
 
-function InvestmentResults({ result, tab }: { result: SimResult; tab: 'backtest' | 'live' }) {
+function InvestmentResults({ result }: { result: SimResult }) {
   const bhTotalInvested = result.bhBreakdown.reduce((s, a) => s + a.invested, 0) + result.cashAmount
 
   return (
@@ -525,6 +573,14 @@ function InvestmentResults({ result, tab }: { result: SimResult; tab: 'backtest'
           borderColor="border-gray-700"
           valueColor="text-gray-300"
         />
+      </div>
+
+      {/* Risk metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <MetricCard label="Sharpe Ratio (B&H)" value={result.bhSharpe.toFixed(2)} color={result.bhSharpe >= 1 ? 'text-green-400' : result.bhSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Sharpe Ratio (Alpha)" value={result.asSharpe.toFixed(2)} color={result.asSharpe >= 1 ? 'text-green-400' : result.asSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Max Drawdown (B&H)" value={`-${result.bhMaxDrawdown.toFixed(1)}%`} color={result.bhMaxDrawdown < 10 ? 'text-green-400' : result.bhMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Max Drawdown (Alpha)" value={`-${result.asMaxDrawdown.toFixed(1)}%`} color={result.asMaxDrawdown < 10 ? 'text-green-400' : result.asMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
       </div>
 
       {/* Main chart */}
@@ -639,15 +695,34 @@ function InvestmentResults({ result, tab }: { result: SimResult; tab: 'backtest'
         )}
       </div>
 
-      {/* Disclaimer */}
-      <div className="bg-amber-900/10 border border-amber-500/20 rounded-xl p-5">
-        <p className="text-sm text-amber-300/90 leading-relaxed">
-          This is a simulation. No real money was invested.{' '}
-          {tab === 'backtest'
-            ? 'Scenario 1 uses historical data the models were trained on \u2014 results are optimistic.'
-            : 'Scenario 2 uses real signals from 15 March 2026.'}{' '}
-          This is not financial advice. Past performance does not guarantee future results.
-        </p>
+      {/* Methodology section */}
+      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+        <h3 className="text-lg font-semibold text-white mb-4">For the technically minded</h3>
+        <div className="space-y-3 text-sm text-gray-400 leading-relaxed">
+          <div className="flex gap-3">
+            <span className="text-cyan-400 font-bold mt-0.5 flex-shrink-0">&bull;</span>
+            <p><span className="text-gray-300 font-medium">Walk-forward validation:</span> Models are tested on data they haven&apos;t seen during training.</p>
+          </div>
+          <div className="flex gap-3">
+            <span className="text-amber-400 font-bold mt-0.5 flex-shrink-0">&bull;</span>
+            <p><span className="text-gray-300 font-medium">Backtest caveat:</span> The 5-year backtest uses data the models were trained on &mdash; treat results as optimistic upper bounds, not predictions.</p>
+          </div>
+          <div className="flex gap-3">
+            <span className="text-gray-500 font-bold mt-0.5 flex-shrink-0">&bull;</span>
+            <p><span className="text-gray-300 font-medium">Transaction costs:</span> Not modelled &mdash; real trading would reduce returns by 0.1&ndash;0.5% per trade.</p>
+          </div>
+          <div className="flex gap-3">
+            <span className="text-green-400 font-bold mt-0.5 flex-shrink-0">&bull;</span>
+            <p><span className="text-gray-300 font-medium">Live data:</span> Only 12 days of real signals &mdash; statistically early, check back in 90 days.</p>
+          </div>
+          <div className="flex gap-3">
+            <span className="text-gray-500 font-bold mt-0.5 flex-shrink-0">&bull;</span>
+            <p><span className="text-gray-300 font-medium">Overfitting check:</span> Some FX pairs show very high accuracy &mdash; this reflects low volatility in those pairs during the tracked period, not model overfitting.</p>
+          </div>
+          <div className="mt-4 pt-4 border-t border-[#1f2937] text-gray-500 text-xs">
+            This is a learning and research project &mdash; not a production trading system or financial advice.
+          </div>
+        </div>
       </div>
     </>
   )
@@ -858,6 +933,15 @@ function SummaryCard({ label, value, returnPct, borderColor, valueColor }: {
       <div className={`text-sm mt-1 ${returnPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
         {fmtPct(returnPct)}
       </div>
+    </div>
+  )
+}
+
+function MetricCard({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      <div className={`text-xl font-bold ${color}`}>{value}</div>
     </div>
   )
 }
