@@ -222,6 +222,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Skipping (no NEWSAPI_KEY or SERPER_API_KEY configured)\n");
     }
 
+    // ── Suppress BUY→HOLD for chronically poor-performing assets ──
+    const SUPPRESSED_ASSETS: &[&str] = &[
+        "NZDUSD=X", "AUDUSD=X", "USDIDR=X", "CRM", "LMT", "XLI", "USDMXN=X",
+    ];
+    for signal in signals.iter_mut() {
+        if signal.signal == "BUY" && SUPPRESSED_ASSETS.contains(&signal.symbol.as_str()) {
+            signal.signal = "HOLD".to_string();
+        }
+    }
+
     // ── Print signals ──
     if !signals.is_empty() {
         println!();

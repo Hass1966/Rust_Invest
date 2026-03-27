@@ -197,19 +197,24 @@ impl LinearRegression {
     }
 
     pub fn train(&mut self, samples: &[Sample], learning_rate: f64, epochs: usize) {
+        self.train_weighted(samples, None, learning_rate, epochs);
+    }
+
+    pub fn train_weighted(&mut self, samples: &[Sample], weights: Option<&[f64]>, learning_rate: f64, epochs: usize) {
         let n = samples.len() as f64;
 
         for epoch in 0..epochs {
             let mut weight_grads = vec![0.0; self.weights.len()];
             let mut bias_grad = 0.0;
 
-            for sample in samples {
+            for (i, sample) in samples.iter().enumerate() {
+                let w = weights.map(|ws| ws[i]).unwrap_or(1.0);
                 let pred = self.predict(&sample.features);
                 let error = pred - sample.label;
                 for (j, feature) in sample.features.iter().enumerate() {
-                    weight_grads[j] += error * feature;
+                    weight_grads[j] += w * error * feature;
                 }
-                bias_grad += error;
+                bias_grad += w * error;
             }
 
             for (j, grad) in weight_grads.iter().enumerate() {
@@ -300,21 +305,26 @@ impl LogisticRegression {
 
     /// Train: label > 0 = class 1 (up), label <= 0 = class 0 (down)
     pub fn train(&mut self, samples: &[Sample], learning_rate: f64, epochs: usize) {
+        self.train_weighted(samples, None, learning_rate, epochs);
+    }
+
+    pub fn train_weighted(&mut self, samples: &[Sample], weights: Option<&[f64]>, learning_rate: f64, epochs: usize) {
         let n = samples.len() as f64;
 
         for epoch in 0..epochs {
             let mut weight_grads = vec![0.0; self.weights.len()];
             let mut bias_grad = 0.0;
 
-            for sample in samples {
+            for (i, sample) in samples.iter().enumerate() {
+                let w = weights.map(|ws| ws[i]).unwrap_or(1.0);
                 let target = if sample.label > 0.0 { 1.0 } else { 0.0 };
                 let pred = self.predict_probability(&sample.features);
                 let error = pred - target;
 
                 for (j, feature) in sample.features.iter().enumerate() {
-                    weight_grads[j] += error * feature;
+                    weight_grads[j] += w * error * feature;
                 }
-                bias_grad += error;
+                bias_grad += w * error;
             }
 
             for (j, grad) in weight_grads.iter().enumerate() {

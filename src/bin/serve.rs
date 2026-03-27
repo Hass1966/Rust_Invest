@@ -179,6 +179,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            // Fetch fresh sentiment every 6 hours (at 0, 6, 12, 18 UTC)
+            if now.hour() % 6 == 0 {
+                let sigs = scheduler_state.signals.read().await;
+                let asset_symbols: Vec<String> = sigs.keys().cloned().collect();
+                drop(sigs);
+                let db_path_sent = scheduler_state.db_path.clone();
+                let client_sent = scheduler_state.http_client.clone();
+
+                // Spawn sentiment fetch as a separate task
+                tokio::task::spawn(async move {
+                    let newsapi_key = std::env::var("NEWSAPI_KEY").unwrap_or_default();
+                    let has_newsapi = !newsapi_key.is_empty() && newsapi_key != "REPLACE_WHEN_YOU_HAVE_IT";
+                    if !has_newsapi && std::env::var("SERPER_API_KEY").is_err() { return; }
+
+                    println!("  [Sentiment] Fetching fresh sentiment for {} assets...", asset_symbols.len());
+                    let needs_fetch: Vec<String> = {
+                        let conn = match rusqlite::Connection::open(&db_path_sent) {
+                            Ok(c) => c,
+                            Err(_) => { eprintln!("  [Sentiment] DB open failed"); return; }
+                        };
+                        asset_symbols.iter()
+                            .filter(|s| !news_sentiment::has_today_sentiment(&conn, s))
+                            .cloned()
+                            .collect()
+                    }; // conn dropped here
+
+                    let mut count = asset_symbols.len() - needs_fetch.len();
+                    for symbol in &needs_fetch {
+                        let newsapi = if has_newsapi { newsapi_key.as_str() } else { "" };
+                        // Use _by_path variant: opens its own connection, no Send issues
+                        match news_sentiment::fetch_and_store_sentiment_by_path(
+                            &client_sent, &db_path_sent, symbol, newsapi,
+                        ).await {
+                            Ok(_) => count += 1,
+                            Err(e) => eprintln!("    [Sentiment] Failed for {}: {}", symbol, e),
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                    println!("  [Sentiment] Done — {} of {} assets have sentiment data", count, asset_symbols.len());
+                });
+            }
+
             let sigs = scheduler_state.signals.read().await;
             println!("  [Scheduler] Refresh complete. {} signals cached.", sigs.len());
         }
@@ -1757,14 +1799,63 @@ fn generate_signals_filtered(
         }
     }
 
+    // ── Apply adaptive thresholds from historical accuracy ──
+    let adaptive = ensemble::compute_adaptive_thresholds(db_path);
+    if !adaptive.is_empty() {
+        for sig in enriched_signals.iter_mut() {
+            if let Some(&(buy_thresh, sell_thresh)) = adaptive.get(&sig.asset) {
+                let prob = sig.technical.probability_up;
+                let is_buy = sig.signal == "BUY";
+                let is_sell = sig.signal == "SELL";
+                // Tighten: if signal is BUY but prob doesn't meet adaptive threshold, demote to HOLD
+                if is_buy && prob <= buy_thresh {
+                    sig.signal = "HOLD".to_string();
+                }
+                // Tighten: if signal is SELL but prob doesn't meet adaptive threshold, demote to HOLD
+                if is_sell && prob >= sell_thresh {
+                    sig.signal = "HOLD".to_string();
+                }
+            }
+        }
+    }
+
     // ── Apply cached LLM sentiment from news_sentiment table ──
+    // Read sentiment AND actually adjust signals (not just display)
     if let Ok(conn) = rusqlite::Connection::open(db_path) {
         for sig in enriched_signals.iter_mut() {
             let data = news_sentiment::get_recent_sentiment(&conn, &sig.asset, 1);
             if let Some(latest) = data.first() {
-                sig.llm_sentiment = latest.combined_score;
-                sig.llm_analysis = latest.llm_analysis.clone();
+                let sentiment = latest.combined_score;
+                let analysis = latest.llm_analysis.clone();
+
+                // Apply actual signal adjustment (mirrors apply_sentiment_adjustment logic)
+                sig.llm_sentiment = sentiment;
+                sig.llm_analysis = analysis;
+
+                let ensemble_prob = sig.technical.probability_up;
+                let model_direction = if ensemble_prob > 0.5 { 1.0 } else { -1.0 };
+                let alignment = sentiment * model_direction;
+
+                if alignment > 0.0 {
+                    sig.technical.confidence += alignment * 5.0;
+                } else if alignment < -0.3 {
+                    sig.technical.confidence = (sig.technical.confidence + alignment * 3.0).max(0.0);
+                    if sentiment.abs() > 0.6 && (ensemble_prob - 0.5).abs() < 0.08 {
+                        sig.signal = "HOLD".to_string();
+                    }
+                }
             }
+        }
+    }
+
+    // ── Suppress BUY→HOLD for chronically poor-performing assets ──
+    const SUPPRESSED_ASSETS: &[&str] = &[
+        "NZDUSD=X", "AUDUSD=X", "USDIDR=X", "CRM", "LMT", "XLI", "USDMXN=X",
+    ];
+    for sig in enriched_signals.iter_mut() {
+        if sig.signal == "BUY" && SUPPRESSED_ASSETS.contains(&sig.asset.as_str()) {
+            sig.signal = "HOLD".to_string();
+            sig.reason = format!("BUY suppressed (low historical accuracy) — {}", sig.reason);
         }
     }
 

@@ -225,12 +225,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
 
+            // Recency weighting: last ~126 samples (6 months) get 3x weight
+            let recency_weights = ensemble::compute_recency_weights(last_fold.len());
+
             let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train(&last_fold, 0.005, 3000);
+            lin.train_weighted(&last_fold, Some(&recency_weights), 0.005, 3000);
             let _ = model_store::save_weights(stock.symbol, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
 
             let mut log = ml::LogisticRegression::new(n_feat);
-            log.train(&last_fold, 0.01, 3000);
+            log.train_weighted(&last_fold, Some(&recency_weights), 0.01, 3000);
             let _ = model_store::save_weights(stock.symbol, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
@@ -238,8 +241,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
+            let gbt_recency = &recency_weights[..x_t.len()];
             let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
-            let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
+            let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(stock.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
@@ -295,13 +299,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
+            let recency_weights = ensemble::compute_recency_weights(last_fold.len());
 
             let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train(&last_fold, 0.005, 3000);
+            lin.train_weighted(&last_fold, Some(&recency_weights), 0.005, 3000);
             let _ = model_store::save_weights(fx.symbol, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
 
             let mut log = ml::LogisticRegression::new(n_feat);
-            log.train(&last_fold, 0.01, 3000);
+            log.train_weighted(&last_fold, Some(&recency_weights), 0.01, 3000);
             let _ = model_store::save_weights(fx.symbol, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
@@ -309,8 +314,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
+            let gbt_recency = &recency_weights[..x_t.len()];
             let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
-            let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
+            let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(fx.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
@@ -401,13 +407,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let mut last_fold: Vec<ml::Sample> = enriched_samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
+            let recency_weights = ensemble::compute_recency_weights(last_fold.len());
 
             let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train(&last_fold, 0.005, 3000);
+            lin.train_weighted(&last_fold, Some(&recency_weights), 0.005, 3000);
             let _ = model_store::save_weights(coin_id, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
 
             let mut log = ml::LogisticRegression::new(n_feat);
-            log.train(&last_fold, 0.01, 3000);
+            log.train_weighted(&last_fold, Some(&recency_weights), 0.01, 3000);
             let _ = model_store::save_weights(coin_id, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
@@ -415,8 +422,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
+            let gbt_recency = &recency_weights[..x_t.len()];
             let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
-            let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
+            let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(coin_id, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",

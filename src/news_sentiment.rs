@@ -582,6 +582,86 @@ pub async fn fetch_and_store_sentiment(
     Ok(data)
 }
 
+/// Same as fetch_and_store_sentiment but takes a db_path instead of a Connection.
+/// Opens its own connection for storage, avoiding Send issues in async contexts.
+pub async fn fetch_and_store_sentiment_by_path(
+    client: &reqwest::Client,
+    db_path: &str,
+    symbol: &str,
+    newsapi_key: &str,
+) -> Result<SentimentData, String> {
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let serper_key = std::env::var("SERPER_API_KEY").ok();
+    let llm_provider = llm::load_provider();
+
+    let serper_headlines: Vec<(String, String)> = if let Some(ref key) = serper_key {
+        fetch_serper_news(client, symbol, key).await.unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    let newsapi_articles = fetch_news_articles(client, symbol, newsapi_key).await.unwrap_or_default();
+    let newsapi_headlines: Vec<(String, String)> = newsapi_articles.iter().map(|a| {
+        (
+            a.title.clone().unwrap_or_default(),
+            a.description.clone().unwrap_or_default(),
+        )
+    }).collect();
+
+    let (reddit_mentions, reddit_word_score, reddit_texts) =
+        fetch_reddit_posts(client, symbol).await.unwrap_or((0, 0.0, vec![]));
+
+    let mut all_headlines: Vec<(String, String)> = serper_headlines;
+    for (title, desc) in &newsapi_headlines {
+        if !all_headlines.iter().any(|(t, _)| t == title) {
+            all_headlines.push((title.clone(), desc.clone()));
+        }
+    }
+
+    let article_count = all_headlines.len() as i64;
+
+    let (news_score, llm_analysis) = if let Some(ref provider) = llm_provider {
+        match analyse_sentiment_with_llm(client, provider, symbol, &all_headlines, &reddit_texts).await {
+            Ok((score, analysis)) => {
+                println!("    LLM sentiment for {}: {:.2} — {}", symbol, score, &analysis[..analysis.len().min(80)]);
+                (score, Some(analysis))
+            }
+            Err(e) => {
+                eprintln!("    LLM analysis failed for {}: {}, falling back to word-based", symbol, e);
+                let word_score = score_headlines_word_based(&all_headlines);
+                (word_score, None)
+            }
+        }
+    } else {
+        let word_score = score_headlines_word_based(&all_headlines);
+        (word_score, None)
+    };
+
+    let combined = if article_count > 0 && reddit_mentions > 0 {
+        news_score * 0.6 + reddit_word_score * 0.4
+    } else if article_count > 0 {
+        news_score
+    } else {
+        reddit_word_score
+    };
+
+    let data = SentimentData {
+        symbol: symbol.to_string(),
+        date: today,
+        news_score,
+        reddit_mentions,
+        reddit_score: reddit_word_score,
+        combined_score: combined.clamp(-1.0, 1.0),
+        article_count,
+        llm_analysis,
+    };
+
+    // Open connection only for the final store — no Send issues
+    let conn = Connection::open(db_path).map_err(|e| format!("DB open: {}", e))?;
+    store_sentiment(&conn, &data).map_err(|e| format!("DB error: {}", e))?;
+    Ok(data)
+}
+
 /// Score headlines using word-based method (fallback)
 fn score_headlines_word_based(headlines: &[(String, String)]) -> f64 {
     if headlines.is_empty() {

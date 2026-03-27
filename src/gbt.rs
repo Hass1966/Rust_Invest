@@ -310,6 +310,17 @@ impl GradientBoostedClassifier {
         y_val: Option<&[f64]>,
         config: GBTConfig,
     ) -> Self {
+        Self::train_weighted(x_train, y_train, None, x_val, y_val, config)
+    }
+
+    pub fn train_weighted(
+        x_train: &[Vec<f64>],
+        y_train: &[f64],
+        recency_weights: Option<&[f64]>,
+        x_val: Option<&[Vec<f64>]>,
+        y_val: Option<&[f64]>,
+        config: GBTConfig,
+    ) -> Self {
         let n_train = x_train.len();
         let n_features = x_train[0].len();
 
@@ -338,11 +349,12 @@ impl GradientBoostedClassifier {
         let weight_negative = if n_negative > 0.0 { n_train as f64 / (2.0 * n_negative) } else { 1.0 };
 
         for round in 0..config.n_trees {
-            // 1. Weighted pseudo-residuals: rᵢ = wᵢ * (yᵢ - σ(Fᵢ))
+            // 1. Weighted pseudo-residuals: rᵢ = wᵢ * recency_wᵢ * (yᵢ - σ(Fᵢ))
             let residuals: Vec<f64> = (0..n_train)
                 .map(|i| {
-                    let w = if y_train[i] > 0.5 { weight_positive } else { weight_negative };
-                    w * (y_train[i] - sigmoid(f_train[i]))
+                    let w_class = if y_train[i] > 0.5 { weight_positive } else { weight_negative };
+                    let w_recency = recency_weights.map(|ws| ws[i]).unwrap_or(1.0);
+                    w_class * w_recency * (y_train[i] - sigmoid(f_train[i]))
                 })
                 .collect();
 

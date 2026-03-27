@@ -160,6 +160,26 @@ pub fn stacking_predict(weights: &[f64], model_probs: &[f64; 6]) -> f64 {
     (1.0 / (1.0 + (-logit).exp())).clamp(0.15, 0.85)
 }
 
+/// Compute recency weights: last ~126 samples (6 months of daily data) get 3x weight, older get 1x.
+/// Smooth transition over 20 samples to avoid sharp boundary.
+pub fn compute_recency_weights(n_samples: usize) -> Vec<f64> {
+    let recent_count = 126; // ~6 months of trading days
+    let transition = 20;
+    let recent_start = n_samples.saturating_sub(recent_count);
+    (0..n_samples)
+        .map(|i| {
+            if i >= recent_start {
+                3.0
+            } else if i >= recent_start.saturating_sub(transition) {
+                let progress = (i as f64 - (recent_start.saturating_sub(transition)) as f64) / transition as f64;
+                1.0 + 2.0 * progress // smooth ramp from 1.0 to 3.0
+            } else {
+                1.0
+            }
+        })
+        .collect()
+}
+
 /// Walk-forward on pre-built Sample vectors (used with rich features)
 pub fn walk_forward_samples(
     symbol: &str,
@@ -211,12 +231,15 @@ pub fn walk_forward_samples(
         let (means, stds) = ml::normalise(train_data);
         ml::apply_normalisation(test_data, &means, &stds);
 
-        // Train all 3 pointwise models
+        // Recency weighting: last ~126 samples (6 months daily) get 3x weight
+        let recency_weights: Vec<f64> = compute_recency_weights(train_data.len());
+
+        // Train all 3 pointwise models with recency weighting
         let mut lin = ml::LinearRegression::new(n_features);
-        lin.train(train_data, 0.005, 3000);
+        lin.train_weighted(train_data, Some(&recency_weights), 0.005, 3000);
 
         let mut log = ml::LogisticRegression::new(n_features);
-        log.train(train_data, 0.01, 3000);
+        log.train_weighted(train_data, Some(&recency_weights), 0.01, 3000);
 
         let x_train: Vec<Vec<f64>> = train_data.iter().map(|s| s.features.clone()).collect();
         let y_train: Vec<f64> = train_data.iter()
@@ -225,6 +248,7 @@ pub fn walk_forward_samples(
         let val_start = (x_train.len() as f64 * 0.85) as usize;
         let (x_t, x_v) = x_train.split_at(val_start);
         let (y_t, y_v) = y_train.split_at(val_start);
+        let gbt_recency = &recency_weights[..x_t.len()]; // only training portion
 
         let gbt_config = GBTConfig {
             n_trees: 80,
@@ -238,8 +262,8 @@ pub fn walk_forward_samples(
             early_stopping_rounds: Some(8),
         };
 
-        let gbt = GradientBoostedClassifier::train(
-            x_t, y_t, Some(x_v), Some(y_v), gbt_config,
+        let gbt = GradientBoostedClassifier::train_weighted(
+            x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config,
         );
 
         // Evaluate + collect stacking data
@@ -491,11 +515,13 @@ fn walk_forward_samples_no_lstm(
         let (means, stds) = ml::normalise(train_data);
         ml::apply_normalisation(test_data, &means, &stds);
 
+        let recency_weights: Vec<f64> = compute_recency_weights(train_data.len());
+
         let mut lin = ml::LinearRegression::new(n_features);
-        lin.train(train_data, 0.005, 3000);
+        lin.train_weighted(train_data, Some(&recency_weights), 0.005, 3000);
 
         let mut log = ml::LogisticRegression::new(n_features);
-        log.train(train_data, 0.01, 3000);
+        log.train_weighted(train_data, Some(&recency_weights), 0.01, 3000);
 
         let x_train: Vec<Vec<f64>> = train_data.iter().map(|s| s.features.clone()).collect();
         let y_train: Vec<f64> = train_data.iter()
@@ -504,6 +530,7 @@ fn walk_forward_samples_no_lstm(
         let val_start = (x_train.len() as f64 * 0.85) as usize;
         let (x_t, x_v) = x_train.split_at(val_start);
         let (y_t, y_v) = y_train.split_at(val_start);
+        let gbt_recency = &recency_weights[..x_t.len()];
 
         let gbt_config = GBTConfig {
             n_trees: 80,
@@ -517,8 +544,8 @@ fn walk_forward_samples_no_lstm(
             early_stopping_rounds: Some(8),
         };
 
-        let gbt = GradientBoostedClassifier::train(
-            x_t, y_t, Some(x_v), Some(y_v), gbt_config,
+        let gbt = GradientBoostedClassifier::train_weighted(
+            x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config,
         );
 
         let mut fold_lin = 0;
@@ -641,7 +668,8 @@ pub struct TradingSignal {
     pub llm_analysis: Option<String>,
 }
 
-/// Per-asset signal thresholds — noisy assets need higher confidence
+/// Per-asset signal thresholds — noisy assets need higher confidence.
+/// Hardcoded fallback; use `get_adaptive_threshold()` when DB data available.
 pub fn get_signal_threshold(symbol: &str) -> (f64, f64) {
     match symbol {
         "TSLA" | "DIA" => (0.62, 0.38),
@@ -651,6 +679,97 @@ pub fn get_signal_threshold(symbol: &str) -> (f64, f64) {
         "USDJPY=X" | "AUDUSD=X" | "EURUSD=X" | "GBPUSD=X" | "USDCHF=X" => (0.55, 0.45),
         _ => (0.57, 0.43),
     }
+}
+
+/// Compute adaptive thresholds from historical signal accuracy.
+/// If an asset's BUY accuracy < 40%, raise the BUY threshold to require more confidence.
+/// If SELL accuracy < 40%, raise the SELL threshold similarly.
+/// Returns HashMap<asset, (buy_threshold, sell_threshold)>.
+pub fn compute_adaptive_thresholds(db_path: &str) -> std::collections::HashMap<String, (f64, f64)> {
+    let mut thresholds = std::collections::HashMap::new();
+    let conn = match rusqlite::Connection::open(db_path) {
+        Ok(c) => c,
+        Err(_) => return thresholds,
+    };
+
+    // Query per-asset BUY/SELL accuracy from resolved signal_history (last 14 days)
+    let sql = "
+        SELECT asset, signal_type,
+               COUNT(*) as total,
+               SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END) as correct
+        FROM signal_history
+        WHERE was_correct IS NOT NULL
+          AND timestamp >= datetime('now', '-14 days')
+          AND signal_type IN ('BUY', 'SELL')
+        GROUP BY asset, signal_type
+        HAVING COUNT(*) >= 5
+    ";
+
+    let mut stmt = match conn.prepare(sql) {
+        Ok(s) => s,
+        Err(_) => return thresholds,
+    };
+
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    });
+
+    let rows = match rows {
+        Ok(r) => r,
+        Err(_) => return thresholds,
+    };
+
+    // Collect per-asset accuracy
+    let mut buy_acc: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut sell_acc: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+
+    for row in rows.flatten() {
+        let (asset, sig_type, total, correct) = row;
+        let accuracy = if total > 0 { correct as f64 / total as f64 } else { 0.5 };
+        match sig_type.as_str() {
+            "BUY" => { buy_acc.insert(asset, accuracy); }
+            "SELL" => { sell_acc.insert(asset, accuracy); }
+            _ => {}
+        }
+    }
+
+    // Compute adaptive thresholds
+    let all_assets: std::collections::HashSet<&String> = buy_acc.keys().chain(sell_acc.keys()).collect();
+    for asset in all_assets {
+        let (base_buy, base_sell) = get_signal_threshold(asset);
+        let ba = buy_acc.get(asset.as_str()).copied().unwrap_or(0.5);
+        let sa = sell_acc.get(asset.as_str()).copied().unwrap_or(0.5);
+
+        // If accuracy < 40%, tighten threshold (require more confidence)
+        // If accuracy > 60%, slightly loosen (reward good performance)
+        let buy_adj = if ba < 0.30 { 0.06 }
+            else if ba < 0.40 { 0.04 }
+            else if ba < 0.50 { 0.02 }
+            else if ba > 0.65 { -0.02 }
+            else { 0.0 };
+
+        let sell_adj = if sa < 0.30 { -0.06 }
+            else if sa < 0.40 { -0.04 }
+            else if sa < 0.50 { -0.02 }
+            else if sa > 0.65 { 0.02 }
+            else { 0.0 };
+
+        let adaptive_buy = (base_buy + buy_adj).clamp(0.52, 0.70);
+        let adaptive_sell = (base_sell + sell_adj).clamp(0.30, 0.48);
+
+        thresholds.insert(asset.clone(), (adaptive_buy, adaptive_sell));
+    }
+
+    if !thresholds.is_empty() {
+        println!("  [Thresholds] Computed adaptive thresholds for {} assets", thresholds.len());
+    }
+
+    thresholds
 }
 
 pub fn ensemble_signal(
@@ -781,6 +900,11 @@ pub fn ensemble_signal_with_override(
     if n_models == 0 { n_models = 1; } // safety
     let models_agree = ups.max(n_models - ups);
 
+    // Separate BUY and SELL scoring:
+    // - BUY requires ensemble_prob above buy_thresh
+    // - SELL requires ensemble_prob below sell_thresh AND majority of models agree on down
+    // - Low BUY probability alone defaults to HOLD (not SELL) unless models strongly agree
+    let downs = n_models - ups;
     let signal = if !can_signal {
         "HOLD"
     } else {
@@ -791,9 +915,15 @@ pub fn ensemble_signal_with_override(
             (base_buy, base_sell)
         };
 
-        if ensemble_prob > buy_thresh { "BUY" }
-        else if ensemble_prob < sell_thresh { "SELL" }
-        else { "HOLD" }
+        if ensemble_prob > buy_thresh {
+            "BUY"
+        } else if ensemble_prob < sell_thresh && downs >= (n_models + 1) / 2 {
+            // SELL only when prob is low AND majority of models predict down
+            "SELL"
+        } else {
+            // Default to HOLD — avoids false SELL signals from marginal BUY failure
+            "HOLD"
+        }
     };
 
     let confidence = if !can_signal {
