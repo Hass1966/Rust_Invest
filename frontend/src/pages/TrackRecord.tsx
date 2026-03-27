@@ -1,7 +1,10 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { fetchSignalTruth, forceResolveSignals } from '../lib/api'
 import type { SignalTruthData, SignalTruthRecord } from '../lib/api'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import {
+  ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, ResponsiveContainer,
+  ReferenceLine, LineChart, Line, Cell,
+} from 'recharts'
 
 export default function TrackRecord() {
   const [data, setData] = useState<SignalTruthData | null>(null)
@@ -41,6 +44,46 @@ export default function TrackRecord() {
     return () => clearInterval(interval)
   }, [load])
 
+  // ── Compute rolling 7-day accuracy data from signals ──
+  const rollingData = useMemo(() => {
+    if (!data?.signals) return []
+    const resolved = data.signals.filter(s => s.was_correct !== null)
+    if (resolved.length === 0) return []
+
+    // Group by date
+    const byDate = new Map<string, { correct: number; total: number }>()
+    for (const s of resolved) {
+      const date = s.timestamp.slice(0, 10)
+      const entry = byDate.get(date) || { correct: 0, total: 0 }
+      entry.total++
+      if (s.was_correct) entry.correct++
+      byDate.set(date, entry)
+    }
+
+    const dates = Array.from(byDate.keys()).sort().filter(d => d >= '2026-03-15')
+    if (dates.length === 0) return []
+
+    // Compute 7-day rolling accuracy
+    const allDates = Array.from(byDate.keys()).sort()
+    return dates.map(date => {
+      const windowStart = new Date(date)
+      windowStart.setDate(windowStart.getDate() - 6)
+      const startStr = windowStart.toISOString().slice(0, 10)
+
+      let correct = 0, total = 0
+      for (const d of allDates) {
+        if (d >= startStr && d <= date) {
+          const entry = byDate.get(d)!
+          correct += entry.correct
+          total += entry.total
+        }
+      }
+
+      const accuracy = total > 0 ? (correct / total) * 100 : 0
+      return { date, accuracy: Number(accuracy.toFixed(1)), total }
+    })
+  }, [data])
+
   if (loading && !data) {
     return <div className="text-gray-500 p-8 text-center">Loading track record...</div>
   }
@@ -68,6 +111,16 @@ export default function TrackRecord() {
   // Best/worst assets
   const bestAssets = sortedAssets.filter(a => a.total >= 3).slice(0, 5)
   const worstAssets = [...sortedAssets].filter(a => a.total >= 3).sort((a, b) => a.accuracy - b.accuracy).slice(0, 5)
+
+  // Bubble chart data
+  const bubbleData = sortedAssets.map(a => ({
+    asset: a.asset,
+    accuracy: Number(a.accuracy.toFixed(1)),
+    signals: a.total,
+    correct: a.correct,
+    incorrect: a.total - a.correct,
+    fill: a.accuracy >= 70 ? '#22c55e' : a.accuracy >= 50 ? '#f59e0b' : '#ef4444',
+  }))
 
   // Filtered signals for the table
   const filtered = signals.filter(s => {
@@ -129,6 +182,32 @@ export default function TrackRecord() {
         </div>
       </div>
 
+      {/* ── Rolling 7-Day Accuracy Line Chart (Change 2) ── */}
+      {rollingData.length > 1 && (
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+          <h3 className="text-sm font-medium text-gray-400 mb-1">Is the model improving over time?</h3>
+          <p className="text-xs text-gray-600 mb-4">7-day rolling accuracy since 15 March 2026</p>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={rollingData} margin={{ left: 0, right: 10, top: 4, bottom: 0 }}>
+              <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => v.slice(5)} interval="preserveStartEnd" />
+              <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} domain={[0, 100]} tickFormatter={v => `${v}%`} width={42} />
+              <Tooltip
+                contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
+                labelStyle={{ color: '#9ca3af' }}
+                formatter={(v: number | undefined) => [v != null ? `${v.toFixed(1)}%` : '', '7-Day Accuracy']}
+              />
+              <ReferenceLine y={50} stroke="#6b7280" strokeDasharray="4 4" label={{ value: 'Random baseline', fill: '#6b7280', fontSize: 10, position: 'insideBottomRight' }} />
+              <ReferenceLine y={65} stroke="#22c55e" strokeDasharray="4 4" label={{ value: 'Target', fill: '#22c55e', fontSize: 10, position: 'insideTopRight' }} />
+              <Line type="monotone" dataKey="accuracy" stroke="#06b6d4" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: '#06b6d4', strokeWidth: 0 }}>
+                {rollingData.map((d, i) => (
+                  <Cell key={i} stroke={d.accuracy >= 65 ? '#22c55e' : d.accuracy >= 50 ? '#f59e0b' : '#ef4444'} />
+                ))}
+              </Line>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       {/* ── Rolling Accuracy Cards ── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <RollingCard label="Today" stats={rolling.today} />
@@ -171,6 +250,66 @@ export default function TrackRecord() {
           </div>
         </div>
       </div>
+
+      {/* ── Bubble Chart: Signal Accuracy vs Evidence (Change 1) ── */}
+      {bubbleData.length > 0 && (
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+          <h3 className="text-sm font-medium text-gray-400 mb-1">Signal Accuracy vs Evidence</h3>
+          <p className="text-xs text-gray-600 mb-4">Each bubble is one asset. Size = number of signals.</p>
+          <ResponsiveContainer width="100%" height={380}>
+            <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 10 }}>
+              <XAxis
+                type="number"
+                dataKey="accuracy"
+                name="Accuracy"
+                domain={[0, 100]}
+                tick={{ fill: '#6b7280', fontSize: 11 }}
+                label={{ value: 'Accuracy %', position: 'insideBottom', offset: -5, fill: '#6b7280', fontSize: 11 }}
+              />
+              <YAxis
+                type="number"
+                dataKey="signals"
+                name="Signals"
+                tick={{ fill: '#6b7280', fontSize: 11 }}
+                label={{ value: 'Number of Signals', angle: -90, position: 'insideLeft', offset: 10, fill: '#6b7280', fontSize: 11 }}
+              />
+              <ZAxis type="number" dataKey="signals" range={[40, 400]} />
+              <Tooltip
+                contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
+                cursor={{ strokeDasharray: '3 3' }}
+                content={({ payload }) => {
+                  if (!payload?.length) return null
+                  const d = payload[0].payload as typeof bubbleData[0]
+                  return (
+                    <div className="bg-[#0a0e17] border border-[#1f2937] rounded-lg p-3 text-xs">
+                      <div className="text-white font-semibold mb-1">{d.asset}</div>
+                      <div className="text-gray-400">Accuracy: <span className="text-white">{d.accuracy}%</span></div>
+                      <div className="text-gray-400">Signals: <span className="text-white">{d.signals}</span></div>
+                      <div className="text-gray-400">Correct: <span className="text-green-400">{d.correct}</span> / Incorrect: <span className="text-red-400">{d.incorrect}</span></div>
+                    </div>
+                  )
+                }}
+              />
+              <ReferenceLine
+                x={50}
+                stroke="#6b7280"
+                strokeDasharray="4 4"
+                label={{ value: 'Random baseline', fill: '#6b7280', fontSize: 10, angle: -90, position: 'insideTopLeft' }}
+              />
+              <Scatter data={bubbleData}>
+                {bubbleData.map((d, i) => (
+                  <Cell key={i} fill={d.fill} fillOpacity={0.7} stroke={d.fill} strokeWidth={1} />
+                ))}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+          <div className="flex items-center justify-center gap-4 mt-2 text-xs text-gray-500">
+            <span><span className="inline-block w-3 h-3 rounded-full bg-green-500 mr-1" />Above 70%</span>
+            <span><span className="inline-block w-3 h-3 rounded-full bg-amber-500 mr-1" />50-70%</span>
+            <span><span className="inline-block w-3 h-3 rounded-full bg-red-500 mr-1" />Below 50%</span>
+          </div>
+        </div>
+      )}
 
       {/* ── Best & Worst Assets ── */}
       {(bestAssets.length > 0 || worstAssets.length > 0) && (
@@ -250,41 +389,6 @@ export default function TrackRecord() {
           ))}
         </div>
       </div>
-
-      {/* ── Per-Asset Accuracy Chart ── */}
-      {sortedAssets.length > 0 && (
-        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Accuracy by Asset (min 3 signals)</h3>
-          <ResponsiveContainer width="100%" height={Math.max(200, sortedAssets.filter(a => a.total >= 3).length * 24)}>
-            <BarChart
-              layout="vertical"
-              data={sortedAssets.filter(a => a.total >= 3).slice(0, 30).map(a => ({
-                asset: a.asset,
-                accuracy: Number(a.accuracy.toFixed(1)),
-                total: a.total,
-              }))}
-              margin={{ left: 60, right: 20 }}
-            >
-              <XAxis type="number" domain={[0, 100]} tick={{ fill: '#6b7280', fontSize: 11 }} />
-              <YAxis type="category" dataKey="asset" tick={{ fill: '#9ca3af', fontSize: 11 }} width={55} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }}
-                labelStyle={{ color: '#e5e7eb' }}
-                formatter={(value: unknown, _name: unknown, props: unknown) => {
-                  const v = value as number
-                  const p = props as { payload: { total: number } }
-                  return [`${v}% (${p.payload.total} signals)`, 'Accuracy']
-                }}
-              />
-              <Bar dataKey="accuracy" radius={[0, 4, 4, 0]}>
-                {sortedAssets.filter(a => a.total >= 3).slice(0, 30).map((a, idx) => (
-                  <Cell key={idx} fill={a.accuracy >= 57 ? '#22c55e' : a.accuracy >= 50 ? '#f59e0b' : '#ef4444'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       {/* ── Signal History Table ── */}
       <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">

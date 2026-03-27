@@ -239,6 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/feedback/signal", post(submit_signal_feedback))
         .route("/api/v1/feedback/survey", post(submit_survey_feedback))
         .route("/api/v1/feedback", get(get_feedback))
+        .route("/api/v1/simulator/data", get(get_simulator_data))
         .layer(cors.clone())
         .with_state(state);
 
@@ -3194,6 +3195,66 @@ fn run_startup_migrations(db_path: &str) {
     let _ = database.execute_raw("ALTER TABLE users ADD COLUMN last_signal_hash TEXT");
     // user_id column on user_holdings if missing
     let _ = database.execute_raw("ALTER TABLE user_holdings ADD COLUMN user_id INTEGER DEFAULT 0");
+}
+
+/// GET /api/v1/simulator/data — historical prices + signals for 10 simulator assets + SPY
+async fn get_simulator_data(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // Simulator assets
+        let stock_symbols = ["AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD", "SPY"];
+        let crypto_ids = ["bitcoin", "ethereum"];
+
+        let mut price_history = serde_json::Map::new();
+
+        // Fetch stock prices (includes SPY benchmark)
+        for sym in &stock_symbols {
+            let points = database.get_stock_history(sym).unwrap_or_default();
+            let arr: Vec<serde_json::Value> = points.iter().map(|p| {
+                serde_json::json!({"date": &p.timestamp[..10], "price": p.price})
+            }).collect();
+            price_history.insert(sym.to_string(), serde_json::Value::Array(arr));
+        }
+
+        // Fetch crypto prices
+        for coin in &crypto_ids {
+            let points = database.get_coin_history(coin).unwrap_or_default();
+            let arr: Vec<serde_json::Value> = points.iter().map(|p| {
+                serde_json::json!({"date": &p.timestamp[..10], "price": p.price})
+            }).collect();
+            price_history.insert(coin.to_string(), serde_json::Value::Array(arr));
+        }
+
+        // Fetch signal history for the 10 assets (not SPY)
+        let sim_assets = ["AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD", "bitcoin", "ethereum"];
+        let all_signals = database.get_signal_history_all(10000).unwrap_or_default();
+
+        let mut signal_history = serde_json::Map::new();
+        for asset in &sim_assets {
+            let asset_signals: Vec<serde_json::Value> = all_signals.iter()
+                .filter(|s| s.asset == *asset)
+                .map(|s| serde_json::json!({
+                    "date": &s.timestamp[..10],
+                    "signal": s.signal_type,
+                    "price": s.price_at_signal,
+                    "was_correct": s.was_correct,
+                    "outcome_price": s.outcome_price,
+                }))
+                .collect();
+            signal_history.insert(asset.to_string(), serde_json::Value::Array(asset_signals));
+        }
+
+        Ok::<_, StatusCode>(Json(serde_json::json!({
+            "price_history": price_history,
+            "signal_history": signal_history,
+        })))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(result)
 }
 
 /// Build a default asset config from the existing STOCK_LIST/FX_LIST
