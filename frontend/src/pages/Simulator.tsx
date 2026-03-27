@@ -719,6 +719,10 @@ function InvestmentResults({ result }: { result: SimResult }) {
             <span className="text-gray-500 font-bold mt-0.5 flex-shrink-0">&bull;</span>
             <p><span className="text-gray-300 font-medium">Overfitting check:</span> Some FX pairs show very high accuracy &mdash; this reflects low volatility in those pairs during the tracked period, not model overfitting.</p>
           </div>
+          <div className="flex gap-3">
+            <span className="text-orange-400 font-bold mt-0.5 flex-shrink-0">&bull;</span>
+            <p><span className="text-gray-300 font-medium">Built in Rust, not Python:</span> This entire ML pipeline &mdash; 6-model ensemble (LinReg, LogReg, GBT, LSTM, GRU, TFT), feature engineering, walk-forward validation &mdash; is written in pure Rust using the <a href="https://github.com/huggingface/candle" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2">candle</a> framework. One goal of this project is to demonstrate that Python is not the only viable language for machine learning, despite the conventional wisdom.</p>
+          </div>
           <div className="mt-4 pt-4 border-t border-[#1f2937] text-gray-500 text-xs">
             This is a learning and research project &mdash; not a production trading system or financial advice.
           </div>
