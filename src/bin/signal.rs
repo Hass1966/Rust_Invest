@@ -291,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "stock" => {
                 if matches!(weekday, chrono::Weekday::Sat | chrono::Weekday::Sun) { false }
                 else if hour < 14 || hour > 21 { false }
-                else { match pred.signal.as_str() { "BUY"|"SELL" => hour >= 20, _ => true } }
+                else { match pred.signal.as_str() { "BUY"|"SHORT"|"SELL" => hour >= 20, _ => true } }
             }
             "fx" => {
                 let fx_open = match weekday {
@@ -300,10 +300,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => true,
                 };
                 if !fx_open { false }
-                else { match pred.signal.as_str() { "BUY"|"SELL" => hour >= 21, _ => true } }
+                else { match pred.signal.as_str() { "BUY"|"SHORT"|"SELL" => hour >= 21, _ => true } }
             }
             "crypto" => match pred.signal.as_str() {
-                "BUY"|"SELL" => hour >= 23 || age_hours >= 24,
+                "BUY"|"SHORT"|"SELL" => hour >= 23 || age_hours >= 24,
                 _ => true,
             },
             _ => false,
@@ -320,8 +320,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let was_correct = match (pred.signal.as_str(), actual_direction) {
-            ("BUY", "UP") | ("SELL", "DOWN") => true,
-            ("BUY", "DOWN") | ("SELL", "UP") => false,
+            ("BUY", "UP") | ("SELL", "DOWN") | ("SHORT", "DOWN") => true,
+            ("BUY", "DOWN") | ("SELL", "UP") | ("SHORT", "UP") => false,
             _ => true, // FLAT counts as correct for any signal
         };
 

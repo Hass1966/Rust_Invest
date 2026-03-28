@@ -27,6 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let database = db::Database::new("rust_invest.db")?;
 
+    // Load Polygon API key for primary price data
+    let polygon_key = std::env::var("POLYGON_API_KEY").ok();
+
     if test_lstm {
         println!("╔══════════════════════════════════════════════════════════════════╗");
         println!("║    ALPHA SIGNAL — LSTM TEST MODE (SPY + MSFT only)             ║");
@@ -80,8 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Fetch stocks ──
-    println!("\n━━━ FETCHING STOCK DATA (7 years) ━━━\n");
+    // ── Fetch stocks (Polygon primary, Yahoo fallback) ──
+    println!("\n━━━ FETCHING STOCK DATA (7 years) — Polygon primary, Yahoo fallback ━━━\n");
     for stock in stocks::STOCK_LIST {
         let existing = database.count_stock_history(stock.symbol)?;
         if existing > 1000 {
@@ -89,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         println!("  Fetching {} 7-year history...", stock.symbol);
-        match stocks::fetch_history(&client, stock.symbol, "7y").await {
+        match polygon::fetch_history_with_fallback(&client, stock.symbol, polygon_key.as_deref(), "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -105,8 +108,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Fetch FX ──
-    println!("\n━━━ FETCHING FX DATA (7 years) ━━━\n");
+    // ── Fetch FX (Polygon primary, Yahoo fallback) ──
+    println!("\n━━━ FETCHING FX DATA (7 years) — Polygon primary, Yahoo fallback ━━━\n");
     for fx in stocks::FX_LIST {
         let existing = database.count_fx_history(fx.symbol)?;
         if existing > 1000 {
@@ -114,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         println!("  Fetching {} 7-year history...", fx.symbol);
-        match stocks::fetch_history(&client, fx.symbol, "7y").await {
+        match polygon::fetch_history_with_fallback(&client, fx.symbol, polygon_key.as_deref(), "7y").await {
             Ok(points) => {
                 let mut count = 0;
                 for (ts, price, volume) in &points {
@@ -189,6 +192,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None);
         if samples.len() < 100 { continue; }
 
+        // Class distribution analysis for SHORT labels
+        let vol_threshold = features::compute_volatility_threshold(&samples);
+        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&samples, vol_threshold);
+        let (w_down, w_up) = features::compute_class_weights(&samples, vol_threshold);
+        println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
+            stock.symbol, buy_count, short_count, sell_count, hold_count, w_down, w_up);
+
+        // Record pre-retrain accuracy baseline
+        let pre_acc = model_store::load_model_accuracy(stock.symbol);
+
         let n_feat = samples[0].features.len();
         let train_window = (samples.len() as f64 * 0.6) as usize;
         let test_window = 30.min(samples.len() / 10);
@@ -225,15 +238,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
 
-            // Recency weighting: last ~126 samples (6 months) get 3x weight
+            // Recency weighting with class weight adjustment
             let recency_weights = ensemble::compute_recency_weights(last_fold.len());
+            let class_adjusted_weights: Vec<f64> = last_fold.iter().zip(recency_weights.iter()).map(|(s, &rw)| {
+                let cw = if s.label > 0.0 { w_up } else { w_down };
+                rw * cw
+            }).collect();
 
             let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train_weighted(&last_fold, Some(&recency_weights), 0.005, 3000);
+            lin.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.005, 3000);
             let _ = model_store::save_weights(stock.symbol, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
 
             let mut log = ml::LogisticRegression::new(n_feat);
-            log.train_weighted(&last_fold, Some(&recency_weights), 0.01, 3000);
+            log.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.01, 3000);
             let _ = model_store::save_weights(stock.symbol, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
@@ -241,10 +258,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
-            let gbt_recency = &recency_weights[..x_t.len()];
+            let gbt_recency = &class_adjusted_weights[..x_t.len()];
             let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
             let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(stock.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
+
+            // Log retrain results with class distribution
+            let _ = database.insert_retrain_log(
+                stock.symbol, "ensemble", pre_acc,
+                (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
+                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64,
+            );
 
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 stock.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
@@ -266,6 +290,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
         let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None);
         if samples.len() < 100 { continue; }
+
+        // Class distribution analysis for SHORT labels
+        let vol_threshold = features::compute_volatility_threshold(&samples);
+        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&samples, vol_threshold);
+        let (w_down, w_up) = features::compute_class_weights(&samples, vol_threshold);
+        println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
+            fx.symbol, buy_count, short_count, sell_count, hold_count, w_down, w_up);
+
+        let pre_acc = model_store::load_model_accuracy(fx.symbol);
 
         let n_feat = samples[0].features.len();
         let train_window = (samples.len() as f64 * 0.6) as usize;
@@ -291,7 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ensemble: ens_acc,
             });
 
-            // Save final-fold models
+            // Save final-fold models with class-weighted training
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
                 while s + train_window + test_window <= samples.len() { last = s + train_window; s += step; }
@@ -300,13 +333,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
             let recency_weights = ensemble::compute_recency_weights(last_fold.len());
+            let class_adjusted_weights: Vec<f64> = last_fold.iter().zip(recency_weights.iter()).map(|(s, &rw)| {
+                let cw = if s.label > 0.0 { w_up } else { w_down };
+                rw * cw
+            }).collect();
 
             let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train_weighted(&last_fold, Some(&recency_weights), 0.005, 3000);
+            lin.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.005, 3000);
             let _ = model_store::save_weights(fx.symbol, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
 
             let mut log = ml::LogisticRegression::new(n_feat);
-            log.train_weighted(&last_fold, Some(&recency_weights), 0.01, 3000);
+            log.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.01, 3000);
             let _ = model_store::save_weights(fx.symbol, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
@@ -314,10 +351,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
-            let gbt_recency = &recency_weights[..x_t.len()];
+            let gbt_recency = &class_adjusted_weights[..x_t.len()];
             let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
             let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(fx.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
+
+            let _ = database.insert_retrain_log(
+                fx.symbol, "ensemble", pre_acc,
+                (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
+                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64,
+            );
 
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 fx.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
@@ -377,6 +420,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         if enriched_samples.len() < 100 { continue; }
+
+        // Class distribution for crypto
+        let vol_threshold = features::compute_volatility_threshold(&enriched_samples);
+        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&enriched_samples, vol_threshold);
+        let (w_down, w_up) = features::compute_class_weights(&enriched_samples, vol_threshold);
+        println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
+            coin_id, buy_count, short_count, sell_count, hold_count, w_down, w_up);
+
+        let pre_acc = model_store::load_model_accuracy(coin_id);
+
         let n_feat = enriched_samples[0].features.len();
         let train_window = (enriched_samples.len() as f64 * 0.6) as usize;
         let test_window = 20.min(enriched_samples.len() / 10);
@@ -399,7 +452,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ensemble: (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
             });
 
-            // Save final-fold models
+            // Save final-fold models with class-weighted training
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
                 while s + train_window + test_window <= enriched_samples.len() { last = s + train_window; s += step; }
@@ -408,13 +461,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_fold: Vec<ml::Sample> = enriched_samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
             let recency_weights = ensemble::compute_recency_weights(last_fold.len());
+            let class_adjusted_weights: Vec<f64> = last_fold.iter().zip(recency_weights.iter()).map(|(s, &rw)| {
+                let cw = if s.label > 0.0 { w_up } else { w_down };
+                rw * cw
+            }).collect();
 
             let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train_weighted(&last_fold, Some(&recency_weights), 0.005, 3000);
+            lin.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.005, 3000);
             let _ = model_store::save_weights(coin_id, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
 
             let mut log = ml::LogisticRegression::new(n_feat);
-            log.train_weighted(&last_fold, Some(&recency_weights), 0.01, 3000);
+            log.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.01, 3000);
             let _ = model_store::save_weights(coin_id, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
@@ -422,10 +479,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
-            let gbt_recency = &recency_weights[..x_t.len()];
+            let gbt_recency = &class_adjusted_weights[..x_t.len()];
             let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
             let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(coin_id, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
+
+            let _ = database.insert_retrain_log(
+                coin_id, "ensemble", pre_acc,
+                (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
+                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64,
+            );
 
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 coin_id, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,

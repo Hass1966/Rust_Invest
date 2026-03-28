@@ -282,6 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/feedback/survey", post(submit_survey_feedback))
         .route("/api/v1/feedback", get(get_feedback))
         .route("/api/v1/simulator/data", get(get_simulator_data))
+        .route("/api/v1/deep-dive/:asset", get(get_deep_dive))
         .layer(cors.clone())
         .with_state(state);
 
@@ -509,7 +510,7 @@ async fn get_signal_truth(
             entry.1 += 1;
             if r.was_correct == Some(true) { entry.0 += 1; }
         }
-        let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SELL", "HOLD"].iter().map(|&st| {
+        let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SHORT", "SELL", "HOLD"].iter().map(|&st| {
             let (correct, total) = by_signal.get(st).copied().unwrap_or((0, 0));
             serde_json::json!({
                 "signal_type": st,
@@ -781,7 +782,7 @@ fn backtest_signal_accuracy(
         entry.1 += 1;
         if r.was_correct == Some(true) { entry.0 += 1; }
     }
-    let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SELL", "HOLD"].iter().map(|&st| {
+    let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SHORT", "SELL", "HOLD"].iter().map(|&st| {
         let (correct, total) = by_signal.get(st).copied().unwrap_or((0, 0));
         let total_incl_pending = all_records.iter().filter(|r| r.signal_type == st).count();
         serde_json::json!({
@@ -2917,6 +2918,7 @@ fn record_signal_history(database: &db::Database, sig: &enriched_signals::Enrich
                 let pct_change = (current_price - prev_price) / prev_price * 100.0;
                 let was_correct = match prev.signal_type.as_str() {
                     "BUY" => current_price > prev_price,
+                    "SHORT" => current_price < prev_price,
                     "SELL" => current_price < prev_price,
                     "HOLD" => pct_change.abs() < 1.0,
                     _ => false,
@@ -3346,6 +3348,169 @@ async fn get_simulator_data(
     }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
 
     Ok(result)
+}
+
+// ════════════════════════════════════════
+// Deep Dive — Macro Dashboard
+// ════════════════════════════════════════
+
+#[derive(serde::Deserialize)]
+struct FredResponse { observations: Vec<FredObservation> }
+#[derive(serde::Deserialize)]
+struct FredObservation { date: String, value: String }
+
+async fn fetch_fred_series(client: &reqwest::Client, api_key: &str, series_id: &str) -> Option<(String, f64)> {
+    let url = format!(
+        "https://api.stlouisfed.org/fred/series/observations?series_id={}&api_key={}&file_type=json&sort_order=desc&limit=1",
+        series_id, api_key
+    );
+    let resp = client.get(&url).send().await.ok()?;
+    let fred: FredResponse = resp.json().await.ok()?;
+    let obs = fred.observations.first()?;
+    let val = obs.value.parse::<f64>().ok()?;
+    Some((obs.date.clone(), val))
+}
+
+async fn get_deep_dive(
+    State(state): State<AppState>,
+    Path(asset): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Determine asset class and symbols
+    let (asset_class, price_symbol, signal_key) = match asset.as_str() {
+        "SPY" => ("stock", "SPY", "SPY"),
+        "GLD" => ("commodity", "GLD", "GLD"),
+        "bitcoin" => ("crypto", "bitcoin", "bitcoin"),
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    // Read current signal
+    let signal_data = {
+        let signals = state.signals.read().await;
+        signals.get(signal_key).map(|s| serde_json::json!({
+            "type": s.signal,
+            "confidence": s.technical.confidence,
+            "probability_up": s.technical.probability_up,
+            "timestamp": s.timestamp,
+            "price": s.price,
+        }))
+    };
+
+    // DB queries in spawn_blocking
+    let db_path = state.db_path.clone();
+    let asset_str = asset.clone();
+    let price_sym = price_symbol.to_string();
+    let asset_cl = asset_class.to_string();
+
+    let db_result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // 7-day accuracy
+        let from_date = (chrono::Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+        let history = database.get_signal_history_for_asset_from(&asset_str, &from_date).unwrap_or_default();
+        let resolved: Vec<_> = history.iter().filter(|s| s.was_correct.is_some()).collect();
+        let correct = resolved.iter().filter(|s| s.was_correct == Some(true)).count();
+        let total = resolved.len();
+        let accuracy = if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 };
+
+        // Macro indicators
+        let vix = database.get_market_history("^VIX").unwrap_or_default();
+        let tnx = database.get_market_history("^TNX").unwrap_or_default();
+        let irx = database.get_market_history("^IRX").unwrap_or_default();
+        let uup = database.get_market_history("UUP").unwrap_or_default();
+
+        let last_val = |data: &[(String, f64)]| -> serde_json::Value {
+            if let Some((ts, val)) = data.last() {
+                serde_json::json!({"value": val, "timestamp": ts})
+            } else {
+                serde_json::Value::Null
+            }
+        };
+
+        // Sector ETFs with change_pct
+        let sector_etfs = ["XLK", "XLF", "XLE", "XLV", "XLP", "XLU", "XLC", "XLY", "XLI"];
+        let mut sectors = serde_json::Map::new();
+        for etf in &sector_etfs {
+            let data = database.get_market_history(etf).unwrap_or_default();
+            if data.len() >= 2 {
+                let curr = data[data.len() - 1].1;
+                let prev = data[data.len() - 2].1;
+                let change_pct = if prev > 0.0 { (curr - prev) / prev * 100.0 } else { 0.0 };
+                sectors.insert(etf.to_string(), serde_json::json!({
+                    "value": curr, "timestamp": data.last().unwrap().0, "change_pct": (change_pct * 10.0).round() / 10.0
+                }));
+            }
+        }
+
+        // Fear & Greed
+        let fg = database.get_fear_greed_history().unwrap_or_default();
+        let fear_greed = fg.last().map(|(d, v)| serde_json::json!({"value": v, "date": d}));
+
+        // Sentiment
+        let conn = rusqlite::Connection::open("rust_invest.db").ok();
+        let sentiment = conn.as_ref().and_then(|c| {
+            let data = news_sentiment::get_sentiment_history(c, &asset_str, 7);
+            data.last().map(|s| serde_json::json!({
+                "news_score": s.news_score,
+                "reddit_score": s.reddit_score,
+                "combined_score": s.combined_score,
+                "llm_analysis": s.llm_analysis,
+                "date": s.date,
+            }))
+        });
+
+        // 90-day price history
+        let price_history: Vec<serde_json::Value> = if asset_cl == "crypto" {
+            let points = database.get_coin_history(&price_sym).unwrap_or_default();
+            let n = points.len();
+            let skip = if n > 90 { n - 90 } else { 0 };
+            points[skip..].iter().map(|p| serde_json::json!({"date": &p.timestamp[..10], "price": p.price})).collect()
+        } else {
+            // stock and commodity (GLD) both use stock_history
+            let points = database.get_stock_history(&price_sym).unwrap_or_default();
+            let n = points.len();
+            let skip = if n > 90 { n - 90 } else { 0 };
+            points[skip..].iter().map(|p| serde_json::json!({"date": &p.timestamp[..10], "price": p.price})).collect()
+        };
+
+        Ok::<_, StatusCode>(serde_json::json!({
+            "accuracy_7d": {"correct": correct, "total": total, "accuracy": (accuracy * 10.0).round() / 10.0},
+            "macro": {
+                "vix": last_val(&vix),
+                "tnx": last_val(&tnx),
+                "irx": last_val(&irx),
+                "uup": last_val(&uup),
+                "sectors": sectors,
+            },
+            "fear_greed": fear_greed,
+            "sentiment": sentiment,
+            "price_history": price_history,
+        }))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    // FRED API calls (async, outside spawn_blocking)
+    let fred_api_key = std::env::var("FRED_API_KEY").unwrap_or_default();
+    let (fed_funds, yield_curve) = if !fred_api_key.is_empty() {
+        tokio::join!(
+            fetch_fred_series(&state.http_client, &fred_api_key, "FEDFUNDS"),
+            fetch_fred_series(&state.http_client, &fred_api_key, "T10Y2Y")
+        )
+    } else {
+        (None, None)
+    };
+
+    let fred = serde_json::json!({
+        "fed_funds_rate": fed_funds.as_ref().map(|(d, v)| serde_json::json!({"value": v, "date": d})),
+        "yield_curve": yield_curve.as_ref().map(|(d, v)| serde_json::json!({"value": v, "date": d})),
+    });
+
+    // Merge everything
+    let mut result = db_result.as_object().unwrap().clone();
+    result.insert("asset".to_string(), serde_json::json!(asset));
+    result.insert("asset_class".to_string(), serde_json::json!(asset_class));
+    result.insert("signal".to_string(), signal_data.unwrap_or(serde_json::Value::Null));
+    result.insert("fred".to_string(), fred);
+
+    Ok(Json(serde_json::Value::Object(result)))
 }
 
 /// Build a default asset config from the existing STOCK_LIST/FX_LIST

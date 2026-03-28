@@ -1553,3 +1553,95 @@ mod tests {
         assert!((0.0..=1.0).contains(&gbt_acc), "GBT accuracy {:.3} out of [0,1]", gbt_acc);
     }
 }
+
+// ════════════════════════════════════════
+// Label classification for SHORT signals
+// ════════════════════════════════════════
+
+/// Signal class for training data — used for class distribution analysis and weighting
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SignalClass {
+    Buy,
+    Short,
+    Sell,
+    Hold,
+}
+
+/// Classify a training sample into BUY/SHORT/SELL/HOLD based on return and volatility
+/// - BUY: return > vol_threshold (strong upward move)
+/// - SHORT: return < -vol_threshold (strong downward move, mirrors BUY)
+/// - SELL: return < 0 but not strong enough for SHORT
+/// - HOLD: return ~ flat (within 20% of vol_threshold)
+pub fn classify_label(label: f64, vol_threshold: f64) -> SignalClass {
+    let threshold = vol_threshold.max(0.001); // avoid division by zero
+    if label > threshold {
+        SignalClass::Buy
+    } else if label < -threshold {
+        SignalClass::Short
+    } else if label < -threshold * 0.2 {
+        SignalClass::Sell
+    } else {
+        SignalClass::Hold
+    }
+}
+
+/// Compute volatility threshold for an asset: median absolute daily return * 1.5
+pub fn compute_volatility_threshold(samples: &[Sample]) -> f64 {
+    let mut abs_returns: Vec<f64> = samples.iter().map(|s| s.label.abs()).collect();
+    abs_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = if abs_returns.is_empty() {
+        0.01
+    } else {
+        abs_returns[abs_returns.len() / 2]
+    };
+    median * 1.5
+}
+
+/// Count class distribution for a set of samples
+pub fn class_distribution(samples: &[Sample], vol_threshold: f64) -> (usize, usize, usize, usize) {
+    let mut buy = 0;
+    let mut short = 0;
+    let mut sell = 0;
+    let mut hold = 0;
+    for s in samples {
+        match classify_label(s.label, vol_threshold) {
+            SignalClass::Buy => buy += 1,
+            SignalClass::Short => short += 1,
+            SignalClass::Sell => sell += 1,
+            SignalClass::Hold => hold += 1,
+        }
+    }
+    (buy, short, sell, hold)
+}
+
+/// Compute class weights for binary classification (UP=1, DOWN=0)
+/// If SHORT labels are underrepresented relative to BUY, upweight DOWN class samples
+/// Returns (weight_for_down, weight_for_up) for use in weighted training
+pub fn compute_class_weights(samples: &[Sample], vol_threshold: f64) -> (f64, f64) {
+    let (buy, short, _sell, _hold) = class_distribution(samples, vol_threshold);
+    let n = samples.len() as f64;
+    let n_up = samples.iter().filter(|s| s.label > 0.0).count() as f64;
+    let n_down = n - n_up;
+
+    if n_up == 0.0 || n_down == 0.0 {
+        return (1.0, 1.0);
+    }
+
+    // Base class weight: inverse of frequency
+    let w_up = n / (2.0 * n_up);
+    let w_down = n / (2.0 * n_down);
+
+    // If SHORT is underrepresented relative to BUY, boost DOWN weight further
+    let short_boost = if short > 0 && buy > 0 {
+        let ratio = buy as f64 / short as f64;
+        if ratio > 1.5 {
+            1.0 + (ratio - 1.0).min(1.0) * 0.3 // Up to 30% extra boost
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+
+    (w_down * short_boost, w_up)
+}

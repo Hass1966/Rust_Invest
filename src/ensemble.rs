@@ -900,9 +900,11 @@ pub fn ensemble_signal_with_override(
     if n_models == 0 { n_models = 1; } // safety
     let models_agree = ups.max(n_models - ups);
 
-    // Separate BUY and SELL scoring:
+    // Separate BUY, SELL, and SHORT scoring:
     // - BUY requires ensemble_prob above buy_thresh
     // - SELL requires ensemble_prob below sell_thresh AND majority of models agree on down
+    // - SHORT requires very strong bearish conviction — ensemble_prob below sell_thresh AND
+    //   high model agreement on down (same threshold as BUY but inverted)
     // - Low BUY probability alone defaults to HOLD (not SELL) unless models strongly agree
     let downs = n_models - ups;
     let signal = if !can_signal {
@@ -915,8 +917,14 @@ pub fn ensemble_signal_with_override(
             (base_buy, base_sell)
         };
 
+        // SHORT threshold: mirror of BUY — (1.0 - buy_thresh) is the bearish equivalent
+        let short_thresh = 1.0 - buy_thresh;
+
         if ensemble_prob > buy_thresh {
             "BUY"
+        } else if ensemble_prob < short_thresh && downs >= (n_models + 1) / 2 && (ensemble_prob - 0.5).abs() > (buy_thresh - 0.5) {
+            // SHORT: strong bearish conviction matching BUY-level confidence
+            "SHORT"
         } else if ensemble_prob < sell_thresh && downs >= (n_models + 1) / 2 {
             // SELL only when prob is low AND majority of models predict down
             "SELL"
@@ -994,6 +1002,10 @@ pub fn apply_sentiment_adjustment(signal: &mut TradingSignal, sentiment: f64, an
         if sentiment.abs() > 0.6 && (signal.ensemble_prob - 0.5).abs() < 0.08 {
             signal.signal = "HOLD".to_string();
         }
+        // If bullish sentiment strongly disagrees with SHORT, downgrade to SELL
+        if signal.signal == "SHORT" && sentiment > 0.4 {
+            signal.signal = "SELL".to_string();
+        }
     }
 }
 
@@ -1011,9 +1023,10 @@ pub fn print_signals(signals: &[TradingSignal]) {
 
     for s in signals {
         let signal_icon = match s.signal.as_str() {
-            "BUY" => "▲ BUY ",
-            "SELL" => "▼ SELL",
-            _ => "● HOLD",
+            "BUY" => "▲ BUY  ",
+            "SHORT" => "▼ SHORT",
+            "SELL" => "▼ SELL ",
+            _ => "● HOLD ",
         };
         let lstm_str = if s.has_lstm {
             format!("{:>5.1}%", s.lstm_prob * 100.0)

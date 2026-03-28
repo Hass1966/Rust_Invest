@@ -227,8 +227,8 @@ export default function TrackRecord() {
                 correct={st.correct}
                 total={st.total}
                 accuracy={st.accuracy}
-                color={st.signal_type === 'BUY' ? 'bg-green-500' : st.signal_type === 'SELL' ? 'bg-red-500' : 'bg-amber-500'}
-                labelColor={st.signal_type === 'BUY' ? 'text-green-400' : st.signal_type === 'SELL' ? 'text-red-400' : 'text-amber-400'}
+                color={st.signal_type === 'BUY' ? 'bg-green-500' : st.signal_type === 'SHORT' ? 'bg-orange-500' : st.signal_type === 'SELL' ? 'bg-red-500' : 'bg-amber-500'}
+                labelColor={st.signal_type === 'BUY' ? 'text-green-400' : st.signal_type === 'SHORT' ? 'text-orange-400' : st.signal_type === 'SELL' ? 'text-red-400' : 'text-amber-400'}
               />
             ))}
           </div>
@@ -493,7 +493,7 @@ function AccuracyBar({ label, correct, total, accuracy, color, labelColor }: {
 
 function SignalRow({ signal: s }: { signal: SignalTruthRecord }) {
   const time = new Date(s.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  const signalColor = s.signal_type === 'BUY' ? 'text-green-400' : s.signal_type === 'SELL' ? 'text-red-400' : 'text-amber-400'
+  const signalColor = s.signal_type === 'BUY' ? 'text-green-400' : s.signal_type === 'SHORT' ? 'text-orange-400' : s.signal_type === 'SELL' ? 'text-red-400' : 'text-amber-400'
 
   let resultIcon: React.ReactNode
   if (s.was_correct === null) resultIcon = <span className="text-amber-400/60 text-xs">pending</span>

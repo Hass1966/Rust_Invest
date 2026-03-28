@@ -38,3 +38,5 @@ pub mod backtest_compare;
 pub mod auth;
 pub mod news_sentiment;
 pub mod email_alerts;
+pub mod polygon;
+pub mod tiingo;

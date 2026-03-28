@@ -1,12 +1,13 @@
 import { Routes, Route, NavLink, useLocation, Navigate, Link } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X, LogOut, LogIn, Menu, Home as HomeIcon, FlaskConical } from 'lucide-react'
+import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X, LogOut, LogIn, Menu, Home as HomeIcon, FlaskConical, Activity } from 'lucide-react'
 import Home from './pages/Home'
 import Dashboard from './pages/Dashboard'
 import MyPortfolio from './pages/MyPortfolio'
 import TrackRecord from './pages/TrackRecord'
 import Simulator from './pages/Simulator'
 import Explore from './pages/Explore'
+import DeepDive from './pages/DeepDive'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
 import AuthCallback from './pages/AuthCallback'
@@ -18,6 +19,7 @@ import { useAuth } from './lib/auth'
 const tabs = [
   { path: '/', label: 'Home', icon: HomeIcon },
   { path: '/dashboard', label: 'Dashboard', icon: BarChart3 },
+  { path: '/deep-dive', label: 'Deep Dive', icon: Activity },
   { path: '/my-portfolio', label: 'My Portfolio', icon: Wallet, protected: true },
   { path: '/track-record', label: 'Track Record', icon: Target },
   { path: '/simulator', label: 'Simulator', icon: FlaskConical },
@@ -200,6 +202,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/deep-dive" element={<DeepDive />} />
             <Route path="/my-portfolio" element={<ProtectedRoute><MyPortfolio /></ProtectedRoute>} />
             <Route path="/track-record" element={<TrackRecord />} />
             <Route path="/simulator" element={<Simulator />} />

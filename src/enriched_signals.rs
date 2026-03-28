@@ -133,7 +133,9 @@ pub fn enrich_signal(
     };
 
     // Drawdown risk estimation
-    let drawdown_risk = if signal.confidence > 5.0 && signal.signal == "BUY" {
+    let drawdown_risk = if signal.signal == "SHORT" {
+        "Unlimited (short)"
+    } else if signal.confidence > 5.0 && signal.signal == "BUY" {
         "3-5%"
     } else if vol_regime == "high" {
         "8-12%"
@@ -163,7 +165,7 @@ pub fn enrich_signal(
         "NO EDGE"
     };
 
-    // Suggested action
+    // Suggested action (with SHORT support)
     let suggested_action = build_suggested_action(
         &signal.signal,
         signal.confidence,
@@ -171,6 +173,11 @@ pub fn enrich_signal(
         &signal.sma_trend,
         signal.rsi,
     );
+
+    // Drawdown risk for SHORT signals
+    if signal.signal == "SHORT" {
+        risk_factors.push("short positions carry unlimited theoretical risk");
+    }
 
     // Model details
     let mut models = std::collections::HashMap::new();
@@ -254,6 +261,16 @@ fn build_suggested_action(
                 "Moderate buy signal. Consider accumulating on pullbacks.".to_string()
             }
         }
+        ("SHORT", "HIGH") if confidence > 5.0 => {
+            "Strong short signal. Consider opening a short position via CFD/spread bet. Use strict stop-loss.".to_string()
+        }
+        ("SHORT", _) => {
+            if trend == "BULLISH" {
+                "Short signal but against the trend. Higher risk — use tight stop-loss and small size.".to_string()
+            } else {
+                "Short signal aligns with bearish trend. Consider a measured short via CFD or spread bet.".to_string()
+            }
+        }
         ("SELL", "HIGH") if confidence > 5.0 => {
             "Strong sell signal. Consider reducing exposure or hedging.".to_string()
         }
@@ -311,6 +328,10 @@ fn build_explanation(
     match signal {
         "BUY" => format!(
             "{} of {} models bullish · {}% confidence · {}",
+            models_agree, n_models, conf_pct, primary_reason
+        ),
+        "SHORT" => format!(
+            "{} of {} models bearish · {}% confidence · {} · Short positions carry higher risk. Not financial advice.",
             models_agree, n_models, conf_pct, primary_reason
         ),
         "SELL" => format!(

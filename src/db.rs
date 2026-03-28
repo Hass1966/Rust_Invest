@@ -236,7 +236,45 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_predictions_asset_time
                 ON predictions(asset, timestamp);
             CREATE INDEX IF NOT EXISTS idx_predictions_pending
-                ON predictions(outcome_timestamp);"
+                ON predictions(outcome_timestamp);
+
+            CREATE TABLE IF NOT EXISTS retrain_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset           TEXT NOT NULL,
+                model_name      TEXT NOT NULL,
+                accuracy_before REAL,
+                accuracy_after  REAL,
+                class_dist_buy  INTEGER,
+                class_dist_sell INTEGER,
+                class_dist_short INTEGER,
+                class_dist_hold INTEGER,
+                retrained_at    TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_retrain_log_asset
+                ON retrain_log(asset, retrained_at);"
+        )?;
+        Ok(())
+    }
+
+    /// Record pre-retrain accuracy baseline for an asset
+    pub fn insert_retrain_log(
+        &self,
+        asset: &str,
+        model_name: &str,
+        accuracy_before: f64,
+        accuracy_after: f64,
+        buy_count: i64,
+        sell_count: i64,
+        short_count: i64,
+        hold_count: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO retrain_log
+                (asset, model_name, accuracy_before, accuracy_after,
+                 class_dist_buy, class_dist_sell, class_dist_short, class_dist_hold)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![asset, model_name, accuracy_before, accuracy_after,
+                    buy_count, sell_count, short_count, hold_count],
         )?;
         Ok(())
     }

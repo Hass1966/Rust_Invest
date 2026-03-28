@@ -412,6 +412,23 @@ pub fn load_lstm_meta(symbol: &str) -> Result<SavedLSTMMeta, String> {
 // ════════════════════════════════════════
 
 /// Summary of all cached models
+/// Load pre-retrain accuracy for an asset (average of available model accuracies)
+pub fn load_model_accuracy(symbol: &str) -> f64 {
+    let mut acc_sum = 0.0;
+    let mut count = 0;
+    for model_type in &["linreg", "logreg"] {
+        if let Ok(saved) = load_weights(symbol, model_type) {
+            acc_sum += saved.meta.walk_forward_accuracy;
+            count += 1;
+        }
+    }
+    if let Ok((saved, _)) = load_gbt(symbol) {
+        acc_sum += saved.meta.walk_forward_accuracy;
+        count += 1;
+    }
+    if count > 0 { acc_sum / count as f64 } else { 0.0 }
+}
+
 pub fn list_cached_models() -> Vec<String> {
     let mut models = Vec::new();
     if let Ok(entries) = fs::read_dir(MODEL_DIR) {

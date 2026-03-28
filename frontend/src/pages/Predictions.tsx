@@ -162,7 +162,7 @@ function PredictionRow({ prediction: p }: { prediction: PredictionRecord }) {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
 
-  const signalColor = p.signal === 'BUY' ? 'text-green-400' : p.signal === 'SELL' ? 'text-red-400' : 'text-yellow-400'
+  const signalColor = p.signal === 'BUY' ? 'text-green-400' : p.signal === 'SHORT' ? 'text-orange-400' : p.signal === 'SELL' ? 'text-red-400' : 'text-yellow-400'
 
   const resultIcon = p.was_correct === null
     ? <span className="text-gray-500" title="Pending">&#9203;</span>

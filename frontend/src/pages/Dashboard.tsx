@@ -204,12 +204,14 @@ export default function Dashboard() {
 
 const borderColors: Record<string, string> = {
   BUY: 'border-l-emerald-500',
+  SHORT: 'border-l-orange-500',
   SELL: 'border-l-red-500',
   HOLD: 'border-l-amber-500',
 }
 
 const pillColors: Record<string, string> = {
   BUY: 'text-emerald-400 bg-emerald-500/15',
+  SHORT: 'text-orange-400 bg-orange-500/15',
   SELL: 'text-red-400 bg-red-500/15',
   HOLD: 'text-amber-400 bg-amber-500/15',
 }
@@ -219,7 +221,7 @@ function ConfidenceArc({ confidence, signal }: { confidence: number; signal: str
   const circumference = 2 * Math.PI * radius
   const pct = Math.min(Math.max(confidence, 0), 100)
   const offset = circumference - (pct / 100) * circumference
-  const color = signal === 'BUY' ? '#10b981' : signal === 'SELL' ? '#ef4444' : '#f59e0b'
+  const color = signal === 'BUY' ? '#10b981' : signal === 'SHORT' ? '#f97316' : signal === 'SELL' ? '#ef4444' : '#f59e0b'
 
   return (
     <svg width="50" height="50" viewBox="0 0 50 50" className="flex-shrink-0">

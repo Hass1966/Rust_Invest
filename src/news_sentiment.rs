@@ -529,9 +529,22 @@ pub async fn fetch_and_store_sentiment(
     let (reddit_mentions, reddit_word_score, reddit_texts) =
         fetch_reddit_posts(client, symbol).await.unwrap_or((0, 0.0, vec![]));
 
-    // Combine all headlines (Serper first, then NewsAPI — deduplicate by title)
+    // 3b. Fetch from Tiingo (supplementary)
+    let tiingo_key = std::env::var("TIINGO_API_KEY").ok();
+    let tiingo_headlines: Vec<(String, String)> = if let Some(ref key) = tiingo_key {
+        crate::tiingo::fetch_headlines(client, symbol, key).await
+    } else {
+        vec![]
+    };
+
+    // Combine all headlines (Serper first, then NewsAPI, then Tiingo — deduplicate by title)
     let mut all_headlines: Vec<(String, String)> = serper_headlines;
     for (title, desc) in &newsapi_headlines {
+        if !all_headlines.iter().any(|(t, _)| t == title) {
+            all_headlines.push((title.clone(), desc.clone()));
+        }
+    }
+    for (title, desc) in &tiingo_headlines {
         if !all_headlines.iter().any(|(t, _)| t == title) {
             all_headlines.push((title.clone(), desc.clone()));
         }
@@ -611,8 +624,21 @@ pub async fn fetch_and_store_sentiment_by_path(
     let (reddit_mentions, reddit_word_score, reddit_texts) =
         fetch_reddit_posts(client, symbol).await.unwrap_or((0, 0.0, vec![]));
 
+    // Fetch from Tiingo (supplementary)
+    let tiingo_key = std::env::var("TIINGO_API_KEY").ok();
+    let tiingo_headlines: Vec<(String, String)> = if let Some(ref key) = tiingo_key {
+        crate::tiingo::fetch_headlines(client, symbol, key).await
+    } else {
+        vec![]
+    };
+
     let mut all_headlines: Vec<(String, String)> = serper_headlines;
     for (title, desc) in &newsapi_headlines {
+        if !all_headlines.iter().any(|(t, _)| t == title) {
+            all_headlines.push((title.clone(), desc.clone()));
+        }
+    }
+    for (title, desc) in &tiingo_headlines {
         if !all_headlines.iter().any(|(t, _)| t == title) {
             all_headlines.push((title.clone(), desc.clone()));
         }

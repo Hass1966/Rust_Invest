@@ -5,14 +5,24 @@ import { translateSignalSummary, confidenceLabel } from '../lib/plain-english'
 
 const signalColors: Record<string, string> = {
   BUY: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30',
+  SHORT: 'text-orange-400 bg-orange-500/15 border-orange-500/30',
   SELL: 'text-red-400 bg-red-500/15 border-red-500/30',
   HOLD: 'text-amber-400 bg-amber-500/15 border-amber-500/30',
 }
 
 const signalBorder: Record<string, string> = {
   BUY: 'border-l-emerald-500',
+  SHORT: 'border-l-orange-500',
   SELL: 'border-l-red-500',
   HOLD: 'border-l-amber-500',
+}
+
+function getShortTooltip(assetClass: string, asset: string): string {
+  if (assetClass === 'fx') return 'How to act: Sell the pair directly through your FX broker.'
+  if (assetClass === 'crypto') return 'How to act: Use crypto futures (e.g. Binance/Bybit perpetuals) or a CFD broker.'
+  if (asset === 'GLD' || asset === 'SLV') return 'How to act: Buy inverse gold ETF (GLL) or use a CFD/spread bet.'
+  if (asset === 'USO' || asset === 'CPER') return 'How to act: Use a CFD or spread betting platform to short the commodity.'
+  return 'How to act: Use CFDs or spread betting (UK). Stocks cannot be directly shorted in a standard ISA/SIPP.'
 }
 
 interface SentimentEntry {
@@ -29,8 +39,8 @@ function TrafficLight({ signal }: { signal: string }) {
       <div
         className="w-2.5 h-2.5 rounded-full transition-all"
         style={{
-          background: lit('SELL') ? '#ef4444' : '#1f2937',
-          boxShadow: lit('SELL') ? '0 0 6px #ef4444' : 'none',
+          background: lit('SELL') ? '#ef4444' : lit('SHORT') ? '#f97316' : '#1f2937',
+          boxShadow: lit('SELL') ? '0 0 6px #ef4444' : lit('SHORT') ? '0 0 6px #f97316' : 'none',
         }}
       />
       <div
@@ -153,6 +163,18 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
 
       {/* Suggested action */}
       <p className="text-cyan-400/80 text-sm mt-2 italic">{s.suggested_action}</p>
+
+      {/* SHORT signal tooltip and risk disclaimer */}
+      {s.signal === 'SHORT' && (
+        <div className="mt-2 space-y-1">
+          <p className="text-orange-400/90 text-xs bg-orange-500/10 border border-orange-500/20 rounded px-3 py-2">
+            {getShortTooltip(s.asset_class, s.asset)}
+          </p>
+          <p className="text-red-400/80 text-xs italic">
+            Short positions carry higher risk. Not financial advice.
+          </p>
+        </div>
+      )}
 
       {/* Expanded model breakdown */}
       {expanded && (
