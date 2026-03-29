@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { TrendingUp, Shield, DollarSign, Activity, BarChart3, Gauge } from 'lucide-react'
 
-type AssetTab = 'SPY' | 'GLD' | 'bitcoin'
+type AssetTab = 'SPY' | 'GLD' | 'CL=F' | 'bitcoin'
 
 interface DeepDiveData {
   asset: string
@@ -113,9 +113,10 @@ function computeVerdict(data: DeepDiveData, tab: AssetTab): { text: string; colo
   }
 
   const net = bullish - bearish
-  if (net >= 2) return { text: `Macro conditions appear bullish for ${tab === 'SPY' ? 'equities' : tab === 'GLD' ? 'gold' : 'bitcoin'} — ${bullish} of ${bullish + bearish} indicators positive.`, color: 'text-emerald-400', border: 'border-emerald-500/30' }
-  if (net <= -2) return { text: `Macro headwinds detected for ${tab === 'SPY' ? 'equities' : tab === 'GLD' ? 'gold' : 'bitcoin'} — ${bearish} of ${bullish + bearish} indicators negative.`, color: 'text-red-400', border: 'border-red-500/30' }
-  return { text: `Mixed macro signals for ${tab === 'SPY' ? 'equities' : tab === 'GLD' ? 'gold' : 'bitcoin'} — no strong directional bias from indicators.`, color: 'text-amber-400', border: 'border-amber-500/30' }
+  const assetName = tab === 'SPY' ? 'equities' : tab === 'GLD' ? 'gold' : tab === 'CL=F' ? 'oil' : 'bitcoin'
+  if (net >= 2) return { text: `Macro conditions appear bullish for ${assetName} — ${bullish} of ${bullish + bearish} indicators positive.`, color: 'text-emerald-400', border: 'border-emerald-500/30' }
+  if (net <= -2) return { text: `Macro headwinds detected for ${assetName} — ${bearish} of ${bullish + bearish} indicators negative.`, color: 'text-red-400', border: 'border-red-500/30' }
+  return { text: `Mixed macro signals for ${assetName} — no strong directional bias from indicators.`, color: 'text-amber-400', border: 'border-amber-500/30' }
 }
 
 function getSPYCards(data: DeepDiveData) {
@@ -150,6 +151,22 @@ function getGoldCards(data: DeepDiveData) {
   ]
 }
 
+function getOilCards(data: DeepDiveData) {
+  const prices = data.price_history.map(p => p.price)
+  const high90 = prices.length > 0 ? Math.max(...prices) : 0
+  const low90 = prices.length > 0 ? Math.min(...prices) : 0
+  const current = prices.length > 0 ? prices[prices.length - 1] : 0
+
+  return [
+    { icon: Activity, title: 'Oil & The Economy', value: 'Macro Driver', subtitle: 'Oil prices affect inflation, transport costs, and energy stocks globally. Rising oil = higher inflation pressure, potential headwind for equities. Falling oil = relief for consumers but may signal slowing demand. Particularly relevant given current geopolitical tensions.', accent: 'text-amber-400' },
+    { icon: Gauge, title: 'VIX — Risk Sentiment', value: data.macro.vix ? data.macro.vix.value.toFixed(1) : 'N/A', subtitle: 'Geopolitical risk spikes push both VIX and oil higher', accent: data.macro.vix && data.macro.vix.value > 25 ? 'text-red-400' : 'text-emerald-400' },
+    { icon: DollarSign, title: 'Dollar Strength (UUP)', value: data.macro.uup ? `$${data.macro.uup.value.toFixed(2)}` : 'N/A', subtitle: 'Oil is priced in USD — strong dollar weighs on crude prices', accent: 'text-amber-400' },
+    { icon: BarChart3, title: 'Energy Sector (XLE)', value: data.macro.sectors?.XLE ? `$${data.macro.sectors.XLE.value.toFixed(2)}` : 'N/A', subtitle: data.macro.sectors?.XLE ? `Change: ${data.macro.sectors.XLE.change_pct > 0 ? '+' : ''}${data.macro.sectors.XLE.change_pct.toFixed(1)}%` : 'Energy equities track crude closely', accent: 'text-cyan-400' },
+    { icon: Activity, title: 'Oil Price Range (90d)', value: prices.length > 0 ? `$${low90.toFixed(0)} – $${high90.toFixed(0)}` : 'N/A', subtitle: prices.length > 0 ? `Current: $${current.toFixed(2)} (${((current - low90) / (high90 - low90) * 100).toFixed(0)}% of range)` : 'No data', accent: 'text-amber-400' },
+    { icon: TrendingUp, title: 'Treasury Yield (10Y)', value: data.macro.tnx ? `${data.macro.tnx.value.toFixed(2)}%` : 'N/A', subtitle: 'Rising yields and rising oil both signal inflation expectations', accent: 'text-cyan-400' },
+  ]
+}
+
 function getBitcoinCards(data: DeepDiveData) {
   return [
     { icon: Gauge, title: 'Fear & Greed Index', value: data.fear_greed ? `${data.fear_greed.value.toFixed(0)}` : 'N/A', subtitle: data.fear_greed ? (data.fear_greed.value > 75 ? 'Extreme greed — historically precedes corrections' : data.fear_greed.value > 55 ? 'Greed — momentum is positive' : data.fear_greed.value > 40 ? 'Neutral zone' : 'Fear — contrarian buy signal historically') : 'No data', accent: data.fear_greed && data.fear_greed.value > 60 ? 'text-emerald-400' : data.fear_greed && data.fear_greed.value < 40 ? 'text-red-400' : 'text-amber-400' },
@@ -176,9 +193,9 @@ export default function DeepDive() {
       .catch(e => { setError(e.message); setLoading(false) })
   }, [tab])
 
-  const tabLabels: Record<AssetTab, string> = { SPY: 'S&P 500', GLD: 'Gold', bitcoin: 'Bitcoin' }
+  const tabLabels: Record<AssetTab, string> = { SPY: 'S&P 500', GLD: 'Gold', 'CL=F': 'Oil', bitcoin: 'Bitcoin' }
 
-  const cards = data ? (tab === 'SPY' ? getSPYCards(data) : tab === 'GLD' ? getGoldCards(data) : getBitcoinCards(data)) : []
+  const cards = data ? (tab === 'SPY' ? getSPYCards(data) : tab === 'GLD' ? getGoldCards(data) : tab === 'CL=F' ? getOilCards(data) : getBitcoinCards(data)) : []
   const verdict = data ? computeVerdict(data, tab) : null
 
   return (
@@ -193,7 +210,7 @@ export default function DeepDive() {
 
       {/* Tab bar */}
       <div className="flex gap-2">
-        {(['SPY', 'GLD', 'bitcoin'] as AssetTab[]).map(t => (
+        {(['SPY', 'GLD', 'CL=F', 'bitcoin'] as AssetTab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -244,7 +261,16 @@ export default function DeepDive() {
                 )}
               </div>
             ) : (
-              <p className="text-gray-500 text-sm">No signal data available. Signals are generated during the daily pipeline run.</p>
+              <div>
+                {tab === 'CL=F' ? (
+                  <div className="flex items-center gap-3">
+                    <span className="px-3 py-1 rounded-full text-sm font-semibold border text-cyan-400 bg-cyan-500/15 border-cyan-500/30">MONITORING</span>
+                    <span className="text-gray-500 text-sm">Tracking started today — signal data will appear after the next pipeline run.</span>
+                  </div>
+                ) : (
+                  <p className="text-gray-500 text-sm">No signal data available. Signals are generated during the daily pipeline run.</p>
+                )}
+              </div>
             )}
 
             {/* Sentiment summary */}

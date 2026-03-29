@@ -3379,6 +3379,7 @@ async fn get_deep_dive(
     let (asset_class, price_symbol, signal_key) = match asset.as_str() {
         "SPY" => ("stock", "SPY", "SPY"),
         "GLD" => ("commodity", "GLD", "GLD"),
+        "CL=F" | "CLF" => ("commodity", "CL=F", "CL=F"),
         "bitcoin" => ("crypto", "bitcoin", "bitcoin"),
         _ => return Err(StatusCode::BAD_REQUEST),
     };

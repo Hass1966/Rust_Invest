@@ -97,6 +97,7 @@ pub const MARKET_TICKERS: &[&str] = &[
     "XLP",    // Consumer staples
     "XLY",    // Consumer discretionary
     "GLD",    // Gold ETF
+    "CL=F",   // WTI Crude Oil futures
     "UUP",    // US Dollar ETF
 ];
 

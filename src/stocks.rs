@@ -70,6 +70,7 @@ pub const STOCK_LIST: &[StockInfo] = &[
     StockInfo { symbol: "COP", name: "ConocoPhillips" },
     // Commodities ETFs
     StockInfo { symbol: "GLD", name: "SPDR Gold Trust" },
+    StockInfo { symbol: "CL=F", name: "Oil (WTI Crude)" },
     StockInfo { symbol: "USO", name: "US Oil Fund" },
     StockInfo { symbol: "SLV", name: "iShares Silver Trust" },
     StockInfo { symbol: "CPER", name: "US Copper Index Fund" },
