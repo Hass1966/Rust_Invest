@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { EnrichedSignal } from '../lib/types'
-import { translateSignalSummary, confidenceLabel } from '../lib/plain-english'
+import { translateSignalSummary, confidenceLabel, convictionInfo } from '../lib/plain-english'
 
 const signalColors: Record<string, string> = {
   BUY: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30',
@@ -120,11 +120,12 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
         </div>
       </div>
 
-      {/* Price + confidence */}
+      {/* Price + signal strength */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mb-2">
         <span className="text-gray-400">Price: <span className="text-white font-mono">${s.price.toFixed(2)}</span></span>
-        <span className={conf.color} title={`${s.technical.confidence.toFixed(1)}%`}>
-          {conf.text}
+        <span className="inline-flex flex-col">
+          <span className={conf.color}>Signal Strength: {s.technical.confidence.toFixed(1)}%</span>
+          <span className="text-gray-600 text-[10px]">Model agreement on direction</span>
         </span>
         <span className="text-gray-400">RSI: <span className="text-white">{s.technical.rsi.toFixed(1)}</span></span>
         <span className={`text-xs px-2 py-0.5 rounded ${s.technical.quality === 'HIGH' ? 'bg-emerald-500/15 text-emerald-400' : s.technical.quality === 'MODERATE' ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'}`}>
@@ -176,24 +177,33 @@ export default function SignalCard({ signal }: { signal: EnrichedSignal }) {
         </div>
       )}
 
-      {/* Expanded model breakdown */}
+      {/* Expanded model votes */}
       {expanded && (
         <div className="mt-4 pt-4 border-t border-[#1f2937]">
-          <h4 className="text-gray-400 text-xs uppercase tracking-wider mb-3">Model Breakdown</h4>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {Object.entries(s.models).map(([name, model]) => (
-              <div key={name} className="bg-[#0a0e17] rounded p-3">
-                <div className="text-gray-500 text-xs uppercase mb-1">{name}</div>
-                <div className="flex items-center justify-between">
-                  <span className="text-white font-mono text-sm">{model.probability_up.toFixed(1)}%</span>
-                  <span className={`text-xs font-bold ${model.vote === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {model.vote === 'UP' ? '\u25B2' : '\u25BC'} {model.vote}
+          <h4 className="text-gray-400 text-xs uppercase tracking-wider mb-3">Model Votes</h4>
+          <div className="space-y-2">
+            {Object.entries(s.models).map(([name, model]) => {
+              const cv = convictionInfo(model.probability_up)
+              return (
+                <div key={name} className="flex items-center gap-3 bg-[#0a0e17] rounded px-3 py-2">
+                  <span className="text-gray-500 text-xs uppercase w-16 flex-shrink-0 font-medium">{name}</span>
+                  <span className="text-white font-mono text-xs w-12 flex-shrink-0">{model.probability_up.toFixed(1)}%</span>
+                  <span className={`text-xs font-bold w-16 flex-shrink-0 ${cv.textColor}`}>
+                    {cv.direction === 'UP' ? '\u2191' : '\u2193'} {cv.direction}
                   </span>
+                  <span className="inline-flex gap-px flex-shrink-0">
+                    {Array.from({ length: 10 }, (_, i) => (
+                      <span key={i} className={`w-1.5 h-2.5 rounded-sm ${i < cv.filledBars ? cv.barColor : 'bg-[#1f2937]'}`} />
+                    ))}
+                  </span>
+                  <span className="text-gray-500 text-xs">{cv.label}</span>
                 </div>
-                <div className="text-gray-500 text-xs mt-1">Weight: {model.weight}%</div>
-              </div>
-            ))}
+              )
+            })}
           </div>
+          <p className="mt-2 text-[10px] text-gray-600 leading-relaxed">
+            Percentages show probability of price going UP. Below 50% = bearish. Further from 50% = stronger conviction.
+          </p>
           <div className="mt-3 text-xs text-gray-500">
             <span>Agreement: {s.technical.model_agreement}</span>
             <span className="ml-4">WF Accuracy: {s.technical.walk_forward_accuracy.toFixed(1)}%</span>

@@ -144,6 +144,21 @@ export interface SignalTruthData {
   total_pending: number
   total_correct: number
   overall_accuracy: number
+  // New actionable metrics
+  actionable_accuracy?: number
+  actionable_signals?: number
+  actionable_correct?: number
+  buy_accuracy?: number
+  buy_signals?: number
+  buy_correct?: number
+  sell_accuracy?: number
+  sell_signals?: number
+  sell_correct?: number
+  hold_accuracy?: number
+  hold_signals?: number
+  hold_correct?: number
+  expected_value_bps?: number
+  profit_factor?: number
   by_signal_type: { signal_type: string; correct: number; total: number; accuracy: number }[]
   by_asset_class: { asset_class: string; correct: number; total: number; accuracy: number }[]
   rolling: {
@@ -375,6 +390,57 @@ export async function fetchSentiment(symbol: string): Promise<{ symbol: string; 
   const res = await fetch(`${BASE}/api/v1/sentiment/${encodeURIComponent(symbol)}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
+}
+
+// ── Walk-Forward Backtest ──
+
+export interface WalkForwardSignal {
+  date: string
+  asset: string
+  asset_class: string
+  signal: string
+  entry_price: number
+  exit_price: number | null
+  pct_return: number | null
+  was_correct: boolean | null
+  train_window_end: string
+}
+
+export interface WalkForwardWindow {
+  train_end: string
+  test_start: string
+  test_end: string
+  signals_generated: number
+  buy_accuracy: number
+  sell_accuracy: number
+}
+
+export interface WalkForwardSummary {
+  total_signals: number
+  buy_accuracy: number
+  sell_accuracy: number
+  expected_value_bps: number
+  profit_factor: number
+  sharpe_ratio: number
+  max_drawdown_pct: number
+}
+
+export interface WalkForwardData {
+  generated_at: string
+  windows: WalkForwardWindow[]
+  signals: WalkForwardSignal[]
+  summary: WalkForwardSummary
+}
+
+export async function fetchWalkForwardData(): Promise<WalkForwardData | null> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/simulator/walkforward`)
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  } catch {
+    return null
+  }
 }
 
 export async function sendChat(message: string, tabContext: string): Promise<string> {

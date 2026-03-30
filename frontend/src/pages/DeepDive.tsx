@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { TrendingUp, Shield, DollarSign, Activity, BarChart3, Gauge } from 'lucide-react'
+import { convictionInfo } from '../lib/plain-english'
 
 type AssetTab = 'SPY' | 'GLD' | 'CL=F' | 'bitcoin'
 
@@ -238,29 +239,49 @@ export default function DeepDive() {
           {/* Current Signal */}
           <div className="bg-[#111827] border border-[#1f2937] rounded-xl p-5 space-y-3">
             <h3 className="text-sm font-medium text-gray-400">Current Signal — {tabLabels[tab]}</h3>
-            {data.signal ? (
-              <div className="flex flex-wrap items-center gap-4">
-                <span className={`px-3 py-1 rounded-full text-sm font-semibold border ${getSignalColor(data.signal.type)}`}>
-                  {data.signal.type.toUpperCase()}
-                </span>
-                <span className="text-gray-300 text-sm">
-                  Confidence: <span className="text-white font-medium">{data.signal.confidence.toFixed(1)}%</span>
-                </span>
-                <span className="text-gray-300 text-sm">
-                  P(up): <span className="text-white font-medium">{data.signal.probability_up.toFixed(1)}%</span>
-                </span>
-                <span className="text-gray-300 text-sm">
-                  Price: <span className="text-white font-medium">{formatPrice(data.signal.price, tab)}</span>
-                </span>
-                {data.accuracy_7d.total > 0 && (
-                  <span className="text-gray-300 text-sm">
-                    7d accuracy: <span className={`font-medium ${data.accuracy_7d.accuracy >= 60 ? 'text-emerald-400' : data.accuracy_7d.accuracy >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
-                      {data.accuracy_7d.accuracy.toFixed(0)}% ({data.accuracy_7d.correct}/{data.accuracy_7d.total})
-                    </span>
+            {data.signal ? (() => {
+              const cv = convictionInfo(data.signal!.probability_up)
+              return (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-4">
+                  <span className={`px-3 py-1 rounded-full text-sm font-semibold border ${getSignalColor(data.signal!.type)}`}>
+                    {data.signal!.type.toUpperCase()}
                   </span>
-                )}
+                  <span className="inline-flex flex-col">
+                    <span className="text-gray-300 text-sm">
+                      Signal Strength: <span className="text-white font-medium">{data.signal!.confidence.toFixed(1)}%</span>
+                    </span>
+                    <span className="text-gray-600 text-[10px]">Model agreement on direction</span>
+                  </span>
+                  <span className="text-gray-300 text-sm inline-flex items-center gap-2">
+                    P(up): <span className="text-white font-medium">{data.signal!.probability_up.toFixed(1)}%</span>
+                    <span className={`text-xs font-bold ${cv.textColor}`}>
+                      {cv.direction === 'UP' ? '\u2191' : '\u2193'} {cv.direction}
+                    </span>
+                    <span className="inline-flex gap-px">
+                      {Array.from({ length: 10 }, (_, i) => (
+                        <span key={i} className={`w-1.5 h-2.5 rounded-sm ${i < cv.filledBars ? cv.barColor : 'bg-[#1f2937]'}`} />
+                      ))}
+                    </span>
+                    <span className="text-gray-500 text-xs">{cv.label}</span>
+                  </span>
+                  <span className="text-gray-300 text-sm">
+                    Price: <span className="text-white font-medium">{formatPrice(data.signal!.price, tab)}</span>
+                  </span>
+                  {data.accuracy_7d.total > 0 && (
+                    <span className="text-gray-300 text-sm">
+                      7d accuracy: <span className={`font-medium ${data.accuracy_7d.accuracy >= 60 ? 'text-emerald-400' : data.accuracy_7d.accuracy >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+                        {data.accuracy_7d.accuracy.toFixed(0)}% ({data.accuracy_7d.correct}/{data.accuracy_7d.total})
+                      </span>
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-600">
+                  Percentages show probability of price going UP. Below 50% = bearish. Further from 50% = stronger conviction.
+                </p>
               </div>
-            ) : (
+              )
+            })() : (
               <div>
                 {tab === 'CL=F' ? (
                   <div className="flex items-center gap-3">

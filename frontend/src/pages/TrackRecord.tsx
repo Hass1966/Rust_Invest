@@ -3,7 +3,7 @@ import { fetchSignalTruth, forceResolveSignals } from '../lib/api'
 import type { SignalTruthData, SignalTruthRecord } from '../lib/api'
 import {
   ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, ResponsiveContainer,
-  ReferenceLine, LineChart, Line, Cell,
+  ReferenceLine, LineChart, Line, Cell, Legend,
 } from 'recharts'
 
 export default function TrackRecord() {
@@ -14,6 +14,7 @@ export default function TrackRecord() {
   const [classFilter, setClassFilter] = useState<string>('all')
   const [signalFilter, setSignalFilter] = useState<string>('all')
   const [sortBy, setSortBy] = useState<'accuracy' | 'total' | 'asset'>('accuracy')
+  const [showMethodology, setShowMethodology] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -44,43 +45,123 @@ export default function TrackRecord() {
     return () => clearInterval(interval)
   }, [load])
 
-  // ── Compute rolling 7-day accuracy data from signals ──
+  // ── Compute actionable metrics from signals ──
+  const actionableMetrics = useMemo(() => {
+    if (!data?.signals) return null
+    const resolved = data.signals.filter(s => s.was_correct !== null && s.pct_change != null)
+
+    const buySignals = resolved.filter(s => s.signal_type === 'BUY')
+    const sellSignals = resolved.filter(s => s.signal_type === 'SELL' || s.signal_type === 'SHORT')
+    const holdSignals = resolved.filter(s => s.signal_type === 'HOLD')
+    const actionable = [...buySignals, ...sellSignals]
+
+    const buyCorrect = buySignals.filter(s => s.was_correct).length
+    const sellCorrect = sellSignals.filter(s => s.was_correct).length
+    const holdCorrect = holdSignals.filter(s => s.was_correct).length
+    const actionableCorrect = buyCorrect + sellCorrect
+
+    const buyAccuracy = buySignals.length > 0 ? (buyCorrect / buySignals.length) * 100 : 0
+    const sellAccuracy = sellSignals.length > 0 ? (sellCorrect / sellSignals.length) * 100 : 0
+    const holdAccuracy = holdSignals.length > 0 ? (holdCorrect / holdSignals.length) * 100 : 0
+    const actionableAccuracy = actionable.length > 0 ? (actionableCorrect / actionable.length) * 100 : 0
+
+    // Expected value per signal (directional return in bps)
+    const returns = actionable.map(s => {
+      const pct = s.pct_change!
+      if (s.signal_type === 'BUY') return pct
+      return -pct // SELL/SHORT: negative price move = profit
+    })
+    const expectedValueBps = returns.length > 0
+      ? (returns.reduce((sum, r) => sum + r, 0) / returns.length) * 100
+      : 0
+
+    // Profit factor
+    const winners = returns.filter(r => r > 0).reduce((s, r) => s + r, 0)
+    const losers = returns.filter(r => r < 0).reduce((s, r) => s + Math.abs(r), 0)
+    const profitFactor = losers > 0 ? winners / losers : winners > 0 ? Infinity : 0
+
+    return {
+      actionableAccuracy,
+      actionableCount: actionable.length,
+      actionableCorrect,
+      buyAccuracy,
+      buyCount: buySignals.length,
+      buyCorrect,
+      sellAccuracy,
+      sellCount: sellSignals.length,
+      sellCorrect,
+      holdAccuracy,
+      holdCount: holdSignals.length,
+      holdCorrect,
+      expectedValueBps,
+      profitFactor,
+    }
+  }, [data])
+
+  // ── Compute rolling 7-day accuracy data from signals (actionable only) ──
   const rollingData = useMemo(() => {
     if (!data?.signals) return []
     const resolved = data.signals.filter(s => s.was_correct !== null)
     if (resolved.length === 0) return []
 
-    // Group by date
-    const byDate = new Map<string, { correct: number; total: number }>()
+    // Group by date, split by type
+    const byDate = new Map<string, { correct: number; total: number; buyC: number; buyT: number; sellC: number; sellT: number }>()
     for (const s of resolved) {
       const date = s.timestamp.slice(0, 10)
-      const entry = byDate.get(date) || { correct: 0, total: 0 }
-      entry.total++
-      if (s.was_correct) entry.correct++
+      const entry = byDate.get(date) || { correct: 0, total: 0, buyC: 0, buyT: 0, sellC: 0, sellT: 0 }
+      const isActionable = s.signal_type !== 'HOLD'
+      if (isActionable) {
+        entry.total++
+        if (s.was_correct) entry.correct++
+      }
+      if (s.signal_type === 'BUY') {
+        entry.buyT++
+        if (s.was_correct) entry.buyC++
+      } else if (s.signal_type === 'SELL' || s.signal_type === 'SHORT') {
+        entry.sellT++
+        if (s.was_correct) entry.sellC++
+      }
       byDate.set(date, entry)
     }
 
     const dates = Array.from(byDate.keys()).sort().filter(d => d >= '2026-03-15')
     if (dates.length === 0) return []
 
-    // Compute 7-day rolling accuracy
     const allDates = Array.from(byDate.keys()).sort()
+
+    // Cumulative tracking
+    let cumCorrect = 0, cumTotal = 0
+
     return dates.map(date => {
       const windowStart = new Date(date)
       windowStart.setDate(windowStart.getDate() - 6)
       const startStr = windowStart.toISOString().slice(0, 10)
 
-      let correct = 0, total = 0
+      let correct = 0, total = 0, buyC = 0, buyT = 0, sellC = 0, sellT = 0
       for (const d of allDates) {
         if (d >= startStr && d <= date) {
           const entry = byDate.get(d)!
-          correct += entry.correct
-          total += entry.total
+          correct += entry.correct; total += entry.total
+          buyC += entry.buyC; buyT += entry.buyT
+          sellC += entry.sellC; sellT += entry.sellT
         }
       }
 
-      const accuracy = total > 0 ? (correct / total) * 100 : 0
-      return { date, accuracy: Number(accuracy.toFixed(1)), total }
+      // Cumulative (expanding window)
+      const todayEntry = byDate.get(date)
+      if (todayEntry) {
+        cumCorrect += todayEntry.correct
+        cumTotal += todayEntry.total
+      }
+
+      return {
+        date,
+        accuracy: total > 0 ? Number(((correct / total) * 100).toFixed(1)) : null,
+        buyAccuracy: buyT > 0 ? Number(((buyC / buyT) * 100).toFixed(1)) : null,
+        sellAccuracy: sellT > 0 ? Number(((sellC / sellT) * 100).toFixed(1)) : null,
+        cumulative: cumTotal > 0 ? Number(((cumCorrect / cumTotal) * 100).toFixed(1)) : null,
+        total,
+      }
     })
   }, [data])
 
@@ -97,7 +178,6 @@ export default function TrackRecord() {
   }
 
   const { rolling, by_signal_type, by_asset_class, per_asset, signals } = data
-  const totalWrong = data.total_resolved - data.total_correct
   const accColor = (acc: number, resolved: number) =>
     resolved === 0 ? 'text-gray-600' : acc >= 57 ? 'text-green-400' : acc >= 50 ? 'text-amber-400' : 'text-red-400'
 
@@ -131,6 +211,11 @@ export default function TrackRecord() {
   })
   const uniqueAssets = [...new Set(signals.map(s => s.asset))].sort()
 
+  // Prefer backend-provided actionable metrics when available, else fall back to client-computed
+  const metrics = actionableMetrics
+  const headlineAcc = data.actionable_accuracy ?? metrics?.actionableAccuracy ?? data.overall_accuracy
+  const headlineResolved = data.actionable_signals ?? metrics?.actionableCount ?? data.total_resolved
+
   return (
     <div className="space-y-6">
       {/* ── Hero Banner ── */}
@@ -159,52 +244,135 @@ export default function TrackRecord() {
           </div>
         </div>
 
-        {/* Big accuracy number */}
+        {/* Big accuracy number — now shows ACTIONABLE accuracy */}
         <div className="mt-6 flex flex-col sm:flex-row sm:items-end gap-6">
           <div>
-            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Overall Accuracy</div>
-            <div className={`text-5xl font-black ${accColor(data.overall_accuracy, data.total_resolved)}`}>
-              {data.total_resolved > 0 ? `${data.overall_accuracy.toFixed(1)}%` : '--'}
+            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Actionable Accuracy (BUY + SELL)</div>
+            <div className={`text-5xl font-black ${accColor(headlineAcc, headlineResolved)}`}>
+              {headlineResolved > 0 ? `${headlineAcc.toFixed(1)}%` : '--'}
             </div>
           </div>
           <div className="flex-1 text-sm text-gray-400 leading-relaxed">
-            {data.total_resolved > 0 ? (
+            {headlineResolved > 0 ? (
               <>
-                We analysed <span className="text-white font-semibold">{data.total_signals.toLocaleString()}</span> signals.{' '}
-                <span className="text-green-400 font-semibold">{data.total_correct.toLocaleString()}</span> predictions were correct,{' '}
-                <span className="text-red-400 font-semibold">{totalWrong.toLocaleString()}</span> were wrong.{' '}
-                {data.total_pending > 0 && <span className="text-amber-400">{data.total_pending.toLocaleString()} still pending resolution.</span>}
+                <span className="text-white font-semibold">{actionableMetrics?.actionableCount.toLocaleString()}</span> actionable signals (BUY + SELL).{' '}
+                <span className="text-green-400 font-semibold">{actionableMetrics?.actionableCorrect.toLocaleString()}</span> correct.{' '}
+                HOLD signals ({actionableMetrics?.holdCount.toLocaleString()}) excluded from headline.{' '}
+                {data.total_pending > 0 && <span className="text-amber-400">{data.total_pending.toLocaleString()} still pending.</span>}
               </>
             ) : (
-              <span className="text-amber-400">All {data.total_signals.toLocaleString()} signals are awaiting resolution. Click "Resolve Pending" to score them against current prices.</span>
+              <span className="text-amber-400">All {data.total_signals.toLocaleString()} signals are awaiting resolution. Click &quot;Resolve Pending&quot; to score them against current prices.</span>
             )}
           </div>
         </div>
       </div>
 
-      {/* ── Rolling 7-Day Accuracy Line Chart (Change 2) ── */}
+      {/* ── Actionable Metrics Grid ── */}
+      {(() => {
+        // Use backend values if available, otherwise client-computed
+        const buyAcc = data.buy_accuracy ?? metrics?.buyAccuracy ?? 0
+        const buyN = data.buy_signals ?? metrics?.buyCount ?? 0
+        const buyC = data.buy_correct ?? metrics?.buyCorrect ?? 0
+        const sellAcc = data.sell_accuracy ?? metrics?.sellAccuracy ?? 0
+        const sellN = data.sell_signals ?? metrics?.sellCount ?? 0
+        const sellC = data.sell_correct ?? metrics?.sellCorrect ?? 0
+        const holdAcc = data.hold_accuracy ?? metrics?.holdAccuracy ?? 0
+        const holdN = data.hold_signals ?? metrics?.holdCount ?? 0
+        const holdC = data.hold_correct ?? metrics?.holdCorrect ?? 0
+        const evBps = data.expected_value_bps ?? metrics?.expectedValueBps ?? 0
+        const pf = data.profit_factor ?? metrics?.profitFactor ?? 0
+        const totalActionable = buyN + sellN
+
+        if (totalActionable === 0) return null
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="bg-[#111827] rounded-xl border border-green-500/20 p-4">
+              <div className="text-xs text-gray-500 mb-1">BUY Accuracy</div>
+              <div className={`text-2xl font-bold ${accColor(buyAcc, buyN)}`}>
+                {buyN > 0 ? `${buyAcc.toFixed(1)}%` : '--'}
+              </div>
+              <div className="text-xs text-gray-600 mt-1">{buyC}/{buyN} signals</div>
+            </div>
+            <div className="bg-[#111827] rounded-xl border border-red-500/20 p-4">
+              <div className="text-xs text-gray-500 mb-1">SELL Accuracy</div>
+              <div className={`text-2xl font-bold ${accColor(sellAcc, sellN)}`}>
+                {sellN > 0 ? `${sellAcc.toFixed(1)}%` : '--'}
+              </div>
+              <div className="text-xs text-gray-600 mt-1">{sellC}/{sellN} signals</div>
+            </div>
+            <div className="bg-[#111827] rounded-xl border border-cyan-500/20 p-4">
+              <div className="text-xs text-gray-500 mb-1">Expected Value</div>
+              <div className={`text-2xl font-bold ${evBps >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {evBps >= 0 ? '+' : ''}{evBps.toFixed(1)} bps
+              </div>
+              <div className="text-xs text-gray-600 mt-1">per actionable signal</div>
+            </div>
+            <div className="bg-[#111827] rounded-xl border border-purple-500/20 p-4">
+              <div className="text-xs text-gray-500 mb-1">Profit Factor</div>
+              <div className={`text-2xl font-bold ${pf >= 1 ? 'text-green-400' : 'text-red-400'}`}>
+                {pf >= 99 ? 'N/A' : `${pf.toFixed(2)}x`}
+              </div>
+              <div className="text-xs text-gray-600 mt-1">winners / losers</div>
+            </div>
+            <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4 opacity-60">
+              <div className="text-xs text-gray-500 mb-1">HOLD Accuracy</div>
+              <div className="text-2xl font-bold text-gray-500">
+                {holdN > 0 ? `${holdAcc.toFixed(1)}%` : '--'}
+              </div>
+              <div className="text-xs text-gray-600 mt-1">{holdC}/{holdN} non-actionable</div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── How We Measure (collapsible) ── */}
+      <div className="bg-[#111827] rounded-xl border border-[#1f2937]">
+        <button
+          onClick={() => setShowMethodology(!showMethodology)}
+          className="w-full px-5 py-3 flex items-center justify-between text-sm text-gray-400 hover:text-gray-300 transition-colors cursor-pointer"
+        >
+          <span className="font-medium">How we measure accuracy</span>
+          <span className="text-gray-600">{showMethodology ? '\u25B2' : '\u25BC'}</span>
+        </button>
+        {showMethodology && (
+          <div className="px-5 pb-4 space-y-2 text-xs text-gray-500 leading-relaxed border-t border-[#1f2937] pt-3">
+            <p><span className="text-green-400 font-medium">BUY</span> is correct only if the price rose &gt;0.5% (stocks/ETFs), &gt;1.0% (crypto), or &gt;0.2% (FX) by next trading day close.</p>
+            <p><span className="text-red-400 font-medium">SELL/SHORT</span> is correct only if the price fell by the same thresholds.</p>
+            <p><span className="text-amber-400 font-medium">HOLD</span> is correct if the price moved less than the threshold. HOLD signals are excluded from the headline accuracy because they&apos;re trivially easy to get right in low-volatility markets.</p>
+            <p><span className="text-cyan-400 font-medium">Expected Value</span> is the average directional return (in basis points) per actionable signal. Positive = the model is profitable on average.</p>
+            <p><span className="text-purple-400 font-medium">Profit Factor</span> = sum of all winner returns / sum of all loser returns. Above 1.0x means winners outweigh losers.</p>
+          </div>
+        )}
+      </div>
+
+      {/* ── Rolling Accuracy Chart (multi-line) ── */}
       {rollingData.length > 1 && (
         <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
           <h3 className="text-sm font-medium text-gray-400 mb-1">Is the model improving over time?</h3>
-          <p className="text-xs text-gray-600 mb-4">7-day rolling accuracy since 15 March 2026</p>
-          <ResponsiveContainer width="100%" height={220}>
+          <p className="text-xs text-gray-600 mb-4">7-day rolling accuracy (actionable signals only) since 15 March 2026</p>
+          <ResponsiveContainer width="100%" height={280}>
             <LineChart data={rollingData} margin={{ left: 0, right: 10, top: 4, bottom: 0 }}>
               <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => v.slice(5)} interval="preserveStartEnd" />
               <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} domain={[0, 100]} tickFormatter={v => `${v}%`} width={42} />
               <Tooltip
                 contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
                 labelStyle={{ color: '#9ca3af' }}
-                formatter={(v: number | undefined) => [v != null ? `${v.toFixed(1)}%` : '', '7-Day Accuracy']}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                formatter={(v: any, name: any) => [typeof v === 'number' ? `${v.toFixed(1)}%` : '--', name ?? '']}
               />
-              <ReferenceLine y={50} stroke="#6b7280" strokeDasharray="4 4" label={{ value: 'Random baseline', fill: '#6b7280', fontSize: 10, position: 'insideBottomRight' }} />
-              <ReferenceLine y={65} stroke="#22c55e" strokeDasharray="4 4" label={{ value: 'Target', fill: '#22c55e', fontSize: 10, position: 'insideTopRight' }} />
-              <Line type="monotone" dataKey="accuracy" stroke="#06b6d4" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: '#06b6d4', strokeWidth: 0 }}>
-                {rollingData.map((d, i) => (
-                  <Cell key={i} stroke={d.accuracy >= 65 ? '#22c55e' : d.accuracy >= 50 ? '#f59e0b' : '#ef4444'} />
-                ))}
-              </Line>
+              <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+              <ReferenceLine y={50} stroke="#6b7280" strokeDasharray="4 4" label={{ value: '50%', fill: '#6b7280', fontSize: 10, position: 'insideBottomRight' }} />
+              <ReferenceLine y={55} stroke="#f59e0b" strokeDasharray="3 3" label={{ value: '55%', fill: '#f59e0b', fontSize: 10, position: 'insideTopRight' }} />
+              <Line type="monotone" dataKey="accuracy" name="Overall (7d)" stroke="#06b6d4" strokeWidth={2.5} dot={false} connectNulls />
+              <Line type="monotone" dataKey="buyAccuracy" name="BUY (7d)" stroke="#22c55e" strokeWidth={1.5} strokeDasharray="6 3" dot={false} connectNulls />
+              <Line type="monotone" dataKey="sellAccuracy" name="SELL (7d)" stroke="#ef4444" strokeWidth={1.5} strokeDasharray="6 3" dot={false} connectNulls />
+              <Line type="monotone" dataKey="cumulative" name="Cumulative" stroke="#a78bfa" strokeWidth={2} dot={false} connectNulls />
             </LineChart>
           </ResponsiveContainer>
+          {/* Sample size annotation */}
+          <div className="mt-2 text-xs text-gray-600 text-center">
+            Latest window: {rollingData[rollingData.length - 1]?.total ?? 0} actionable signals in 7-day window
+          </div>
         </div>
       )}
 

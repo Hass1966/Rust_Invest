@@ -3,7 +3,7 @@ import { TrendingUp, TrendingDown, Minus, Activity, RefreshCw, Gauge, ChevronDow
 import { fetchSignals, fetchMorningBriefing, fetchHints, comparePortfolio, fetchUserHoldings } from '../lib/api'
 import type { EnrichedSignal, Hint } from '../lib/types'
 import type { PortfolioComparison } from '../lib/api'
-import { translateSignalSummary, confidenceLabel } from '../lib/plain-english'
+import { translateSignalSummary, confidenceLabel, convictionInfo } from '../lib/plain-english'
 
 type Filter = 'All' | 'Stocks' | 'FX' | 'Crypto'
 
@@ -266,14 +266,17 @@ function DashboardCard({ signal: s }: { signal: EnrichedSignal }) {
         </span>
       </div>
 
-      {/* Middle: confidence arc + price */}
+      {/* Middle: signal strength arc + price */}
       <div className="flex items-center gap-3 mb-2">
         <ConfidenceArc confidence={s.technical.confidence * 10} signal={s.signal} />
         <div className="flex-1 min-w-0">
           <div className="text-white font-mono text-lg">${s.price.toFixed(2)}</div>
-          <div className="flex items-center gap-2 text-xs">
-            <span className={conf.color}>{conf.text}</span>
-            {priceChangeStr && <span className="text-gray-500">{priceChangeStr}</span>}
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2 text-xs">
+              <span className={conf.color}>{conf.text}: {s.technical.confidence.toFixed(1)}%</span>
+              {priceChangeStr && <span className="text-gray-500">{priceChangeStr}</span>}
+            </div>
+            <span className="text-gray-600 text-[10px]">Model agreement on direction</span>
           </div>
         </div>
       </div>
@@ -289,21 +292,33 @@ function DashboardCard({ signal: s }: { signal: EnrichedSignal }) {
         {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
       </div>
 
-      {/* Expanded model breakdown */}
+      {/* Expanded model votes */}
       {expanded && (
         <div className="mt-3 pt-3 border-t border-[#1f2937]">
-          <div className="text-gray-400 text-xs uppercase tracking-wider mb-2">Model Breakdown</div>
-          <div className="grid grid-cols-3 gap-2">
-            {Object.entries(s.models).map(([name, model]) => (
-              <div key={name} className="bg-[#0a0e17] rounded p-2 text-center">
-                <div className="text-gray-500 text-[10px] uppercase">{name}</div>
-                <div className="text-white font-mono text-sm">{model.probability_up.toFixed(1)}%</div>
-                <div className={`text-[10px] font-bold ${model.vote === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {model.vote}
+          <div className="text-gray-400 text-xs uppercase tracking-wider mb-2">Model Votes</div>
+          <div className="space-y-1.5">
+            {Object.entries(s.models).map(([name, model]) => {
+              const cv = convictionInfo(model.probability_up)
+              return (
+                <div key={name} className="flex items-center gap-2 bg-[#0a0e17] rounded px-2 py-1.5">
+                  <span className="text-gray-500 text-[10px] uppercase w-12 flex-shrink-0 font-medium">{name}</span>
+                  <span className="text-white font-mono text-[11px] w-10 flex-shrink-0">{model.probability_up.toFixed(1)}%</span>
+                  <span className={`text-[10px] font-bold w-14 flex-shrink-0 ${cv.textColor}`}>
+                    {cv.direction === 'UP' ? '\u2191' : '\u2193'} {cv.direction}
+                  </span>
+                  <span className="inline-flex gap-px flex-shrink-0">
+                    {Array.from({ length: 10 }, (_, i) => (
+                      <span key={i} className={`w-1 h-2 rounded-sm ${i < cv.filledBars ? cv.barColor : 'bg-[#1f2937]'}`} />
+                    ))}
+                  </span>
+                  <span className="text-gray-500 text-[10px]">{cv.label}</span>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
+          <p className="mt-1.5 text-[10px] text-gray-600 leading-relaxed">
+            Percentages show probability of price going UP. Below 50% = bearish. Further from 50% = stronger conviction.
+          </p>
           <div className="mt-2 text-xs text-gray-500 space-y-1">
             <p>RSI: {s.technical.rsi.toFixed(1)} | Trend: {s.technical.trend}</p>
             <p className="text-gray-400">{plainReason}</p>

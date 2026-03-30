@@ -79,7 +79,32 @@ export function translateSignalSummary(summary: string, _signal: string, _asset:
 }
 
 export function confidenceLabel(confidence: number): { text: string; color: string } {
-  if (confidence > 15) return { text: 'High confidence', color: 'text-emerald-400' }
-  if (confidence >= 8) return { text: 'Moderate confidence', color: 'text-amber-400' }
-  return { text: 'Low confidence', color: 'text-gray-500' }
+  if (confidence > 15) return { text: 'High signal strength', color: 'text-emerald-400' }
+  if (confidence >= 8) return { text: 'Moderate signal strength', color: 'text-amber-400' }
+  return { text: 'Low signal strength', color: 'text-gray-500' }
+}
+
+export interface ConvictionInfo {
+  direction: 'UP' | 'DOWN'
+  conviction: number
+  label: string
+  textColor: string
+  barColor: string
+  filledBars: number
+}
+
+export function convictionInfo(probabilityUp: number): ConvictionInfo {
+  const pct = probabilityUp / 100
+  const isUp = pct >= 0.5
+  const conviction = Math.abs(pct - 0.5) * 2
+  const label = conviction > 0.60 ? 'Strong' : conviction >= 0.40 ? 'Moderate' : 'Weak'
+
+  return {
+    direction: isUp ? 'UP' : 'DOWN',
+    conviction,
+    label,
+    textColor: isUp ? 'text-emerald-400' : 'text-red-400',
+    barColor: isUp ? 'bg-emerald-500' : 'bg-red-500',
+    filledBars: Math.round(conviction * 10),
+  }
 }

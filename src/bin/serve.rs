@@ -282,6 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/feedback/survey", post(submit_survey_feedback))
         .route("/api/v1/feedback", get(get_feedback))
         .route("/api/v1/simulator/data", get(get_simulator_data))
+        .route("/api/v1/simulator/walkforward", get(get_walkforward_data))
         .route("/api/v1/deep-dive/:asset", get(get_deep_dive))
         .layer(cors.clone())
         .with_state(state);
@@ -603,12 +604,63 @@ async fn get_signal_truth(
             })
         }).collect();
 
+        // ── Actionable metrics (BUY + SELL + SHORT, excluding HOLD) ──
+        let actionable: Vec<_> = resolved.iter()
+            .filter(|r| r.signal_type != "HOLD")
+            .collect();
+        let actionable_correct = actionable.iter().filter(|r| r.was_correct == Some(true)).count();
+        let actionable_count = actionable.len();
+        let actionable_accuracy = if actionable_count > 0 { actionable_correct as f64 / actionable_count as f64 * 100.0 } else { 0.0 };
+
+        let buy_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "BUY").collect();
+        let buy_correct = buy_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
+        let buy_accuracy = if !buy_sigs.is_empty() { buy_correct as f64 / buy_sigs.len() as f64 * 100.0 } else { 0.0 };
+
+        let sell_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "SELL" || r.signal_type == "SHORT").collect();
+        let sell_correct = sell_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
+        let sell_accuracy = if !sell_sigs.is_empty() { sell_correct as f64 / sell_sigs.len() as f64 * 100.0 } else { 0.0 };
+
+        let hold_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "HOLD").collect();
+        let hold_correct = hold_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
+        let hold_accuracy = if !hold_sigs.is_empty() { hold_correct as f64 / hold_sigs.len() as f64 * 100.0 } else { 0.0 };
+
+        // Expected value per actionable signal (in basis points)
+        let returns: Vec<f64> = actionable.iter().filter_map(|r| {
+            r.pct_change.map(|pct| match r.signal_type.as_str() {
+                "BUY" => pct,
+                "SELL" | "SHORT" => -pct,
+                _ => 0.0,
+            })
+        }).collect();
+        let expected_value_bps = if !returns.is_empty() {
+            returns.iter().sum::<f64>() / returns.len() as f64 * 100.0
+        } else { 0.0 };
+
+        // Profit factor
+        let winners: f64 = returns.iter().filter(|&&r| r > 0.0).sum();
+        let losers: f64 = returns.iter().filter(|&&r| r < 0.0).map(|r| r.abs()).sum();
+        let profit_factor = if losers > 0.0 { winners / losers } else if winners > 0.0 { 99.99 } else { 0.0 };
+
         Ok::<_, StatusCode>(Json(serde_json::json!({
             "total_signals": total,
             "total_resolved": total_resolved,
             "total_pending": pending_count,
             "total_correct": correct_count,
             "overall_accuracy": overall_accuracy,
+            "actionable_accuracy": actionable_accuracy,
+            "actionable_signals": actionable_count,
+            "actionable_correct": actionable_correct,
+            "buy_accuracy": buy_accuracy,
+            "buy_signals": buy_sigs.len(),
+            "buy_correct": buy_correct,
+            "sell_accuracy": sell_accuracy,
+            "sell_signals": sell_sigs.len(),
+            "sell_correct": sell_correct,
+            "hold_accuracy": hold_accuracy,
+            "hold_signals": hold_sigs.len(),
+            "hold_correct": hold_correct,
+            "expected_value_bps": expected_value_bps,
+            "profit_factor": profit_factor,
             "by_signal_type": signal_type_accuracy,
             "by_asset_class": asset_class_accuracy,
             "rolling": rolling,
@@ -2172,6 +2224,51 @@ async fn get_sentiment(
 /// Batch-resolve ALL unresolved signal_history entries using current prices from the cache.
 /// Unlike record_signal_history() which resolves one per asset per cycle, this resolves everything.
 /// Only requires signals to be 4+ hours old (drops the end-of-day market hours restriction).
+/// Compute the minimum resolution time for a signal based on asset class.
+/// - Stocks/ETFs: next trading day close (20:00 UTC) — skip weekends
+/// - Crypto: 24 hours after signal timestamp
+/// - FX: next trading day close (17:00 UTC) — skip weekends
+fn resolution_ready(signal_dt: chrono::DateTime<Utc>, asset_class: &str, now: chrono::DateTime<Utc>) -> bool {
+    match asset_class {
+        "crypto" => {
+            // Resolve after 24 hours
+            (now - signal_dt).num_hours() >= 24
+        }
+        "fx" => {
+            // Next trading day close at 17:00 UTC, skip weekends
+            let mut resolve_date = signal_dt.date_naive() + chrono::Duration::days(1);
+            // Skip Saturday and Sunday
+            while resolve_date.weekday() == chrono::Weekday::Sat || resolve_date.weekday() == chrono::Weekday::Sun {
+                resolve_date += chrono::Duration::days(1);
+            }
+            let resolve_dt = resolve_date.and_hms_opt(17, 0, 0)
+                .map(|ndt| ndt.and_utc())
+                .unwrap_or(signal_dt);
+            now >= resolve_dt
+        }
+        _ => {
+            // Stocks/ETFs/commodities: next trading day close at 20:00 UTC, skip weekends
+            let mut resolve_date = signal_dt.date_naive() + chrono::Duration::days(1);
+            while resolve_date.weekday() == chrono::Weekday::Sat || resolve_date.weekday() == chrono::Weekday::Sun {
+                resolve_date += chrono::Duration::days(1);
+            }
+            let resolve_dt = resolve_date.and_hms_opt(20, 0, 0)
+                .map(|ndt| ndt.and_utc())
+                .unwrap_or(signal_dt);
+            now >= resolve_dt
+        }
+    }
+}
+
+/// Minimum price move threshold for a signal to be considered "correct", by asset class.
+fn min_threshold_for_class(asset_class: &str) -> f64 {
+    match asset_class {
+        "crypto" => 1.0,   // 1.0% minimum move
+        "fx"     => 0.2,   // 0.2% minimum move
+        _        => 0.5,   // 0.5% for stocks, ETFs, commodities
+    }
+}
+
 fn batch_resolve_signal_history(db_path: &str, signals: &HashMap<String, enriched_signals::EnrichedSignal>) {
     let database = match db::Database::new(db_path) {
         Ok(d) => d,
@@ -2190,12 +2287,13 @@ fn batch_resolve_signal_history(db_path: &str, signals: &HashMap<String, enriche
     let mut resolved = 0;
 
     for sig in &unresolved {
-        // Must be at least 4 hours old
         let signal_dt = match chrono::DateTime::parse_from_rfc3339(&sig.timestamp) {
             Ok(t) => t.with_timezone(&Utc),
             Err(_) => continue,
         };
-        if (now - signal_dt).num_hours() < 4 { continue; }
+
+        // Fixed holding period resolution based on asset class
+        if !resolution_ready(signal_dt, &sig.asset_class, now) { continue; }
 
         // Get current price from signals cache
         let current_price = if let Some(cached) = signals.get(&sig.asset) {
@@ -2207,10 +2305,11 @@ fn batch_resolve_signal_history(db_path: &str, signals: &HashMap<String, enriche
         if sig.price_at_signal <= 0.0 || current_price <= 0.0 { continue; }
 
         let pct_change = (current_price - sig.price_at_signal) / sig.price_at_signal * 100.0;
+        let threshold = min_threshold_for_class(&sig.asset_class);
         let was_correct = match sig.signal_type.as_str() {
-            "BUY" => current_price > sig.price_at_signal,
-            "SELL" => current_price < sig.price_at_signal,
-            "HOLD" => pct_change.abs() < 1.0,
+            "BUY"  => pct_change > threshold,
+            "SELL" | "SHORT" => pct_change < -threshold,
+            "HOLD" => pct_change.abs() < threshold,
             _ => false,
         };
 
@@ -3291,6 +3390,17 @@ fn run_startup_migrations(db_path: &str) {
 }
 
 /// GET /api/v1/simulator/data — historical prices + signals for 10 simulator assets + SPY
+/// GET /api/v1/simulator/walkforward — serve pre-computed walk-forward backtest data
+async fn get_walkforward_data() -> Result<Json<serde_json::Value>, StatusCode> {
+    let path = std::path::Path::new("reports/walkforward_backtest.json");
+    if !path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let data = std::fs::read_to_string(path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let json: serde_json::Value = serde_json::from_str(&data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json))
+}
+
 async fn get_simulator_data(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {

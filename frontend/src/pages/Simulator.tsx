@@ -1,9 +1,10 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, ReferenceLine,
+  LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
-import { fetchSimulation } from '../lib/api'
+import { fetchSimulation, fetchWalkForwardData } from '../lib/api'
+import type { WalkForwardData } from '../lib/api'
 import type { SimResult as WhatIfResult } from '../lib/types'
 
 // ─── Types ───
@@ -19,24 +20,53 @@ interface SimulatorData {
 
 const LIVE_START = '2026-03-15'
 const AVAILABLE_ASSETS = ['AAPL', 'MSFT', 'GOOGL', 'JPM', 'HSBA.L', 'AZN.L', 'XOM', 'GLD', 'bitcoin', 'ethereum']
-const DEFAULT_BH: { asset: string; amount: number }[] = [
-  { asset: 'AAPL', amount: 8000 },
-  { asset: 'MSFT', amount: 8000 },
-  { asset: 'GOOGL', amount: 6000 },
-  { asset: 'JPM', amount: 5000 },
-  { asset: 'HSBA.L', amount: 6000 },
-  { asset: 'AZN.L', amount: 6000 },
-  { asset: 'XOM', amount: 5000 },
-  { asset: 'GLD', amount: 7000 },
-  { asset: 'bitcoin', amount: 5000 },
-  { asset: 'ethereum', amount: 4000 },
+const STARTING_CAPITAL = 100000
+const DEFAULT_BH_WEIGHTS: { asset: string; weight: number }[] = [
+  { asset: 'AAPL', weight: 0.133 },
+  { asset: 'MSFT', weight: 0.133 },
+  { asset: 'GOOGL', weight: 0.100 },
+  { asset: 'JPM', weight: 0.083 },
+  { asset: 'HSBA.L', weight: 0.100 },
+  { asset: 'AZN.L', weight: 0.100 },
+  { asset: 'XOM', weight: 0.083 },
+  { asset: 'GLD', weight: 0.117 },
+  { asset: 'bitcoin', weight: 0.083 },
+  { asset: 'ethereum', weight: 0.068 },
 ]
-const DEFAULT_CASH = 4000
-const BH_TOTAL = 60000
-const AS_TOTAL = 40000
 const MAX_CUSTOM = 5
 
 interface Allocation { asset: string; pct: number }
+
+// ─── Portfolio Allocation Types ───
+
+interface PortfolioState {
+  cash: number
+  positions: Record<string, number>   // asset → shares held
+  weights: Record<string, number>     // asset → current target weight [0,1]
+}
+
+interface DaySnapshot {
+  date: string
+  totalValue: number
+  cashValue: number
+  cashPct: number
+  positions: { asset: string; shares: number; value: number; weight: number; targetWeight: number; signal: string }[]
+  txCostsToday: number
+  cumulativeTxCosts: number
+}
+
+interface AllocationChartPoint {
+  date: string
+  cash: number
+  [asset: string]: number | string
+}
+
+const VOL_LOOKBACK = 60
+const MIN_VOL_DAYS = 20
+const MAX_SINGLE_WEIGHT = 0.30
+const REBALANCE_THRESHOLD = 0.02
+const CORR_THRESHOLD = 0.7
+const CORR_PENALTY = 0.2
 
 // ─── Helpers ───
 
@@ -70,11 +100,263 @@ function getAllDates(priceHistory: Record<string, PricePoint[]>, fromDate?: stri
   return Array.from(dateSet).sort()
 }
 
+// ─── Risk metric helpers ───
+
+const RISK_FREE_DAILY = 0.045 / 252 // 4.5% annual risk-free rate
+
+function dailyReturns(series: number[]): number[] {
+  const r: number[] = []
+  for (let i = 1; i < series.length; i++) {
+    r.push(series[i - 1] > 0 ? (series[i] - series[i - 1]) / series[i - 1] : 0)
+  }
+  return r
+}
+
+function sharpeRatio(returns: number[]): number {
+  if (returns.length < 2) return 0
+  const mean = returns.reduce((s, v) => s + v, 0) / returns.length
+  const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length
+  const std = Math.sqrt(variance)
+  if (std === 0) return 0
+  return ((mean - RISK_FREE_DAILY) / std) * Math.sqrt(252) // annualised
+}
+
+function maxDrawdown(series: number[]): number {
+  let peak = series[0] || 0
+  let maxDd = 0
+  for (const v of series) {
+    if (v > peak) peak = v
+    const dd = peak > 0 ? (peak - v) / peak : 0
+    if (dd > maxDd) maxDd = dd
+  }
+  return maxDd * 100 // as percentage
+}
+
+// ─── Portfolio Allocation Helpers ───
+
+function computeTrailingVol(priceMap: Map<string, number>, dates: string[], dateIdx: number): number {
+  const start = Math.max(0, dateIdx - VOL_LOOKBACK)
+  const logReturns: number[] = []
+  let prevPrice: number | null = null
+  for (let i = start; i <= dateIdx; i++) {
+    const p = priceMap.get(dates[i])
+    if (p && prevPrice && prevPrice > 0 && p > 0) {
+      logReturns.push(Math.log(p / prevPrice))
+    }
+    if (p) prevPrice = p
+  }
+  if (logReturns.length < MIN_VOL_DAYS) return Infinity
+  const mean = logReturns.reduce((s, v) => s + v, 0) / logReturns.length
+  const variance = logReturns.reduce((s, v) => s + (v - mean) ** 2, 0) / logReturns.length
+  return Math.sqrt(variance)
+}
+
+function pearsonCorrelation(a: number[], b: number[]): number {
+  const n = Math.min(a.length, b.length)
+  if (n < 10) return 0
+  const meanA = a.slice(0, n).reduce((s, v) => s + v, 0) / n
+  const meanB = b.slice(0, n).reduce((s, v) => s + v, 0) / n
+  let cov = 0, varA = 0, varB = 0
+  for (let i = 0; i < n; i++) {
+    const da = a[i] - meanA
+    const db = b[i] - meanB
+    cov += da * db
+    varA += da * da
+    varB += db * db
+  }
+  const denom = Math.sqrt(varA * varB)
+  return denom > 0 ? cov / denom : 0
+}
+
+function computeTargetWeights(
+  assets: string[],
+  dateIdx: number,
+  dates: string[],
+  priceMaps: Record<string, Map<string, number>>,
+  lastSignal: Record<string, string>,
+  prevWeights: Record<string, number>,
+): Record<string, number> {
+  const weights: Record<string, number> = {}
+  const invVols: Record<string, number> = {}
+  let totalInvVol = 0
+
+  for (const asset of assets) {
+    const sig = lastSignal[asset] || 'HOLD'
+    if (sig === 'SELL' || sig === 'SHORT') {
+      weights[asset] = 0
+    } else if (sig === 'HOLD') {
+      weights[asset] = prevWeights[asset] ?? 0
+    } else {
+      // BUY: use inverse volatility
+      const vol = computeTrailingVol(priceMaps[asset], dates, dateIdx)
+      if (vol === Infinity || vol <= 0) {
+        invVols[asset] = 1 // fallback: equal weight
+      } else {
+        invVols[asset] = 1 / vol
+      }
+      totalInvVol += invVols[asset]
+    }
+  }
+
+  // Distribute remaining weight (1 - holdWeight - 0) among BUY assets via inverse-vol
+  const holdWeight = Object.values(weights).reduce((s, w) => s + w, 0)
+  const availableWeight = Math.max(0, 1 - holdWeight)
+
+  if (totalInvVol > 0) {
+    for (const asset of assets) {
+      if (invVols[asset] !== undefined) {
+        weights[asset] = (invVols[asset] / totalInvVol) * availableWeight
+      }
+    }
+  }
+
+  // Apply single-asset cap and re-normalize
+  let excess = 0
+  let uncappedCount = 0
+  for (const asset of assets) {
+    if ((weights[asset] || 0) > MAX_SINGLE_WEIGHT) {
+      excess += weights[asset] - MAX_SINGLE_WEIGHT
+      weights[asset] = MAX_SINGLE_WEIGHT
+    } else if ((weights[asset] || 0) > 0) {
+      uncappedCount++
+    }
+  }
+  if (excess > 0 && uncappedCount > 0) {
+    const boost = excess / uncappedCount
+    for (const asset of assets) {
+      if ((weights[asset] || 0) > 0 && weights[asset] < MAX_SINGLE_WEIGHT) {
+        weights[asset] = Math.min(MAX_SINGLE_WEIGHT, weights[asset] + boost)
+      }
+    }
+  }
+
+  return weights
+}
+
+function applyCorrelationPenalty(
+  weights: Record<string, number>,
+  dateIdx: number,
+  dates: string[],
+  priceMaps: Record<string, Map<string, number>>,
+): Record<string, number> {
+  const assets = Object.keys(weights).filter(a => weights[a] > 0)
+  if (assets.length < 2) return weights
+
+  // Build return arrays for lookback window
+  const start = Math.max(0, dateIdx - VOL_LOOKBACK)
+  const returnArrays: Record<string, number[]> = {}
+  for (const asset of assets) {
+    const rets: number[] = []
+    let prev: number | null = null
+    for (let i = start; i <= dateIdx; i++) {
+      const p = priceMaps[asset]?.get(dates[i])
+      if (p && prev && prev > 0) {
+        rets.push((p - prev) / prev)
+      }
+      if (p) prev = p
+    }
+    returnArrays[asset] = rets
+  }
+
+  const penalized = { ...weights }
+  for (let i = 0; i < assets.length; i++) {
+    for (let j = i + 1; j < assets.length; j++) {
+      const corr = pearsonCorrelation(returnArrays[assets[i]], returnArrays[assets[j]])
+      if (Math.abs(corr) > CORR_THRESHOLD) {
+        // Shrink the smaller-weighted asset
+        const [larger, smaller] = penalized[assets[i]] >= penalized[assets[j]]
+          ? [assets[i], assets[j]] : [assets[j], assets[i]]
+        penalized[smaller] *= (1 - CORR_PENALTY)
+        void larger // keep larger unchanged
+      }
+    }
+  }
+
+  // Re-normalize to sum to original total
+  const origTotal = Object.values(weights).reduce((s, w) => s + w, 0)
+  const newTotal = Object.values(penalized).reduce((s, w) => s + w, 0)
+  if (newTotal > 0 && origTotal > 0) {
+    const scale = origTotal / newTotal
+    for (const asset of Object.keys(penalized)) {
+      penalized[asset] *= scale
+    }
+  }
+
+  return penalized
+}
+
+function txCostBps(asset: string): number {
+  const cryptoAssets = new Set(['bitcoin', 'ethereum', 'solana', 'dogecoin', 'cardano', 'xrp', 'polkadot', 'chainlink', 'avalanche', 'polygon', 'uniswap', 'litecoin', 'stellar', 'cosmos', 'algorand'])
+  return cryptoAssets.has(asset.toLowerCase()) ? 0.0025 : 0.001
+}
+
+function rebalancePortfolio(
+  portfolio: PortfolioState,
+  targetWeights: Record<string, number>,
+  priceMaps: Record<string, Map<string, number>>,
+  date: string,
+  assets: string[],
+): number {
+  // Calculate current portfolio value
+  let totalValue = portfolio.cash
+  for (const asset of assets) {
+    const price = getPrice(priceMaps[asset], date)
+    if (price && portfolio.positions[asset]) {
+      totalValue += portfolio.positions[asset] * price
+    }
+  }
+  if (totalValue <= 0) return 0
+
+  let txCosts = 0
+
+  // Phase 1: Sell overweight positions first (frees cash)
+  for (const asset of assets) {
+    const price = getPrice(priceMaps[asset], date)
+    if (!price) continue
+    const currentValue = (portfolio.positions[asset] || 0) * price
+    const currentWeight = currentValue / totalValue
+    const target = targetWeights[asset] || 0
+
+    if (currentWeight > target + REBALANCE_THRESHOLD) {
+      const sellValue = (currentWeight - target) * totalValue
+      const sellShares = sellValue / price
+      const cost = sellValue * txCostBps(asset)
+      portfolio.positions[asset] = Math.max(0, (portfolio.positions[asset] || 0) - sellShares)
+      portfolio.cash += sellValue - cost
+      txCosts += cost
+    }
+  }
+
+  // Phase 2: Buy underweight positions
+  for (const asset of assets) {
+    const price = getPrice(priceMaps[asset], date)
+    if (!price) continue
+    const currentValue = (portfolio.positions[asset] || 0) * price
+    const currentWeight = currentValue / totalValue
+    const target = targetWeights[asset] || 0
+
+    if (target > currentWeight + REBALANCE_THRESHOLD) {
+      const buyValue = Math.min((target - currentWeight) * totalValue, portfolio.cash)
+      if (buyValue <= 0) continue
+      const cost = buyValue * txCostBps(asset)
+      const netBuyValue = buyValue - cost
+      const buyShares = netBuyValue / price
+      portfolio.positions[asset] = (portfolio.positions[asset] || 0) + buyShares
+      portfolio.cash -= buyValue
+      txCosts += cost
+    }
+  }
+
+  portfolio.weights = { ...targetWeights }
+  return txCosts
+}
+
 // ─── Simulation Logic ───
 
 interface SimResult {
   chartData: { date: string; buyHold: number; alphaSignal: number; spy: number }[]
   bhBreakdown: { asset: string; invested: number; currentValue: number; returnPct: number }[]
+  startingCapital: number
   bhTotal: number
   bhReturn: number
   asTotal: number
@@ -86,17 +368,19 @@ interface SimResult {
   asIncorrect: number
   asBest: { asset: string; returnPct: number } | null
   asWorst: { asset: string; returnPct: number } | null
-  cashAmount: number
   bhSharpe: number
   asSharpe: number
   bhMaxDrawdown: number
   asMaxDrawdown: number
+  allocationHistory: DaySnapshot[]
+  cumulativeTxCosts: number
+  allocationChartData: AllocationChartPoint[]
 }
 
 function runSimulation(
   data: SimulatorData,
   bhAssets: { asset: string; amount: number }[],
-  cashAmount: number,
+  capital: number,
   fromDate?: string,
 ): SimResult | null {
   const dates = getAllDates(data.price_history, fromDate)
@@ -108,25 +392,24 @@ function runSimulation(
   }
 
   const startDate = dates[0]
-  const bhTotalInvested = bhAssets.reduce((s, a) => s + a.amount, 0) + cashAmount
-  const asPerAssetAmount = AS_TOTAL / (bhAssets.length || 1)
+  const assetNames = bhAssets.map(a => a.asset)
 
-  // ── Buy & Hold ──
+  // ── Buy & Hold: allocate capital proportionally ──
   const bhShares: Record<string, number> = {}
   for (const { asset, amount } of bhAssets) {
     const startPrice = getPrice(priceMaps[asset], startDate)
     bhShares[asset] = startPrice ? amount / startPrice : 0
   }
 
-  // ── Alpha Signal ──
-  const asState: Record<string, { shares: number; cash: number; invested: boolean }> = {}
-  for (const { asset } of bhAssets) {
-    const startPrice = getPrice(priceMaps[asset], startDate)
-    asState[asset] = {
-      shares: startPrice ? asPerAssetAmount / startPrice : 0,
-      cash: 0,
-      invested: true,
-    }
+  // ── Alpha Signal: Unified Portfolio (same starting capital) ──
+  const portfolio: PortfolioState = {
+    cash: capital,
+    positions: {},
+    weights: {},
+  }
+  for (const asset of assetNames) {
+    portfolio.positions[asset] = 0
+    portfolio.weights[asset] = 0
   }
 
   // Pre-process signals by asset and date
@@ -143,7 +426,7 @@ function runSimulation(
   let totalSignals = 0
   let correctSignals = 0
   let incorrectSignals = 0
-  const selectedAssets = new Set(bhAssets.map(a => a.asset))
+  const selectedAssets = new Set(assetNames)
   for (const [asset, signals] of Object.entries(data.signal_history)) {
     if (!selectedAssets.has(asset)) continue
     for (const s of signals) {
@@ -155,45 +438,92 @@ function runSimulation(
   }
 
   const chartData: SimResult['chartData'] = []
+  const allocationHistory: DaySnapshot[] = []
+  const lastSignal: Record<string, string> = {}
+  let cumulativeTxCosts = 0
 
-  for (const date of dates) {
-    for (const { asset } of bhAssets) {
+  // Initial buy on day 0: equal weight across all assets (treated as BUY)
+  for (const asset of assetNames) {
+    lastSignal[asset] = 'BUY'
+  }
+  const initWeights = computeTargetWeights(assetNames, 0, dates, priceMaps, lastSignal, portfolio.weights)
+  const initCorrWeights = applyCorrelationPenalty(initWeights, 0, dates, priceMaps)
+  const initTxCost = rebalancePortfolio(portfolio, initCorrWeights, priceMaps, dates[0], assetNames)
+  cumulativeTxCosts += initTxCost
+
+  for (let di = 0; di < dates.length; di++) {
+    const date = dates[di]
+
+    // 1. Update lastSignal map from today's signals
+    for (const asset of assetNames) {
       const signal = signalsByAssetDate[asset]?.get(date)
-      if (!signal) continue
-      const price = getPrice(priceMaps[asset], date)
-      if (!price) continue
-      const st = asState[asset]
-
-      if (signal === 'BUY' && !st.invested) {
-        st.shares = st.cash / price
-        st.cash = 0
-        st.invested = true
-      } else if (signal === 'SELL' && st.invested) {
-        st.cash = st.shares * price
-        st.shares = 0
-        st.invested = false
-      }
+      if (signal) lastSignal[asset] = signal
     }
 
-    let bhValue = cashAmount
+    // 2. Compute target weights (skip day 0 — already initialized)
+    let txCostsToday = di === 0 ? initTxCost : 0
+    if (di > 0) {
+      const targetWeights = computeTargetWeights(assetNames, di, dates, priceMaps, lastSignal, portfolio.weights)
+      const corrWeights = applyCorrelationPenalty(targetWeights, di, dates, priceMaps)
+      txCostsToday = rebalancePortfolio(portfolio, corrWeights, priceMaps, date, assetNames)
+      cumulativeTxCosts += txCostsToday
+    }
+
+    // 3. Value portfolio
+    let asValue = portfolio.cash
+    const positionDetails: DaySnapshot['positions'] = []
+    for (const asset of assetNames) {
+      const price = getPrice(priceMaps[asset], date)
+      const shares = portfolio.positions[asset] || 0
+      const value = price ? shares * price : 0
+      asValue += value
+      positionDetails.push({
+        asset,
+        shares,
+        value,
+        weight: 0, // filled after total known
+        targetWeight: portfolio.weights[asset] || 0,
+        signal: lastSignal[asset] || 'HOLD',
+      })
+    }
+    // Fill actual weights
+    for (const pos of positionDetails) {
+      pos.weight = asValue > 0 ? pos.value / asValue : 0
+    }
+
+    allocationHistory.push({
+      date,
+      totalValue: asValue,
+      cashValue: portfolio.cash,
+      cashPct: asValue > 0 ? portfolio.cash / asValue : 0,
+      positions: positionDetails,
+      txCostsToday,
+      cumulativeTxCosts,
+    })
+
+    // 4. Buy & Hold value
+    let bhValue = 0
     for (const { asset } of bhAssets) {
       const price = getPrice(priceMaps[asset], date)
       bhValue += price ? bhShares[asset] * price : 0
     }
 
-    let asValue = 0
-    for (const { asset } of bhAssets) {
-      const price = getPrice(priceMaps[asset], date)
-      const st = asState[asset]
-      asValue += st.invested && price ? st.shares * price : st.cash
-    }
-
+    // 5. SPY benchmark (normalised to same starting capital)
     const spyPrice = getPrice(priceMaps['SPY'], date)
     const spyStartPrice = getPrice(priceMaps['SPY'], startDate)
-    const spyValue = spyStartPrice && spyPrice ? 100000 * (spyPrice / spyStartPrice) : 100000
+    const spyValue = spyStartPrice && spyPrice ? capital * (spyPrice / spyStartPrice) : capital
 
     chartData.push({ date, buyHold: Math.round(bhValue), alphaSignal: Math.round(asValue), spy: Math.round(spyValue) })
   }
+
+  // Compute allocation chart data (percentages)
+  const allocationChartData: AllocationChartPoint[] = allocationHistory.map(snap => {
+    const point: AllocationChartPoint = { date: snap.date, cash: snap.cashPct * 100 }
+    for (const pos of snap.positions) {
+      point[pos.asset] = pos.weight * 100
+    }
+    return point
+  })
 
   const lastDate = dates[dates.length - 1]
   const bhBreakdown: SimResult['bhBreakdown'] = bhAssets.map(({ asset, amount }) => {
@@ -207,45 +537,14 @@ function runSimulation(
   const asTotal = last.alphaSignal
   const spyTotal = last.spy
 
-  const asPerAsset = bhAssets.map(({ asset }) => {
-    const price = getPrice(priceMaps[asset], lastDate)
-    const st = asState[asset]
-    const value = st.invested && price ? st.shares * price : st.cash
-    return { asset, returnPct: ((value - asPerAssetAmount) / asPerAssetAmount) * 100 }
-  })
+  // Best/worst from final allocation snapshot
+  const finalSnap = allocationHistory[allocationHistory.length - 1]
+  const asPerAsset = finalSnap.positions.map(pos => ({
+    asset: pos.asset,
+    returnPct: capital > 0 && pos.value > 0 ? ((pos.value / (pos.targetWeight * capital || 1)) - 1) * 100 : 0,
+  }))
   const asBest = asPerAsset.length ? asPerAsset.reduce((a, b) => a.returnPct > b.returnPct ? a : b) : null
   const asWorst = asPerAsset.length ? asPerAsset.reduce((a, b) => a.returnPct < b.returnPct ? a : b) : null
-
-  // Compute daily returns, Sharpe ratios and max drawdowns
-  const RISK_FREE_DAILY = 0.045 / 252 // 4.5% annual risk-free rate
-
-  function dailyReturns(series: number[]): number[] {
-    const r: number[] = []
-    for (let i = 1; i < series.length; i++) {
-      r.push(series[i - 1] > 0 ? (series[i] - series[i - 1]) / series[i - 1] : 0)
-    }
-    return r
-  }
-
-  function sharpeRatio(returns: number[]): number {
-    if (returns.length < 2) return 0
-    const mean = returns.reduce((s, v) => s + v, 0) / returns.length
-    const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length
-    const std = Math.sqrt(variance)
-    if (std === 0) return 0
-    return ((mean - RISK_FREE_DAILY) / std) * Math.sqrt(252) // annualised
-  }
-
-  function maxDrawdown(series: number[]): number {
-    let peak = series[0] || 0
-    let maxDd = 0
-    for (const v of series) {
-      if (v > peak) peak = v
-      const dd = peak > 0 ? (peak - v) / peak : 0
-      if (dd > maxDd) maxDd = dd
-    }
-    return maxDd * 100 // as percentage
-  }
 
   const bhValues = chartData.map(d => d.buyHold)
   const asValues = chartData.map(d => d.alphaSignal)
@@ -253,22 +552,25 @@ function runSimulation(
   return {
     chartData,
     bhBreakdown,
+    startingCapital: capital,
     bhTotal,
-    bhReturn: bhTotalInvested > 0 ? ((bhTotal - bhTotalInvested) / bhTotalInvested) * 100 : 0,
+    bhReturn: capital > 0 ? ((bhTotal - capital) / capital) * 100 : 0,
     asTotal,
-    asReturn: AS_TOTAL > 0 ? ((asTotal - AS_TOTAL) / AS_TOTAL) * 100 : 0,
+    asReturn: capital > 0 ? ((asTotal - capital) / capital) * 100 : 0,
     spyTotal,
-    spyReturn: ((spyTotal - 100000) / 100000) * 100,
+    spyReturn: capital > 0 ? ((spyTotal - capital) / capital) * 100 : 0,
     asTotalSignals: totalSignals,
     asCorrect: correctSignals,
     asIncorrect: incorrectSignals,
     asBest,
     asWorst,
-    cashAmount,
     bhSharpe: sharpeRatio(dailyReturns(bhValues)),
     asSharpe: sharpeRatio(dailyReturns(asValues)),
     bhMaxDrawdown: maxDrawdown(bhValues),
     asMaxDrawdown: maxDrawdown(asValues),
+    allocationHistory,
+    cumulativeTxCosts,
+    allocationChartData,
   }
 }
 
@@ -280,11 +582,16 @@ type TopTab = 'backtest' | 'live' | 'whatif'
 
 export default function Simulator() {
   const [data, setData] = useState<SimulatorData | null>(null)
+  const [wfData, setWfData] = useState<WalkForwardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TopTab>('live')
 
-  // Custom portfolio state
-  const [useCustom, setUseCustom] = useState(false)
+  // Starting capital (user-configurable)
+  const [startingCapital, setStartingCapital] = useState(STARTING_CAPITAL)
+
+  // Portfolio allocation mode
+  const [allocMode, setAllocMode] = useState<'default' | 'custom' | 'split'>('default')
+  const [splitTotal, setSplitTotal] = useState(100000)
   const [allocations, setAllocations] = useState<Allocation[]>([
     { asset: 'AAPL', pct: 30 },
     { asset: 'MSFT', pct: 30 },
@@ -293,33 +600,94 @@ export default function Simulator() {
   ])
 
   useEffect(() => {
-    fetch('/api/v1/simulator/data')
-      .then(r => r.json())
-      .then(d => setData(d))
-      .catch(() => setData(null))
-      .finally(() => setLoading(false))
+    Promise.all([
+      fetch('/api/v1/simulator/data').then(r => r.json()).catch(() => null),
+      fetchWalkForwardData(),
+    ]).then(([simData, wf]) => {
+      setData(simData)
+      setWfData(wf)
+    }).finally(() => setLoading(false))
   }, [])
 
-  // Compute BH assets from allocations
-  const customBhAssets = useMemo(() => {
-    if (!useCustom) return DEFAULT_BH
-    return allocations.filter(a => a.asset && a.pct > 0).map(a => ({
-      asset: a.asset,
-      amount: Math.round((a.pct / 100) * BH_TOTAL),
+  // Compute BH assets from weights, scaled to startingCapital
+  const bhAssets = useMemo(() => {
+    if (allocMode === 'custom') {
+      return allocations.filter(a => a.asset && a.pct > 0).map(a => ({
+        asset: a.asset,
+        amount: Math.round((a.pct / 100) * startingCapital),
+      }))
+    }
+    return DEFAULT_BH_WEIGHTS.map(w => ({
+      asset: w.asset,
+      amount: Math.round(w.weight * startingCapital),
     }))
-  }, [useCustom, allocations])
+  }, [allocMode, allocations, startingCapital])
 
-  const customCash = useMemo(() => {
-    if (!useCustom) return DEFAULT_CASH
-    const totalPct = allocations.reduce((s, a) => s + a.pct, 0)
-    return Math.round(((100 - totalPct) / 100) * BH_TOTAL)
-  }, [useCustom, allocations])
+  const backtestResult = useMemo(() => data ? runSimulation(data, bhAssets, startingCapital) : null, [data, bhAssets, startingCapital])
+  const liveResult = useMemo(() => data ? runSimulation(data, bhAssets, startingCapital, LIVE_START) : null, [data, bhAssets, startingCapital])
 
-  const backtestResult = useMemo(() => data ? runSimulation(data, customBhAssets, customCash) : null, [data, customBhAssets, customCash])
-  const liveResult = useMemo(() => data ? runSimulation(data, customBhAssets, customCash, LIVE_START) : null, [data, customBhAssets, customCash])
+  // When walk-forward data is available, override backtest signals for honest equity curve
+  const wfBacktestResult = useMemo(() => {
+    if (!wfData || !data) return null
+    // Build a modified SimulatorData using walk-forward signals instead of biased ones
+    const wfSignalHistory: Record<string, SignalPoint[]> = {}
+    for (const sig of wfData.signals) {
+      if (!wfSignalHistory[sig.asset]) wfSignalHistory[sig.asset] = []
+      wfSignalHistory[sig.asset].push({
+        date: sig.date,
+        signal: sig.signal,
+        price: sig.entry_price,
+        was_correct: sig.was_correct,
+        outcome_price: sig.exit_price,
+      })
+    }
+    // Merge: use walk-forward signals where available, keep original price history
+    const wfSimData: SimulatorData = {
+      price_history: data.price_history,
+      signal_history: wfSignalHistory,
+    }
+    return runSimulation(wfSimData, bhAssets, startingCapital)
+  }, [wfData, data, bhAssets, startingCapital])
 
-  const result = tab === 'backtest' ? backtestResult : tab === 'live' ? liveResult : null
+  const result = tab === 'backtest' ? (wfBacktestResult ?? backtestResult) : tab === 'live' ? liveResult : null
+  const isWalkForward = tab === 'backtest' && wfBacktestResult !== null
   const daysSinceLive = Math.floor((Date.now() - new Date(LIVE_START).getTime()) / 86400000)
+
+  // 50/50 split: scale existing BH and AS to equal halves of splitTotal
+  const splitData = useMemo(() => {
+    if (allocMode !== 'split' || !result || result.chartData.length < 2) return null
+    const cap = result.startingCapital
+    const bhScale = (splitTotal / 2) / cap
+    const asScale = (splitTotal / 2) / cap
+    const pureBhScale = splitTotal / cap
+    const spyScale = splitTotal / cap
+
+    const chartData = result.chartData.map(d => ({
+      date: d.date,
+      blended: Math.round(d.buyHold * bhScale + d.alphaSignal * asScale),
+      pureBuyHold: Math.round(d.buyHold * pureBhScale),
+      spy: Math.round(d.spy * spyScale),
+    }))
+
+    const last = chartData[chartData.length - 1]
+    const blendedValues = chartData.map(d => d.blended)
+    const pureBhValues = chartData.map(d => d.pureBuyHold)
+
+    return {
+      chartData,
+      splitTotal,
+      blendedTotal: last.blended,
+      blendedReturn: ((last.blended - splitTotal) / splitTotal) * 100,
+      pureBhTotal: last.pureBuyHold,
+      pureBhReturn: ((last.pureBuyHold - splitTotal) / splitTotal) * 100,
+      spyTotal: last.spy,
+      spyReturn: ((last.spy - splitTotal) / splitTotal) * 100,
+      blendedSharpe: sharpeRatio(dailyReturns(blendedValues)),
+      blendedMaxDrawdown: maxDrawdown(blendedValues),
+      pureBhSharpe: sharpeRatio(dailyReturns(pureBhValues)),
+      pureBhMaxDrawdown: maxDrawdown(pureBhValues),
+    }
+  }, [allocMode, result, splitTotal])
 
   const totalPct = allocations.reduce((s, a) => s + a.pct, 0)
   const pctValid = totalPct > 0 && totalPct <= 100
@@ -348,24 +716,43 @@ export default function Simulator() {
     <div className="space-y-6">
       {/* Hero */}
       <div className="bg-gradient-to-r from-[#0f1729] to-[#111827] rounded-2xl border border-[#1f2937] p-6 sm:p-8">
-        <h2 className="text-2xl font-bold text-white mb-3">Investment Simulator</h2>
-        <p className="text-sm text-gray-400 leading-relaxed max-w-3xl">
-          Compare buy-and-hold vs Alpha Signal recommendations, or run a what-if simulation
-          to see what your capital would be worth if you had followed every signal.
-        </p>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white mb-3">Investment Simulator</h2>
+            <p className="text-sm text-gray-400 leading-relaxed max-w-3xl">
+              Compare buy-and-hold vs Alpha Signal recommendations, or run a what-if simulation
+              to see what your capital would be worth if you had followed every signal.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs text-gray-500">Starting capital:</span>
+            <div className="flex items-center gap-1">
+              <span className="text-gray-500 text-sm">{'\u00A3'}</span>
+              <input
+                type="number"
+                min={1000}
+                step={10000}
+                value={startingCapital}
+                onChange={e => setStartingCapital(Math.max(1000, parseInt(e.target.value) || STARTING_CAPITAL))}
+                className="w-28 bg-[#0a0e17] border border-[#1f2937] rounded px-2 py-1.5 text-sm text-white outline-none focus:border-cyan-500/30"
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Tab selector */}
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={() => setTab('backtest')}
-          className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+          className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer flex items-center gap-2 ${
             tab === 'backtest'
-              ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+              ? wfData ? 'bg-green-500/15 text-green-400 border border-green-500/30' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
               : 'text-gray-400 hover:text-gray-200 bg-[#111827] border border-[#1f2937]'
           }`}
         >
-          5-Year Backtest
+          {wfData ? 'Walk-Forward Backtest' : '5-Year Backtest'}
+          {wfData && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">no lookahead</span>}
         </button>
         <button
           onClick={() => setTab('live')}
@@ -401,15 +788,30 @@ export default function Simulator() {
         <>
           {/* Warning banners */}
           {tab === 'backtest' && (
-            <div className="bg-yellow-900/30 border-2 border-yellow-500/50 rounded-lg px-5 py-4 text-sm">
-              <div className="flex items-start gap-3">
-                <span className="text-xl leading-none flex-shrink-0">{'\u26A0\uFE0F'}</span>
-                <div>
-                  <div className="font-semibold text-yellow-300 mb-1">Lookahead bias warning</div>
-                  <p className="text-yellow-200/80">These models were trained on this historical data. The backtest is illustrative only and significantly overstates real-world performance.</p>
+            isWalkForward ? (
+              <div className="bg-green-900/20 border border-green-500/30 rounded-lg px-5 py-4 text-sm">
+                <div className="flex items-start gap-3">
+                  <span className="text-xl leading-none flex-shrink-0 inline-flex items-center gap-1.5">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" />
+                  </span>
+                  <div>
+                    <div className="font-semibold text-green-300 mb-1">Walk-Forward Backtest (no lookahead)</div>
+                    <p className="text-green-200/70">These signals were generated using models that had never seen the test period data. Each quarterly window was tested with models trained only on prior data.</p>
+                    {wfData && <p className="text-green-300/50 text-xs mt-1">Generated: {new Date(wfData.generated_at).toLocaleDateString()} &middot; {wfData.summary.total_signals.toLocaleString()} signals across {wfData.windows.length} windows</p>}
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-yellow-900/30 border-2 border-yellow-500/50 rounded-lg px-5 py-4 text-sm">
+                <div className="flex items-start gap-3">
+                  <span className="text-xl leading-none flex-shrink-0">{'\u26A0\uFE0F'}</span>
+                  <div>
+                    <div className="font-semibold text-yellow-300 mb-1">Lookahead bias warning</div>
+                    <p className="text-yellow-200/80">These models were trained on this historical data. The backtest is illustrative only and significantly overstates real-world performance. Run the walk-forward backtester to see unbiased results.</p>
+                  </div>
+                </div>
+              </div>
+            )
           )}
           {tab === 'live' && (
             <div className="bg-green-900/20 border border-green-500/30 rounded-lg px-4 py-3 text-sm text-green-300 flex items-center gap-2">
@@ -426,29 +828,28 @@ export default function Simulator() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-medium text-gray-400">Portfolio Allocation</h3>
               <div className="flex gap-2">
-                <button
-                  onClick={() => setUseCustom(false)}
-                  className={`px-3 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors ${
-                    !useCustom ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30' : 'text-gray-400 bg-[#0a0e17] border border-[#1f2937] hover:border-[#374151]'
-                  }`}
-                >
-                  Default (10 assets)
-                </button>
-                <button
-                  onClick={() => setUseCustom(true)}
-                  className={`px-3 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors ${
-                    useCustom ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30' : 'text-gray-400 bg-[#0a0e17] border border-[#1f2937] hover:border-[#374151]'
-                  }`}
-                >
-                  Custom
-                </button>
+                {(['default', 'split', 'custom'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => setAllocMode(mode)}
+                    className={`px-3 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors ${
+                      allocMode === mode
+                        ? mode === 'split'
+                          ? 'bg-violet-500/15 text-violet-400 border border-violet-500/30'
+                          : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
+                        : 'text-gray-400 bg-[#0a0e17] border border-[#1f2937] hover:border-[#374151]'
+                    }`}
+                  >
+                    {mode === 'default' ? 'Default (10 assets)' : mode === 'split' ? '50/50 Split' : 'Custom'}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {useCustom && (
+            {allocMode === 'custom' && (
               <div className="space-y-3">
                 <p className="text-xs text-gray-500">
-                  Pick up to {MAX_CUSTOM} assets and set the % of {fmtGBP(BH_TOTAL)} to allocate. Remaining goes to cash.
+                  Pick up to {MAX_CUSTOM} assets and set the % of {fmtGBP(startingCapital)} to allocate. Remaining goes to cash.
                 </p>
 
                 {allocations.map((alloc, idx) => {
@@ -480,7 +881,7 @@ export default function Simulator() {
                         <span className="text-gray-500 text-sm">%</span>
                       </div>
                       <span className="text-xs text-gray-600 w-16 text-right">
-                        {fmtGBP(Math.round((alloc.pct / 100) * BH_TOTAL))}
+                        {fmtGBP(Math.round((alloc.pct / 100) * startingCapital))}
                       </span>
                       <button
                         onClick={() => removeAllocation(idx)}
@@ -505,7 +906,7 @@ export default function Simulator() {
                 <div className="flex items-center justify-between pt-2 border-t border-[#1f2937]">
                   <div className="text-xs text-gray-500">
                     Allocated: <span className={totalPct <= 100 ? 'text-cyan-400' : 'text-red-400'}>{totalPct}%</span>
-                    {totalPct < 100 && <> &middot; Cash: <span className="text-gray-400">{100 - totalPct}% ({fmtGBP(Math.round(((100 - totalPct) / 100) * BH_TOTAL))})</span></>}
+                    {totalPct < 100 && <> &middot; Cash: <span className="text-gray-400">{100 - totalPct}% ({fmtGBP(Math.round(((100 - totalPct) / 100) * startingCapital))})</span></>}
                   </div>
                   {!pctValid && (
                     <span className="text-xs text-red-400">
@@ -516,9 +917,34 @@ export default function Simulator() {
               </div>
             )}
 
-            {!useCustom && (
+            {allocMode === 'default' && (
               <div className="text-xs text-gray-500">
                 Using default 60/40 allocation across 10 assets. Switch to Custom to choose your own.
+              </div>
+            )}
+
+            {allocMode === 'split' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">
+                  Split your capital 50/50: half follows buy &amp; hold across default assets, half follows Alpha Signal recommendations.
+                </p>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-500">Total capital:</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-500 text-sm">{'\u00A3'}</span>
+                    <input
+                      type="number"
+                      min={1000}
+                      step={1000}
+                      value={splitTotal}
+                      onChange={e => setSplitTotal(Math.max(1000, parseInt(e.target.value) || 100000))}
+                      className="w-28 bg-[#0a0e17] border border-[#1f2937] rounded px-2 py-1.5 text-sm text-white outline-none focus:border-violet-500/30"
+                    />
+                  </div>
+                  <span className="text-xs text-gray-600">
+                    {fmtGBP(splitTotal / 2)} buy &amp; hold + {fmtGBP(splitTotal / 2)} Alpha Signal
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -526,12 +952,14 @@ export default function Simulator() {
           {/* Simulation results */}
           {!result || result.chartData.length < 2 ? (
             <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-8 text-center text-gray-500">
-              {!pctValid && useCustom
+              {!pctValid && allocMode === 'custom'
                 ? 'Fix allocation percentages to run simulation.'
                 : tab === 'live'
                   ? 'Not enough data yet. Live tracking data accumulates daily from 15 March 2026.'
                   : 'Not enough historical price data available.'}
             </div>
+          ) : allocMode === 'split' && splitData ? (
+            <SplitResults data={splitData} />
           ) : (
             <InvestmentResults result={result} />
           )}
@@ -545,29 +973,111 @@ export default function Simulator() {
 // Investment Sim Results
 // ═══════════════════════════════════════
 
+interface SplitData {
+  chartData: { date: string; blended: number; pureBuyHold: number; spy: number }[]
+  splitTotal: number
+  blendedTotal: number
+  blendedReturn: number
+  pureBhTotal: number
+  pureBhReturn: number
+  spyTotal: number
+  spyReturn: number
+  blendedSharpe: number
+  blendedMaxDrawdown: number
+  pureBhSharpe: number
+  pureBhMaxDrawdown: number
+}
+
+function SplitResults({ data }: { data: SplitData }) {
+  return (
+    <>
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <SummaryCard
+          label={`50/50 Blended ${fmtGBP(data.splitTotal)}`}
+          value={fmtGBP(data.blendedTotal)}
+          returnPct={data.blendedReturn}
+          borderColor="border-violet-500/30"
+          valueColor="text-violet-400"
+        />
+        <SummaryCard
+          label={`Pure Buy & Hold ${fmtGBP(data.splitTotal)}`}
+          value={fmtGBP(data.pureBhTotal)}
+          returnPct={data.pureBhReturn}
+          borderColor="border-[#1f2937]"
+          valueColor="text-white"
+        />
+        <SummaryCard
+          label={`S&P 500 Benchmark ${fmtGBP(data.splitTotal)}`}
+          value={fmtGBP(data.spyTotal)}
+          returnPct={data.spyReturn}
+          borderColor="border-gray-700"
+          valueColor="text-gray-300"
+        />
+      </div>
+
+      {/* Risk metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <MetricCard label="Sharpe (50/50)" value={data.blendedSharpe.toFixed(2)} color={data.blendedSharpe >= 1 ? 'text-green-400' : data.blendedSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Sharpe (Pure B&H)" value={data.pureBhSharpe.toFixed(2)} color={data.pureBhSharpe >= 1 ? 'text-green-400' : data.pureBhSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Max DD (50/50)" value={`-${data.blendedMaxDrawdown.toFixed(1)}%`} color={data.blendedMaxDrawdown < 10 ? 'text-green-400' : data.blendedMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Max DD (Pure B&H)" value={`-${data.pureBhMaxDrawdown.toFixed(1)}%`} color={data.pureBhMaxDrawdown < 10 ? 'text-green-400' : data.pureBhMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
+      </div>
+
+      {/* Chart */}
+      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+        <h3 className="text-sm font-medium text-gray-400 mb-4">Portfolio Value Over Time</h3>
+        <ResponsiveContainer width="100%" height={340}>
+          <LineChart data={data.chartData} margin={{ left: 10, right: 10, top: 4, bottom: 0 }}>
+            <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => v.slice(5)} interval="preserveStartEnd" />
+            <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => `\u00a3${(v / 1000).toFixed(0)}k`} width={55} />
+            <Tooltip
+              contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
+              labelStyle={{ color: '#9ca3af' }}
+              formatter={(v: number | undefined) => [v != null ? fmtGBP(v) : '']}
+            />
+            <Legend wrapperStyle={{ fontSize: 12, color: '#9ca3af' }} />
+            <ReferenceLine y={data.splitTotal} stroke="#374151" strokeDasharray="4 4" />
+            <Line type="monotone" dataKey="blended" name="50/50 Blended" stroke="#a78bfa" strokeWidth={2.5} dot={false} />
+            <Line type="monotone" dataKey="pureBuyHold" name="Pure Buy & Hold" stroke="#e5e7eb" strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="spy" name="S&P 500" stroke="#6b7280" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Explanation */}
+      <div className="bg-violet-500/5 border border-violet-500/20 rounded-lg p-4 text-sm text-gray-400 leading-relaxed">
+        <span className="text-violet-400 font-medium">How it works:</span> {fmtGBP(data.splitTotal / 2)} is invested
+        buy-and-hold across the default 10 assets, and the other {fmtGBP(data.splitTotal / 2)} follows
+        Alpha Signal&apos;s BUY/SELL/HOLD recommendations. The blended line shows the combined portfolio value.
+      </div>
+    </>
+  )
+}
+
 function InvestmentResults({ result }: { result: SimResult }) {
-  const bhTotalInvested = result.bhBreakdown.reduce((s, a) => s + a.invested, 0) + result.cashAmount
+  const cap = result.startingCapital
 
   return (
     <>
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <SummaryCard
-          label={`Buy & Hold ${fmtGBP(bhTotalInvested)}`}
+          label={`Buy & Hold ${fmtGBP(cap)}`}
           value={fmtGBP(result.bhTotal)}
           returnPct={result.bhReturn}
           borderColor="border-[#1f2937]"
           valueColor="text-white"
         />
         <SummaryCard
-          label={`Alpha Signal ${fmtGBP(AS_TOTAL)}`}
+          label={`Alpha Signal ${fmtGBP(cap)}`}
           value={fmtGBP(result.asTotal)}
           returnPct={result.asReturn}
           borderColor="border-cyan-500/30"
           valueColor="text-cyan-400"
         />
         <SummaryCard
-          label={`S&P 500 Benchmark ${fmtGBP(100000)}`}
+          label={`S&P 500 Benchmark ${fmtGBP(cap)}`}
           value={fmtGBP(result.spyTotal)}
           returnPct={result.spyReturn}
           borderColor="border-gray-700"
@@ -576,11 +1086,12 @@ function InvestmentResults({ result }: { result: SimResult }) {
       </div>
 
       {/* Risk metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         <MetricCard label="Sharpe Ratio (B&H)" value={result.bhSharpe.toFixed(2)} color={result.bhSharpe >= 1 ? 'text-green-400' : result.bhSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
         <MetricCard label="Sharpe Ratio (Alpha)" value={result.asSharpe.toFixed(2)} color={result.asSharpe >= 1 ? 'text-green-400' : result.asSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
         <MetricCard label="Max Drawdown (B&H)" value={`-${result.bhMaxDrawdown.toFixed(1)}%`} color={result.bhMaxDrawdown < 10 ? 'text-green-400' : result.bhMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
         <MetricCard label="Max Drawdown (Alpha)" value={`-${result.asMaxDrawdown.toFixed(1)}%`} color={result.asMaxDrawdown < 10 ? 'text-green-400' : result.asMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Tx Costs (Alpha)" value={fmtGBP(result.cumulativeTxCosts)} color="text-orange-400" />
       </div>
 
       {/* Main chart */}
@@ -602,6 +1113,33 @@ function InvestmentResults({ result }: { result: SimResult }) {
           </LineChart>
         </ResponsiveContainer>
       </div>
+
+      {/* Stacked area allocation chart */}
+      {result.allocationChartData.length > 1 && (() => {
+        const ALLOC_COLORS = ['#06b6d4', '#a78bfa', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316', '#6366f1']
+        const assetKeys = result.allocationHistory[0]?.positions.map(p => p.asset) || []
+        return (
+          <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+            <h3 className="text-sm font-medium text-gray-400 mb-4">Alpha Signal &mdash; Daily Allocation</h3>
+            <ResponsiveContainer width="100%" height={300}>
+              <AreaChart data={result.allocationChartData} margin={{ left: 10, right: 10, top: 4, bottom: 0 }}>
+                <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => v.slice(5)} interval="preserveStartEnd" />
+                <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => `${Math.round(v)}%`} width={45} domain={[0, 100]} />
+                <Tooltip
+                  contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
+                  labelStyle={{ color: '#9ca3af' }}
+                  formatter={(v: number | undefined) => [v != null ? `${v.toFixed(1)}%` : '']}
+                />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+                {assetKeys.map((asset, i) => (
+                  <Area key={asset} type="monotone" dataKey={asset} stackId="1" fill={ALLOC_COLORS[i % ALLOC_COLORS.length]} stroke={ALLOC_COLORS[i % ALLOC_COLORS.length]} fillOpacity={0.8} />
+                ))}
+                <Area type="monotone" dataKey="cash" stackId="1" fill="#374151" stroke="#374151" fillOpacity={0.6} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )
+      })()}
 
       {/* Buy & Hold breakdown */}
       <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
@@ -627,19 +1165,11 @@ function InvestmentResults({ result }: { result: SimResult }) {
                   </td>
                 </tr>
               ))}
-              {result.cashAmount > 0 && (
-                <tr className="border-b border-[#1f2937]/50">
-                  <td className="py-1.5 px-2 text-gray-500">Cash</td>
-                  <td className="py-1.5 px-2 text-right text-gray-500">{fmtGBP(result.cashAmount)}</td>
-                  <td className="py-1.5 px-2 text-right text-gray-500">{fmtGBP(result.cashAmount)}</td>
-                  <td className="py-1.5 px-2 text-right text-gray-600">0.00%</td>
-                </tr>
-              )}
             </tbody>
             <tfoot>
               <tr className="border-t border-[#374151] font-semibold">
                 <td className="py-2 px-2 text-white">Total</td>
-                <td className="py-2 px-2 text-right text-gray-300">{fmtGBP(bhTotalInvested)}</td>
+                <td className="py-2 px-2 text-right text-gray-300">{fmtGBP(cap)}</td>
                 <td className="py-2 px-2 text-right text-white">{fmtGBP(result.bhTotal)}</td>
                 <td className={`py-2 px-2 text-right ${result.bhReturn >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {fmtPct(result.bhReturn)}
@@ -652,8 +1182,9 @@ function InvestmentResults({ result }: { result: SimResult }) {
 
       {/* Alpha Signal breakdown */}
       <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
-        <h3 className="text-sm font-medium text-cyan-400 mb-3">Alpha Signal Breakdown</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <h3 className="text-sm font-medium text-cyan-400 mb-3">Alpha Signal Allocation</h3>
+        {/* Signal accuracy stats */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
           <div className="bg-[#0a0e17] rounded-lg p-3 text-center">
             <div className="text-xs text-gray-500 mb-1">Total Signals</div>
             <div className="text-xl font-bold text-white">{result.asTotalSignals}</div>
@@ -671,28 +1202,58 @@ function InvestmentResults({ result }: { result: SimResult }) {
             <div className="text-xl font-bold text-cyan-400">{fmtGBP(result.asTotal)}</div>
           </div>
         </div>
-        {(result.asBest || result.asWorst) && (
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {result.asBest && (
-              <div className="bg-green-500/5 border border-green-500/20 rounded-lg p-3 flex items-center justify-between">
-                <div>
-                  <div className="text-xs text-gray-500">Best Performer</div>
-                  <div className="text-white font-medium">{result.asBest.asset}</div>
-                </div>
-                <div className="text-green-400 font-bold">{fmtPct(result.asBest.returnPct)}</div>
-              </div>
-            )}
-            {result.asWorst && (
-              <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3 flex items-center justify-between">
-                <div>
-                  <div className="text-xs text-gray-500">Worst Performer</div>
-                  <div className="text-white font-medium">{result.asWorst.asset}</div>
-                </div>
-                <div className="text-red-400 font-bold">{fmtPct(result.asWorst.returnPct)}</div>
-              </div>
-            )}
-          </div>
-        )}
+        {/* Final day allocation table */}
+        {result.allocationHistory.length > 0 && (() => {
+          const finalSnap = result.allocationHistory[result.allocationHistory.length - 1]
+          return (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-gray-500 border-b border-[#1f2937]">
+                    <th className="text-left py-2 px-2">Asset</th>
+                    <th className="text-center py-2 px-2">Signal</th>
+                    <th className="text-right py-2 px-2">Target %</th>
+                    <th className="text-right py-2 px-2">Actual %</th>
+                    <th className="text-right py-2 px-2">Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {finalSnap.positions.map(pos => (
+                    <tr key={pos.asset} className="border-b border-[#1f2937]/50 hover:bg-white/[0.02]">
+                      <td className="py-1.5 px-2 text-gray-300 font-medium">{pos.asset}</td>
+                      <td className="py-1.5 px-2 text-center">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          pos.signal === 'BUY' ? 'bg-green-500/15 text-green-400' :
+                          pos.signal === 'SELL' || pos.signal === 'SHORT' ? 'bg-red-500/15 text-red-400' :
+                          'bg-gray-500/15 text-gray-400'
+                        }`}>{pos.signal}</span>
+                      </td>
+                      <td className="py-1.5 px-2 text-right text-gray-400">{(pos.targetWeight * 100).toFixed(1)}%</td>
+                      <td className="py-1.5 px-2 text-right text-gray-300">{(pos.weight * 100).toFixed(1)}%</td>
+                      <td className="py-1.5 px-2 text-right text-gray-300">{fmtGBP(pos.value)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-b border-[#1f2937]/50">
+                    <td className="py-1.5 px-2 text-gray-500">Cash</td>
+                    <td className="py-1.5 px-2 text-center text-gray-600">&mdash;</td>
+                    <td className="py-1.5 px-2 text-right text-gray-500">&mdash;</td>
+                    <td className="py-1.5 px-2 text-right text-gray-500">{(finalSnap.cashPct * 100).toFixed(1)}%</td>
+                    <td className="py-1.5 px-2 text-right text-gray-500">{fmtGBP(finalSnap.cashValue)}</td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-[#374151] font-semibold">
+                    <td className="py-2 px-2 text-white">Total</td>
+                    <td className="py-2 px-2"></td>
+                    <td className="py-2 px-2"></td>
+                    <td className="py-2 px-2 text-right text-gray-300">100%</td>
+                    <td className="py-2 px-2 text-right text-white">{fmtGBP(finalSnap.totalValue)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Methodology section */}
@@ -709,7 +1270,11 @@ function InvestmentResults({ result }: { result: SimResult }) {
           </div>
           <div className="flex gap-3">
             <span className="text-gray-500 font-bold mt-0.5 flex-shrink-0">&bull;</span>
-            <p><span className="text-gray-300 font-medium">Transaction costs:</span> Not modelled &mdash; real trading would reduce returns by 0.1&ndash;0.5% per trade.</p>
+            <p><span className="text-gray-300 font-medium">Transaction costs:</span> 10bps per trade for stocks/ETFs, 25bps for crypto, applied on every rebalance.</p>
+          </div>
+          <div className="flex gap-3">
+            <span className="text-violet-400 font-bold mt-0.5 flex-shrink-0">&bull;</span>
+            <p><span className="text-gray-300 font-medium">Allocation:</span> Inverse-volatility weighting (60-day trailing returns). Correlated pairs (r&gt;0.7) penalized. 30% single-asset cap. 2% rebalance threshold to avoid churn.</p>
           </div>
           <div className="flex gap-3">
             <span className="text-green-400 font-bold mt-0.5 flex-shrink-0">&bull;</span>

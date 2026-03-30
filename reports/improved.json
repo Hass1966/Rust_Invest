@@ -1,744 +1,920 @@
 {
   "assets": {
     "AAPL": {
-      "ensemble": 66.4,
-      "gbt": 71.0,
-      "linreg": 68.5,
-      "logreg": 67.7,
-      "lstm": 61.8,
-      "regime": 54.2
+      "ensemble": 65.9,
+      "gbt": 69.3,
+      "linreg": 67.7,
+      "logreg": 66.3,
+      "lstm": 62.5,
+      "regime": 54.0
     },
     "ABBV": {
-      "ensemble": 68.5,
-      "gbt": 72.7,
-      "linreg": 71.5,
-      "logreg": 70.0,
-      "lstm": 59.8,
-      "regime": 53.5
-    },
-    "AMD": {
-      "ensemble": 64.4,
-      "gbt": 68.7,
-      "linreg": 66.7,
-      "logreg": 64.3,
-      "lstm": 58.0,
-      "regime": 50.5
-    },
-    "AMZN": {
-      "ensemble": 65.3,
-      "gbt": 69.3,
-      "linreg": 65.3,
-      "logreg": 65.7,
-      "lstm": 60.8,
+      "ensemble": 69.4,
+      "gbt": 72.5,
+      "linreg": 69.0,
+      "logreg": 69.2,
+      "lstm": 66.8,
       "regime": 53.2
     },
-    "ARM": {
-      "ensemble": 64.3,
-      "gbt": 69.3,
-      "linreg": 69.3,
-      "logreg": 65.3,
-      "lstm": 53.0,
-      "regime": 54.7
-    },
-    "AUDUSD=X": {
-      "ensemble": 68.0,
-      "gbt": 71.0,
-      "linreg": 71.5,
-      "logreg": 69.5,
-      "lstm": 60.0,
-      "regime": 53.0
-    },
-    "AVGO": {
-      "ensemble": 68.0,
-      "gbt": 70.8,
-      "linreg": 67.5,
-      "logreg": 68.3,
-      "lstm": 65.5,
-      "regime": 54.2
-    },
-    "AZN.L": {
-      "ensemble": 66.1,
-      "gbt": 69.0,
-      "linreg": 70.0,
-      "logreg": 67.2,
-      "lstm": 58.3,
-      "regime": 52.8
-    },
-    "BA": {
-      "ensemble": 65.5,
+    "AMD": {
+      "ensemble": 65.0,
       "gbt": 67.8,
-      "linreg": 67.7,
-      "logreg": 68.2,
-      "lstm": 58.3,
+      "linreg": 66.3,
+      "logreg": 64.2,
+      "lstm": 61.5,
       "regime": 50.8
     },
-    "BAC": {
-      "ensemble": 66.9,
-      "gbt": 70.7,
-      "linreg": 70.2,
-      "logreg": 65.5,
-      "lstm": 61.3,
-      "regime": 53.5
+    "AMZN": {
+      "ensemble": 64.5,
+      "gbt": 69.7,
+      "linreg": 64.7,
+      "logreg": 63.7,
+      "lstm": 60.0,
+      "regime": 54.2
     },
-    "BP.L": {
-      "ensemble": 68.3,
-      "gbt": 69.8,
-      "linreg": 70.8,
-      "logreg": 69.2,
-      "lstm": 63.2,
-      "regime": 54.5
+    "ARM": {
+      "ensemble": 61.1,
+      "gbt": 67.6,
+      "linreg": 60.6,
+      "logreg": 57.9,
+      "lstm": 58.2,
+      "regime": 53.0
     },
-    "CAT": {
-      "ensemble": 69.5,
-      "gbt": 71.5,
-      "linreg": 71.2,
-      "logreg": 68.8,
-      "lstm": 66.5,
-      "regime": 55.2
-    },
-    "COP": {
-      "ensemble": 66.7,
-      "gbt": 70.8,
-      "linreg": 68.0,
-      "logreg": 68.3,
-      "lstm": 59.8,
-      "regime": 49.3
-    },
-    "COST": {
-      "ensemble": 66.0,
-      "gbt": 69.2,
-      "linreg": 68.5,
-      "logreg": 65.5,
-      "lstm": 60.8,
-      "regime": 52.0
-    },
-    "CPER": {
-      "ensemble": 65.4,
-      "gbt": 68.7,
-      "linreg": 68.3,
-      "logreg": 67.5,
-      "lstm": 57.0,
-      "regime": 55.2
-    },
-    "CRM": {
+    "AUDUSD=X": {
       "ensemble": 68.2,
       "gbt": 70.5,
-      "linreg": 70.7,
-      "logreg": 68.8,
-      "lstm": 62.7,
-      "regime": 51.8
+      "linreg": 71.9,
+      "logreg": 69.8,
+      "lstm": 60.5,
+      "regime": 52.7
     },
-    "CVX": {
-      "ensemble": 67.7,
-      "gbt": 69.7,
-      "linreg": 70.2,
-      "logreg": 68.5,
-      "lstm": 62.5,
+    "AVGO": {
+      "ensemble": 67.4,
+      "gbt": 71.5,
+      "linreg": 67.5,
+      "logreg": 68.2,
+      "lstm": 62.3,
+      "regime": 53.5
+    },
+    "AZN.L": {
+      "ensemble": 66.5,
+      "gbt": 69.8,
+      "linreg": 68.3,
+      "logreg": 67.7,
+      "lstm": 60.3,
+      "regime": 53.3
+    },
+    "BA": {
+      "ensemble": 65.6,
+      "gbt": 67.0,
+      "linreg": 66.7,
+      "logreg": 66.3,
+      "lstm": 62.3,
+      "regime": 49.5
+    },
+    "BAC": {
+      "ensemble": 67.0,
+      "gbt": 70.0,
+      "linreg": 69.0,
+      "logreg": 66.7,
+      "lstm": 62.3,
       "regime": 54.3
     },
-    "DE": {
-      "ensemble": 65.8,
-      "gbt": 67.3,
-      "linreg": 67.8,
-      "logreg": 66.3,
+    "BARC.L": {
+      "ensemble": 68.3,
+      "gbt": 68.8,
+      "linreg": 71.2,
+      "logreg": 71.0,
+      "lstm": 62.0,
+      "regime": 57.5
+    },
+    "BP.L": {
+      "ensemble": 67.7,
+      "gbt": 70.7,
+      "linreg": 69.8,
+      "logreg": 67.2,
+      "lstm": 63.2,
+      "regime": 55.5
+    },
+    "BT-A.L": {
+      "ensemble": 68.8,
+      "gbt": 71.3,
+      "linreg": 70.2,
+      "logreg": 69.5,
+      "lstm": 64.3,
+      "regime": 55.0
+    },
+    "CAT": {
+      "ensemble": 67.6,
+      "gbt": 71.5,
+      "linreg": 70.2,
+      "logreg": 67.7,
+      "lstm": 61.3,
+      "regime": 54.7
+    },
+    "CL=F": {
+      "ensemble": 67.6,
+      "gbt": 70.8,
+      "linreg": 69.8,
+      "logreg": 68.3,
       "lstm": 61.5,
-      "regime": 49.7
+      "regime": 51.7
+    },
+    "COIN": {
+      "ensemble": 65.5,
+      "gbt": 71.0,
+      "linreg": 66.4,
+      "logreg": 65.1,
+      "lstm": 59.6,
+      "regime": 46.2
+    },
+    "COP": {
+      "ensemble": 67.7,
+      "gbt": 71.2,
+      "linreg": 67.2,
+      "logreg": 67.5,
+      "lstm": 65.0,
+      "regime": 49.5
+    },
+    "COST": {
+      "ensemble": 65.5,
+      "gbt": 68.5,
+      "linreg": 67.3,
+      "logreg": 65.0,
+      "lstm": 61.3,
+      "regime": 50.8
+    },
+    "CPER": {
+      "ensemble": 65.8,
+      "gbt": 69.3,
+      "linreg": 67.5,
+      "logreg": 67.0,
+      "lstm": 59.5,
+      "regime": 54.8
+    },
+    "CPG.L": {
+      "ensemble": 66.4,
+      "gbt": 70.5,
+      "linreg": 68.7,
+      "logreg": 66.8,
+      "lstm": 59.5,
+      "regime": 51.0
+    },
+    "CRM": {
+      "ensemble": 67.8,
+      "gbt": 69.5,
+      "linreg": 69.8,
+      "logreg": 68.8,
+      "lstm": 63.0,
+      "regime": 53.0
+    },
+    "CVX": {
+      "ensemble": 66.3,
+      "gbt": 69.7,
+      "linreg": 67.7,
+      "logreg": 66.5,
+      "lstm": 61.3,
+      "regime": 55.5
+    },
+    "DE": {
+      "ensemble": 65.5,
+      "gbt": 67.3,
+      "linreg": 66.2,
+      "logreg": 67.0,
+      "lstm": 61.5,
+      "regime": 49.0
+    },
+    "DGE.L": {
+      "ensemble": 67.4,
+      "gbt": 71.0,
+      "linreg": 69.0,
+      "logreg": 67.5,
+      "lstm": 62.0,
+      "regime": 49.3
     },
     "DIA": {
-      "ensemble": 67.0,
-      "gbt": 69.0,
-      "linreg": 67.7,
-      "logreg": 67.5,
-      "lstm": 63.7,
-      "regime": 53.8
+      "ensemble": 66.6,
+      "gbt": 68.2,
+      "linreg": 67.3,
+      "logreg": 66.3,
+      "lstm": 64.5,
+      "regime": 54.7
     },
     "EMR": {
-      "ensemble": 67.4,
-      "gbt": 70.0,
-      "linreg": 70.8,
-      "logreg": 69.5,
-      "lstm": 59.3,
+      "ensemble": 67.3,
+      "gbt": 70.3,
+      "linreg": 70.5,
+      "logreg": 67.2,
+      "lstm": 61.0,
       "regime": 54.0
     },
     "EURGBP=X": {
-      "ensemble": 64.3,
-      "gbt": 69.0,
-      "linreg": 64.8,
-      "logreg": 66.3,
-      "lstm": 57.0,
-      "regime": 52.0
+      "ensemble": 65.2,
+      "gbt": 68.4,
+      "linreg": 65.7,
+      "logreg": 66.5,
+      "lstm": 60.2,
+      "regime": 51.3
     },
     "EURUSD=X": {
-      "ensemble": 68.6,
-      "gbt": 72.0,
-      "linreg": 70.2,
-      "logreg": 71.2,
-      "lstm": 61.3,
-      "regime": 50.3
+      "ensemble": 68.5,
+      "gbt": 71.1,
+      "linreg": 73.0,
+      "logreg": 70.3,
+      "lstm": 59.5,
+      "regime": 48.6
     },
     "GBPUSD=X": {
-      "ensemble": 70.4,
-      "gbt": 74.2,
-      "linreg": 72.0,
-      "logreg": 71.0,
-      "lstm": 64.5,
-      "regime": 53.7
+      "ensemble": 71.1,
+      "gbt": 74.3,
+      "linreg": 73.0,
+      "logreg": 71.6,
+      "lstm": 65.5,
+      "regime": 52.5
     },
     "GD": {
-      "ensemble": 63.4,
-      "gbt": 66.5,
-      "linreg": 64.8,
-      "logreg": 64.0,
-      "lstm": 58.3,
-      "regime": 53.3
+      "ensemble": 62.9,
+      "gbt": 65.0,
+      "linreg": 64.3,
+      "logreg": 63.0,
+      "lstm": 59.3,
+      "regime": 52.7
     },
     "GE": {
-      "ensemble": 63.7,
-      "gbt": 66.0,
-      "linreg": 64.8,
-      "logreg": 64.7,
-      "lstm": 59.3,
-      "regime": 56.8
+      "ensemble": 63.8,
+      "gbt": 66.2,
+      "linreg": 63.2,
+      "logreg": 66.8,
+      "lstm": 59.0,
+      "regime": 56.5
     },
     "GLD": {
-      "ensemble": 66.4,
-      "gbt": 68.0,
-      "linreg": 68.0,
-      "logreg": 67.0,
-      "lstm": 62.7,
-      "regime": 57.3
+      "ensemble": 66.8,
+      "gbt": 69.0,
+      "linreg": 69.0,
+      "logreg": 68.2,
+      "lstm": 61.0,
+      "regime": 57.0
     },
     "GOOGL": {
-      "ensemble": 67.2,
-      "gbt": 70.8,
-      "linreg": 72.5,
-      "logreg": 67.0,
-      "lstm": 58.5,
-      "regime": 55.7
+      "ensemble": 66.8,
+      "gbt": 70.7,
+      "linreg": 70.0,
+      "logreg": 65.0,
+      "lstm": 61.5,
+      "regime": 54.5
     },
     "GS": {
-      "ensemble": 65.8,
-      "gbt": 69.0,
-      "linreg": 67.2,
-      "logreg": 65.2,
-      "lstm": 61.8,
-      "regime": 56.0
+      "ensemble": 65.3,
+      "gbt": 68.2,
+      "linreg": 66.5,
+      "logreg": 64.3,
+      "lstm": 62.3,
+      "regime": 56.7
+    },
+    "GSK.L": {
+      "ensemble": 67.7,
+      "gbt": 69.8,
+      "linreg": 71.3,
+      "logreg": 69.0,
+      "lstm": 60.8,
+      "regime": 54.0
     },
     "HD": {
-      "ensemble": 68.6,
-      "gbt": 69.7,
-      "linreg": 70.0,
-      "logreg": 70.7,
-      "lstm": 64.0,
+      "ensemble": 68.7,
+      "gbt": 69.5,
+      "linreg": 71.7,
+      "logreg": 69.3,
+      "lstm": 64.3,
       "regime": 49.5
     },
     "HON": {
-      "ensemble": 66.0,
-      "gbt": 68.8,
-      "linreg": 69.7,
-      "logreg": 67.0,
-      "lstm": 58.5,
-      "regime": 51.7
-    },
-    "HSBA.L": {
       "ensemble": 66.8,
-      "gbt": 67.3,
-      "linreg": 69.7,
-      "logreg": 66.3,
-      "lstm": 63.7,
-      "regime": 56.8
-    },
-    "INTC": {
-      "ensemble": 64.7,
-      "gbt": 66.8,
-      "linreg": 67.7,
-      "logreg": 64.7,
-      "lstm": 59.8,
-      "regime": 50.0
-    },
-    "JNJ": {
-      "ensemble": 67.6,
-      "gbt": 71.2,
-      "linreg": 69.3,
-      "logreg": 69.5,
-      "lstm": 60.3,
-      "regime": 55.8
-    },
-    "JPM": {
-      "ensemble": 67.9,
-      "gbt": 70.0,
-      "linreg": 70.8,
-      "logreg": 67.8,
+      "gbt": 69.5,
+      "linreg": 69.2,
+      "logreg": 65.8,
       "lstm": 62.7,
-      "regime": 56.5
-    },
-    "LLY": {
-      "ensemble": 67.6,
-      "gbt": 71.8,
-      "linreg": 69.2,
-      "logreg": 69.5,
-      "lstm": 59.8,
-      "regime": 53.8
-    },
-    "LMT": {
-      "ensemble": 66.6,
-      "gbt": 69.8,
-      "linreg": 69.2,
-      "logreg": 67.8,
-      "lstm": 59.5,
-      "regime": 53.5
-    },
-    "MA": {
-      "ensemble": 66.5,
-      "gbt": 68.8,
-      "linreg": 69.2,
-      "logreg": 68.2,
-      "lstm": 60.0,
-      "regime": 54.0
-    },
-    "MCD": {
-      "ensemble": 66.0,
-      "gbt": 66.8,
-      "linreg": 65.3,
-      "logreg": 66.5,
-      "lstm": 65.5,
-      "regime": 52.7
-    },
-    "META": {
-      "ensemble": 64.4,
-      "gbt": 67.0,
-      "linreg": 66.7,
-      "logreg": 64.3,
-      "lstm": 59.8,
-      "regime": 53.0
-    },
-    "MMM": {
-      "ensemble": 66.2,
-      "gbt": 70.3,
-      "linreg": 69.2,
-      "logreg": 65.2,
-      "lstm": 60.0,
-      "regime": 56.3
-    },
-    "MRNA": {
-      "ensemble": 69.0,
-      "gbt": 72.5,
-      "linreg": 69.5,
-      "logreg": 70.7,
-      "lstm": 63.2,
-      "regime": 50.8
-    },
-    "MSFT": {
-      "ensemble": 66.6,
-      "gbt": 69.3,
-      "linreg": 69.7,
-      "logreg": 68.3,
-      "lstm": 59.0,
-      "regime": 52.5
-    },
-    "NFLX": {
-      "ensemble": 67.8,
-      "gbt": 72.2,
-      "linreg": 69.7,
-      "logreg": 67.5,
-      "lstm": 61.8,
       "regime": 52.0
     },
-    "NKE": {
-      "ensemble": 66.8,
-      "gbt": 72.2,
-      "linreg": 67.2,
-      "logreg": 66.8,
-      "lstm": 61.0,
-      "regime": 48.3
-    },
-    "NOC": {
-      "ensemble": 66.6,
-      "gbt": 70.3,
-      "linreg": 68.5,
-      "logreg": 66.2,
-      "lstm": 61.5,
-      "regime": 51.3
-    },
-    "NVDA": {
-      "ensemble": 66.7,
-      "gbt": 69.3,
-      "linreg": 67.3,
-      "logreg": 68.2,
-      "lstm": 62.0,
-      "regime": 55.8
-    },
-    "NZDUSD=X": {
-      "ensemble": 68.9,
-      "gbt": 69.8,
-      "linreg": 69.5,
-      "logreg": 70.7,
-      "lstm": 65.5,
-      "regime": 51.7
-    },
-    "PFE": {
-      "ensemble": 65.6,
+    "HSBA.L": {
+      "ensemble": 64.9,
       "gbt": 67.7,
-      "linreg": 67.3,
-      "logreg": 68.2,
-      "lstm": 59.3,
+      "linreg": 69.5,
+      "logreg": 64.5,
+      "lstm": 57.8,
+      "regime": 56.7
+    },
+    "INTC": {
+      "ensemble": 64.9,
+      "gbt": 67.0,
+      "linreg": 66.5,
+      "logreg": 64.8,
+      "lstm": 61.3,
+      "regime": 50.0
+    },
+    "ISF.L": {
+      "ensemble": 67.5,
+      "gbt": 73.5,
+      "linreg": 69.2,
+      "logreg": 68.7,
+      "lstm": 58.5,
+      "regime": 53.7
+    },
+    "JNJ": {
+      "ensemble": 65.9,
+      "gbt": 70.2,
+      "linreg": 68.3,
+      "logreg": 67.7,
+      "lstm": 57.5,
+      "regime": 55.3
+    },
+    "JPM": {
+      "ensemble": 66.8,
+      "gbt": 69.5,
+      "linreg": 68.3,
+      "logreg": 66.7,
+      "lstm": 62.7,
+      "regime": 56.7
+    },
+    "LLOY.L": {
+      "ensemble": 67.6,
+      "gbt": 70.8,
+      "linreg": 71.7,
+      "logreg": 67.7,
+      "lstm": 60.3,
+      "regime": 56.0
+    },
+    "LLY": {
+      "ensemble": 67.5,
+      "gbt": 71.0,
+      "linreg": 68.8,
+      "logreg": 69.2,
+      "lstm": 61.0,
+      "regime": 53.7
+    },
+    "LMT": {
+      "ensemble": 66.9,
+      "gbt": 70.7,
+      "linreg": 69.5,
+      "logreg": 65.7,
+      "lstm": 61.8,
+      "regime": 53.7
+    },
+    "MA": {
+      "ensemble": 66.1,
+      "gbt": 68.3,
+      "linreg": 68.5,
+      "logreg": 65.7,
+      "lstm": 62.0,
+      "regime": 55.3
+    },
+    "MCD": {
+      "ensemble": 65.9,
+      "gbt": 68.8,
+      "linreg": 66.7,
+      "logreg": 64.7,
+      "lstm": 63.5,
+      "regime": 52.8
+    },
+    "META": {
+      "ensemble": 64.2,
+      "gbt": 67.3,
+      "linreg": 64.3,
+      "logreg": 64.7,
+      "lstm": 60.5,
+      "regime": 51.5
+    },
+    "MMM": {
+      "ensemble": 66.3,
+      "gbt": 71.3,
+      "linreg": 68.8,
+      "logreg": 64.8,
+      "lstm": 60.0,
+      "regime": 58.5
+    },
+    "MRNA": {
+      "ensemble": 68.2,
+      "gbt": 72.8,
+      "linreg": 69.3,
+      "logreg": 69.3,
+      "lstm": 61.3,
       "regime": 50.3
     },
-    "QCOM": {
-      "ensemble": 67.8,
-      "gbt": 71.8,
-      "linreg": 70.3,
+    "MSFT": {
+      "ensemble": 67.2,
+      "gbt": 68.5,
+      "linreg": 71.0,
       "logreg": 68.2,
-      "lstm": 61.0,
-      "regime": 53.0
+      "lstm": 61.3,
+      "regime": 51.7
     },
-    "QQQ": {
-      "ensemble": 66.7,
-      "gbt": 70.2,
-      "linreg": 69.0,
-      "logreg": 67.5,
-      "lstm": 60.3,
-      "regime": 57.0
+    "NFLX": {
+      "ensemble": 66.8,
+      "gbt": 72.3,
+      "linreg": 69.3,
+      "logreg": 65.3,
+      "lstm": 60.0,
+      "regime": 51.5
     },
-    "RR.L": {
-      "ensemble": 64.1,
-      "gbt": 69.3,
-      "linreg": 65.7,
-      "logreg": 65.8,
-      "lstm": 55.8,
+    "NKE": {
+      "ensemble": 67.1,
+      "gbt": 72.3,
+      "linreg": 67.5,
+      "logreg": 66.0,
+      "lstm": 62.7,
+      "regime": 48.8
+    },
+    "NOC": {
+      "ensemble": 66.4,
+      "gbt": 70.8,
+      "linreg": 69.2,
+      "logreg": 64.8,
+      "lstm": 60.8,
+      "regime": 52.2
+    },
+    "NVDA": {
+      "ensemble": 66.1,
+      "gbt": 69.0,
+      "linreg": 65.8,
+      "logreg": 67.3,
+      "lstm": 62.3,
       "regime": 55.5
     },
-    "RTX": {
-      "ensemble": 65.7,
-      "gbt": 67.7,
-      "linreg": 69.5,
-      "logreg": 65.5,
-      "lstm": 60.0,
-      "regime": 54.3
+    "NWG.L": {
+      "ensemble": 70.5,
+      "gbt": 72.7,
+      "linreg": 72.0,
+      "logreg": 73.7,
+      "lstm": 63.5,
+      "regime": 57.8
     },
-    "SHEL.L": {
+    "NZDUSD=X": {
+      "ensemble": 67.8,
+      "gbt": 70.5,
+      "linreg": 70.6,
+      "logreg": 68.9,
+      "lstm": 61.2,
+      "regime": 51.3
+    },
+    "PFE": {
+      "ensemble": 65.1,
+      "gbt": 67.8,
+      "linreg": 66.5,
+      "logreg": 66.3,
+      "lstm": 59.8,
+      "regime": 50.2
+    },
+    "PLTR": {
+      "ensemble": 61.1,
+      "gbt": 68.6,
+      "linreg": 61.2,
+      "logreg": 62.1,
+      "lstm": 52.5,
+      "regime": 56.4
+    },
+    "QCOM": {
+      "ensemble": 67.4,
+      "gbt": 71.5,
+      "linreg": 70.3,
+      "logreg": 68.0,
+      "lstm": 59.8,
+      "regime": 52.8
+    },
+    "QQQ": {
       "ensemble": 67.4,
       "gbt": 69.3,
-      "linreg": 69.7,
-      "logreg": 69.5,
-      "lstm": 61.0,
-      "regime": 52.3
+      "linreg": 70.2,
+      "logreg": 68.5,
+      "lstm": 61.5,
+      "regime": 55.7
+    },
+    "REL.L": {
+      "ensemble": 64.2,
+      "gbt": 67.7,
+      "linreg": 64.8,
+      "logreg": 65.2,
+      "lstm": 59.0,
+      "regime": 52.2
+    },
+    "RR.L": {
+      "ensemble": 63.5,
+      "gbt": 68.7,
+      "linreg": 64.7,
+      "logreg": 64.7,
+      "lstm": 56.0,
+      "regime": 53.8
+    },
+    "RTX": {
+      "ensemble": 65.4,
+      "gbt": 67.2,
+      "linreg": 71.0,
+      "logreg": 65.5,
+      "lstm": 58.0,
+      "regime": 54.0
+    },
+    "SHEL.L": {
+      "ensemble": 68.5,
+      "gbt": 68.8,
+      "linreg": 69.3,
+      "logreg": 70.5,
+      "lstm": 65.3,
+      "regime": 52.0
+    },
+    "SHOP": {
+      "ensemble": 65.3,
+      "gbt": 68.5,
+      "linreg": 66.2,
+      "logreg": 66.7,
+      "lstm": 59.8,
+      "regime": 54.0
     },
     "SLV": {
-      "ensemble": 65.2,
-      "gbt": 66.2,
-      "linreg": 65.3,
-      "logreg": 66.8,
-      "lstm": 62.5,
-      "regime": 54.8
+      "ensemble": 63.4,
+      "gbt": 66.3,
+      "linreg": 64.3,
+      "logreg": 65.7,
+      "lstm": 57.3,
+      "regime": 55.2
     },
     "SPY": {
-      "ensemble": 68.8,
+      "ensemble": 67.3,
       "gbt": 71.2,
-      "linreg": 70.5,
-      "logreg": 68.7,
-      "lstm": 64.8,
-      "regime": 57.3
+      "linreg": 70.7,
+      "logreg": 66.7,
+      "lstm": 60.8,
+      "regime": 56.2
     },
     "TGT": {
-      "ensemble": 66.3,
-      "gbt": 70.0,
-      "linreg": 69.8,
-      "logreg": 65.8,
-      "lstm": 59.5,
-      "regime": 51.3
+      "ensemble": 66.6,
+      "gbt": 69.8,
+      "linreg": 69.3,
+      "logreg": 65.5,
+      "lstm": 61.8,
+      "regime": 51.7
     },
     "TSLA": {
       "ensemble": 67.9,
-      "gbt": 68.3,
-      "linreg": 71.0,
-      "logreg": 69.7,
-      "lstm": 62.5,
-      "regime": 51.0
+      "gbt": 68.7,
+      "linreg": 71.7,
+      "logreg": 69.0,
+      "lstm": 62.3,
+      "regime": 51.5
     },
     "TSM": {
-      "ensemble": 65.5,
-      "gbt": 68.0,
-      "linreg": 67.8,
-      "logreg": 67.8,
-      "lstm": 58.3,
-      "regime": 53.7
-    },
-    "UNH": {
-      "ensemble": 64.7,
-      "gbt": 66.0,
-      "linreg": 66.7,
-      "logreg": 65.3,
-      "lstm": 60.8,
-      "regime": 53.0
-    },
-    "USDCAD=X": {
-      "ensemble": 66.8,
-      "gbt": 68.3,
-      "linreg": 69.7,
-      "logreg": 68.0,
-      "lstm": 61.0,
-      "regime": 53.0
-    },
-    "USDCHF=X": {
-      "ensemble": 68.2,
-      "gbt": 71.2,
-      "linreg": 70.5,
-      "logreg": 70.2,
-      "lstm": 61.0,
-      "regime": 50.3
-    },
-    "USDHKD=X": {
-      "ensemble": 67.9,
-      "gbt": 72.0,
-      "linreg": 70.0,
-      "logreg": 68.3,
-      "lstm": 61.3,
-      "regime": 53.0
-    },
-    "USDIDR=X": {
-      "ensemble": 69.3,
-      "gbt": 73.2,
-      "linreg": 74.7,
-      "logreg": 72.5,
-      "lstm": 57.0,
-      "regime": 54.0
-    },
-    "USDINR=X": {
-      "ensemble": 66.4,
-      "gbt": 70.3,
-      "linreg": 69.8,
-      "logreg": 68.8,
-      "lstm": 56.8,
+      "ensemble": 66.2,
+      "gbt": 68.2,
+      "linreg": 68.3,
+      "logreg": 66.3,
+      "lstm": 62.0,
       "regime": 53.2
     },
-    "USDJPY=X": {
-      "ensemble": 66.3,
-      "gbt": 69.5,
-      "linreg": 68.0,
-      "logreg": 67.0,
-      "lstm": 60.8,
-      "regime": 52.8
+    "UBER": {
+      "ensemble": 64.1,
+      "gbt": 68.9,
+      "linreg": 65.3,
+      "logreg": 63.3,
+      "lstm": 58.9,
+      "regime": 50.5
     },
-    "USDKRW=X": {
-      "ensemble": 66.9,
-      "gbt": 71.7,
-      "linreg": 70.3,
-      "logreg": 67.0,
-      "lstm": 58.8,
-      "regime": 50.7
-    },
-    "USDMXN=X": {
+    "ULVR.L": {
       "ensemble": 67.3,
       "gbt": 71.7,
-      "linreg": 68.5,
+      "linreg": 73.0,
       "logreg": 67.7,
-      "lstm": 61.5,
-      "regime": 47.2
+      "lstm": 56.8,
+      "regime": 50.0
+    },
+    "UNH": {
+      "ensemble": 62.7,
+      "gbt": 66.7,
+      "linreg": 65.7,
+      "logreg": 63.8,
+      "lstm": 54.5,
+      "regime": 52.2
+    },
+    "USDCAD=X": {
+      "ensemble": 67.2,
+      "gbt": 69.4,
+      "linreg": 70.2,
+      "logreg": 67.8,
+      "lstm": 61.7,
+      "regime": 53.7
+    },
+    "USDCHF=X": {
+      "ensemble": 67.1,
+      "gbt": 71.3,
+      "linreg": 70.5,
+      "logreg": 67.1,
+      "lstm": 59.5,
+      "regime": 51.0
+    },
+    "USDCNH=X": {
+      "ensemble": 60.8,
+      "gbt": 62.0,
+      "linreg": 63.3,
+      "logreg": 56.7,
+      "lstm": 61.0,
+      "regime": 59.3
+    },
+    "USDHKD=X": {
+      "ensemble": 67.0,
+      "gbt": 69.5,
+      "linreg": 68.7,
+      "logreg": 66.5,
+      "lstm": 63.3,
+      "regime": 52.7
+    },
+    "USDIDR=X": {
+      "ensemble": 68.5,
+      "gbt": 73.2,
+      "linreg": 73.2,
+      "logreg": 71.3,
+      "lstm": 56.4,
+      "regime": 53.8
+    },
+    "USDINR=X": {
+      "ensemble": 66.7,
+      "gbt": 69.4,
+      "linreg": 69.4,
+      "logreg": 68.9,
+      "lstm": 59.0,
+      "regime": 54.8
+    },
+    "USDJPY=X": {
+      "ensemble": 67.4,
+      "gbt": 70.2,
+      "linreg": 69.5,
+      "logreg": 67.5,
+      "lstm": 62.4,
+      "regime": 53.3
+    },
+    "USDKRW=X": {
+      "ensemble": 66.8,
+      "gbt": 71.1,
+      "linreg": 70.8,
+      "logreg": 66.3,
+      "lstm": 59.0,
+      "regime": 50.6
+    },
+    "USDMXN=X": {
+      "ensemble": 65.8,
+      "gbt": 72.2,
+      "linreg": 68.4,
+      "logreg": 66.5,
+      "lstm": 56.2,
+      "regime": 47.5
     },
     "USDMYR=X": {
-      "ensemble": 67.0,
-      "gbt": 69.7,
-      "linreg": 67.3,
-      "logreg": 66.3,
-      "lstm": 64.8,
+      "ensemble": 66.1,
+      "gbt": 68.7,
+      "linreg": 67.0,
+      "logreg": 64.9,
+      "lstm": 63.6,
       "regime": 45.2
     },
     "USDPHP=X": {
-      "ensemble": 66.5,
+      "ensemble": 67.6,
       "gbt": 70.5,
-      "linreg": 70.3,
-      "logreg": 69.2,
-      "lstm": 56.0,
-      "regime": 50.8
+      "linreg": 71.1,
+      "logreg": 70.2,
+      "lstm": 58.6,
+      "regime": 51.6
     },
     "USDSGD=X": {
-      "ensemble": 68.3,
-      "gbt": 72.2,
-      "linreg": 73.7,
-      "logreg": 70.5,
-      "lstm": 56.8,
-      "regime": 48.0
+      "ensemble": 67.0,
+      "gbt": 71.4,
+      "linreg": 70.8,
+      "logreg": 68.3,
+      "lstm": 57.6,
+      "regime": 49.8
     },
     "USDTHB=X": {
-      "ensemble": 66.3,
-      "gbt": 69.8,
-      "linreg": 70.0,
-      "logreg": 66.5,
-      "lstm": 59.0,
-      "regime": 47.3
+      "ensemble": 65.7,
+      "gbt": 69.7,
+      "linreg": 70.8,
+      "logreg": 67.0,
+      "lstm": 55.5,
+      "regime": 47.8
     },
     "USDTWD=X": {
-      "ensemble": 66.8,
-      "gbt": 70.8,
-      "linreg": 70.3,
-      "logreg": 68.2,
-      "lstm": 57.8,
+      "ensemble": 66.6,
+      "gbt": 70.2,
+      "linreg": 69.7,
+      "logreg": 66.8,
+      "lstm": 59.8,
       "regime": 54.0
     },
     "USO": {
-      "ensemble": 66.6,
-      "gbt": 70.5,
-      "linreg": 71.0,
-      "logreg": 69.0,
-      "lstm": 55.8,
+      "ensemble": 67.1,
+      "gbt": 70.2,
+      "linreg": 69.5,
+      "logreg": 67.5,
+      "lstm": 61.3,
       "regime": 51.2
     },
     "V": {
-      "ensemble": 66.4,
-      "gbt": 68.7,
-      "linreg": 68.3,
-      "logreg": 66.7,
+      "ensemble": 67.1,
+      "gbt": 69.0,
+      "linreg": 68.8,
+      "logreg": 66.2,
+      "lstm": 64.5,
+      "regime": 55.7
+    },
+    "VOD.L": {
+      "ensemble": 68.7,
+      "gbt": 71.7,
+      "linreg": 71.5,
+      "logreg": 69.5,
       "lstm": 62.0,
-      "regime": 55.8
+      "regime": 53.5
     },
     "WFC": {
-      "ensemble": 66.0,
-      "gbt": 70.0,
-      "linreg": 68.3,
-      "logreg": 65.3,
-      "lstm": 60.5,
-      "regime": 52.7
+      "ensemble": 66.4,
+      "gbt": 69.7,
+      "linreg": 68.7,
+      "logreg": 65.2,
+      "lstm": 62.0,
+      "regime": 53.2
     },
     "WMT": {
-      "ensemble": 68.8,
-      "gbt": 68.7,
-      "linreg": 71.2,
-      "logreg": 70.0,
+      "ensemble": 68.2,
+      "gbt": 69.5,
+      "linreg": 70.0,
+      "logreg": 68.0,
       "lstm": 65.3,
-      "regime": 54.8
+      "regime": 55.2
     },
     "XLE": {
-      "ensemble": 66.1,
-      "gbt": 69.8,
-      "linreg": 69.3,
-      "logreg": 66.3,
+      "ensemble": 65.6,
+      "gbt": 69.7,
+      "linreg": 67.7,
+      "logreg": 66.5,
       "lstm": 58.8,
-      "regime": 55.3
+      "regime": 55.0
     },
     "XLF": {
       "ensemble": 66.4,
-      "gbt": 68.2,
-      "linreg": 69.5,
-      "logreg": 68.8,
-      "lstm": 59.3,
-      "regime": 54.0
-    },
-    "XLI": {
-      "ensemble": 66.7,
-      "gbt": 70.0,
-      "linreg": 67.0,
-      "logreg": 66.3,
-      "lstm": 63.5,
+      "gbt": 68.8,
+      "linreg": 68.3,
+      "logreg": 67.7,
+      "lstm": 60.8,
       "regime": 54.7
     },
+    "XLI": {
+      "ensemble": 65.8,
+      "gbt": 68.5,
+      "linreg": 67.5,
+      "logreg": 65.2,
+      "lstm": 62.0,
+      "regime": 54.0
+    },
     "XLK": {
-      "ensemble": 67.0,
-      "gbt": 69.7,
-      "linreg": 70.2,
+      "ensemble": 65.6,
+      "gbt": 69.0,
+      "linreg": 69.0,
       "logreg": 67.5,
-      "lstm": 60.5,
+      "lstm": 57.0,
       "regime": 59.0
     },
     "XLP": {
-      "ensemble": 67.9,
-      "gbt": 70.5,
-      "linreg": 68.8,
-      "logreg": 68.7,
-      "lstm": 63.7,
-      "regime": 52.0
+      "ensemble": 68.6,
+      "gbt": 71.2,
+      "linreg": 69.0,
+      "logreg": 68.8,
+      "lstm": 65.3,
+      "regime": 51.7
     },
     "XLRE": {
-      "ensemble": 66.9,
-      "gbt": 69.8,
-      "linreg": 68.2,
-      "logreg": 69.0,
-      "lstm": 60.8,
+      "ensemble": 67.4,
+      "gbt": 68.8,
+      "linreg": 68.5,
+      "logreg": 69.5,
+      "lstm": 62.7,
       "regime": 52.3
     },
     "XLU": {
-      "ensemble": 68.6,
-      "gbt": 70.2,
-      "linreg": 70.0,
-      "logreg": 69.3,
-      "lstm": 64.8,
-      "regime": 55.5
+      "ensemble": 68.0,
+      "gbt": 71.5,
+      "linreg": 68.3,
+      "logreg": 69.0,
+      "lstm": 63.0,
+      "regime": 56.5
     },
     "XLV": {
-      "ensemble": 68.9,
-      "gbt": 73.0,
-      "linreg": 70.8,
-      "logreg": 70.3,
-      "lstm": 61.3,
-      "regime": 51.8
+      "ensemble": 69.1,
+      "gbt": 72.0,
+      "linreg": 71.2,
+      "logreg": 69.3,
+      "lstm": 63.7,
+      "regime": 50.8
     },
     "XOM": {
-      "ensemble": 66.3,
-      "gbt": 70.0,
-      "linreg": 68.0,
-      "logreg": 68.8,
-      "lstm": 58.5,
+      "ensemble": 66.4,
+      "gbt": 68.5,
+      "linreg": 68.2,
+      "logreg": 67.2,
+      "lstm": 61.8,
       "regime": 51.8
     },
+    "avalanche-2": {
+      "ensemble": 48.5,
+      "gbt": 48.7,
+      "linreg": 48.6,
+      "logreg": 48.3,
+      "lstm": 51.0,
+      "regime": 47.6
+    },
+    "binancecoin": {
+      "ensemble": 50.6,
+      "gbt": 51.6,
+      "linreg": 50.7,
+      "logreg": 49.6,
+      "lstm": 49.4,
+      "regime": 53.1
+    },
     "bitcoin": {
-      "ensemble": 45.8,
-      "gbt": 45.3,
-      "linreg": 45.0,
-      "logreg": 47.1,
+      "ensemble": 48.3,
+      "gbt": 45.5,
+      "linreg": 48.9,
+      "logreg": 50.5,
       "lstm": 51.6,
-      "regime": 47.9
+      "regime": 47.6
     },
     "cardano": {
-      "ensemble": 48.2,
-      "gbt": 47.6,
-      "linreg": 46.6,
-      "logreg": 50.3,
-      "lstm": 48.4,
-      "regime": 46.6
+      "ensemble": 51.9,
+      "gbt": 48.9,
+      "linreg": 52.9,
+      "logreg": 53.9,
+      "lstm": 45.3,
+      "regime": 45.8
+    },
+    "chainlink": {
+      "ensemble": 49.7,
+      "gbt": 51.0,
+      "linreg": 49.1,
+      "logreg": 49.0,
+      "lstm": 50.8,
+      "regime": 48.7
     },
     "dogecoin": {
-      "ensemble": 49.9,
-      "gbt": 49.2,
-      "linreg": 48.7,
-      "logreg": 51.8,
-      "lstm": 52.1,
-      "regime": 44.2
+      "ensemble": 49.4,
+      "gbt": 52.6,
+      "linreg": 47.9,
+      "logreg": 47.6,
+      "lstm": 50.0,
+      "regime": 43.2
     },
     "ethereum": {
-      "ensemble": 49.6,
-      "gbt": 51.6,
-      "linreg": 49.2,
-      "logreg": 48.2,
-      "lstm": 48.4,
-      "regime": 49.7
+      "ensemble": 50.7,
+      "gbt": 51.2,
+      "linreg": 51.9,
+      "logreg": 49.1,
+      "lstm": 52.4,
+      "regime": 49.9
+    },
+    "matic-network": {
+      "ensemble": 51.5,
+      "gbt": 53.1,
+      "linreg": 49.8,
+      "logreg": 51.8,
+      "lstm": 51.4,
+      "regime": 49.0
+    },
+    "polkadot": {
+      "ensemble": 50.5,
+      "gbt": 52.9,
+      "linreg": 48.4,
+      "logreg": 50.1,
+      "lstm": 49.8,
+      "regime": 48.8
     },
     "ripple": {
-      "ensemble": 46.9,
-      "gbt": 44.7,
-      "linreg": 46.1,
-      "logreg": 50.0,
-      "lstm": 51.1,
-      "regime": 49.5
+      "ensemble": 46.4,
+      "gbt": 44.2,
+      "linreg": 46.6,
+      "logreg": 48.4,
+      "lstm": 49.5,
+      "regime": 47.9
     },
     "solana": {
-      "ensemble": 47.0,
-      "gbt": 48.2,
-      "linreg": 47.9,
-      "logreg": 45.0,
-      "lstm": 50.5,
-      "regime": 49.5
+      "ensemble": 50.0,
+      "gbt": 48.9,
+      "linreg": 50.3,
+      "logreg": 50.8,
+      "lstm": 44.7,
+      "regime": 46.8
     },
     "tron": {
-      "ensemble": 52.4,
-      "gbt": 51.3,
-      "linreg": 52.4,
-      "logreg": 53.4,
-      "lstm": 48.9,
-      "regime": 47.1
+      "ensemble": 50.5,
+      "gbt": 52.4,
+      "linreg": 50.0,
+      "logreg": 49.2,
+      "lstm": 48.4,
+      "regime": 50.5
     }
   },
-  "date": "2026-03-20",
-  "features": 118,
+  "date": "2026-03-29",
+  "features": 122,
   "models": [
     "LinReg",
     "LogReg",
