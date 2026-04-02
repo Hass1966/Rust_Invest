@@ -71,9 +71,10 @@ export default function About() {
       <Section title="How Signals Are Generated">
         <div className="space-y-4 text-sm text-gray-400 leading-relaxed">
           <Step n={1} title="Feature Extraction">
-            104 features are computed from the latest market data — price technicals (RSI, MACD, Bollinger Bands, SMAs),
-            volume metrics, volatility measures, macro indicators (VIX, Treasury yields, sector ETFs),
-            and asset-class-specific features (crypto on-chain data, FX carry scores).
+            143 features are computed from the latest market data — price technicals (RSI, MACD, Bollinger Bands, SMAs),
+            volume metrics, volatility measures, macro indicators (VIX, Treasury yields, sector ETFs, BOE/ECB rates),
+            multi-horizon returns, cross-asset relative strength, calendar effects,
+            and asset-class-specific features (crypto on-chain data, FX carry scores, insider trading scores).
           </Step>
           <Step n={2} title="Model Forward Pass">
             All six models produce independent P(up) probabilities. Models with walk-forward
@@ -82,8 +83,9 @@ export default function About() {
           </Step>
           <Step n={3} title="Ensemble Combination">
             If a stacking meta-learner is available (trained on out-of-fold predictions),
-            it combines the six probabilities via logistic regression. Otherwise, an
-            accuracy-squared weighted average is used, with GBT receiving a 1.2x bonus.
+            it combines the six probabilities via logistic regression. Otherwise, inverse
+            validation log-loss weighting is used — models with better-calibrated probabilities
+            receive higher weight.
           </Step>
           <Step n={4} title="Signal Decision">
             The ensemble probability is compared against per-asset thresholds (e.g., TSLA needs
@@ -100,10 +102,10 @@ export default function About() {
       </Section>
 
       {/* Feature Engineering */}
-      <Section title="104 Active Features">
+      <Section title="137 Active Features">
         <p className="text-gray-400 text-sm mb-4">
-          119 features are computed in total; 15 identified as noise are pruned. The remaining
-          104 span 13 categories. Features are z-score normalized per training fold to prevent
+          148 features are computed in total; 11 identified as noise are pruned. The remaining
+          137 span 16 categories. Features are z-score normalized per training fold to prevent
           data leakage.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -201,7 +203,7 @@ export default function About() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
           <TechCard label="Data Sources" value="Yahoo Finance" detail="Stocks, FX, market indicators (7-year history)" />
           <TechCard label="Crypto Data" value="CoinGecko" detail="Top 15 coins, on-chain via LunarCrush" />
-          <TechCard label="Parallelism" value="Rayon" detail="GBT split search across 104 features" />
+          <TechCard label="Parallelism" value="Rayon" detail="GBT split search across 143 features" />
           <TechCard label="Scheduling" value="tokio cron" detail="Hourly signals with market-hours awareness" />
         </div>
       </Section>

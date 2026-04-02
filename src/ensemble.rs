@@ -107,6 +107,9 @@ pub struct WalkForwardResult {
     /// Stacking meta-learner weights (trained on out-of-fold predictions)
     /// Order: [linreg, logreg, gbt, lstm, gru, rf, bias]
     pub stacking_weights: Option<Vec<f64>>,
+    /// Per-model validation log-loss (lower = better calibrated)
+    /// Used for inverse-loss weighted ensemble voting
+    pub val_log_loss: Option<[f64; 3]>, // [linreg, logreg, gbt]
 }
 
 /// A single out-of-fold prediction from all models (for stacking)
@@ -158,6 +161,13 @@ pub fn stacking_predict(weights: &[f64], model_probs: &[f64; 6]) -> f64 {
         .map(|(p, w)| p * w).sum::<f64>() + weights[6]; // weights[6] = bias
     // Sigmoid
     (1.0 / (1.0 + (-logit).exp())).clamp(0.15, 0.85)
+}
+
+/// Compute binary cross-entropy (log-loss) for a single prediction
+pub fn log_loss_single(predicted: f64, actual_up: bool) -> f64 {
+    let p = predicted.clamp(1e-7, 1.0 - 1e-7);
+    let y = if actual_up { 1.0 } else { 0.0 };
+    -(y * p.ln() + (1.0 - y) * (1.0 - p).ln())
 }
 
 /// Compute recency weights: last ~126 samples (6 months of daily data) get 3x weight, older get 1x.
@@ -215,6 +225,12 @@ pub fn walk_forward_samples(
 
     // Collect out-of-fold predictions for stacking meta-learner
     let mut stacking_data: Vec<StackingSample> = Vec::new();
+
+    // Accumulate validation log-losses across folds for inverse-loss weighting
+    let mut total_lin_log_loss = 0.0_f64;
+    let mut total_log_log_loss = 0.0_f64;
+    let mut total_gbt_log_loss = 0.0_f64;
+    let mut total_val_samples = 0_usize;
 
     let mut start = 0;
     while start + train_window + test_window <= samples.len() {
@@ -281,6 +297,12 @@ pub fn walk_forward_samples(
             if (raw_lin > 0.0) == actual_up { fold_lin += 1; }
             if log.predict_direction(&s.features) == actual_up { fold_log += 1; }
             if gbt.predict_direction(&s.features) == actual_up { fold_gbt += 1; }
+
+            // Accumulate validation log-loss for inverse-loss weighting
+            total_lin_log_loss += log_loss_single(lin_prob, actual_up);
+            total_log_log_loss += log_loss_single(log_prob, actual_up);
+            total_gbt_log_loss += log_loss_single(gbt_prob_val, actual_up);
+            total_val_samples += 1;
 
             // Store for stacking (LSTM/GRU/RF probs filled later with 0.5 placeholder)
             stacking_data.push(StackingSample {
@@ -413,6 +435,23 @@ pub fn walk_forward_samples(
     // The meta-learner still learns the relative trust in pointwise models.
     let stacking_weights = train_stacking_meta(&stacking_data);
 
+    // Compute average validation log-loss per model for inverse-loss weighting
+    let val_log_loss = if total_val_samples > 0 {
+        let n = total_val_samples as f64;
+        let losses = [
+            (total_lin_log_loss / n).max(0.01),
+            (total_log_log_loss / n).max(0.01),
+            (total_gbt_log_loss / n).max(0.01),
+        ];
+        println!("    [Val LogLoss] lin={:.4} log={:.4} gbt={:.4}", losses[0], losses[1], losses[2]);
+        let inv_sum = 1.0 / losses[0] + 1.0 / losses[1] + 1.0 / losses[2];
+        println!("    [Inv-Loss Weights] lin={:.3} log={:.3} gbt={:.3}",
+            (1.0 / losses[0]) / inv_sum, (1.0 / losses[1]) / inv_sum, (1.0 / losses[2]) / inv_sum);
+        Some(losses)
+    } else {
+        None
+    };
+
     Some(WalkForwardResult {
         symbol: symbol.to_string(),
         linear_accuracy: linear_acc,
@@ -441,6 +480,7 @@ pub fn walk_forward_samples(
         has_gru,
         has_rf,
         stacking_weights,
+        val_log_loss,
     })
 }
 
@@ -501,6 +541,12 @@ fn walk_forward_samples_no_lstm(
     let mut last_gbt_prob = 0.5;
     let mut last_gbt_importance = Vec::new();
 
+    // Accumulate validation log-losses for inverse-loss weighting
+    let mut total_lin_log_loss = 0.0_f64;
+    let mut total_log_log_loss = 0.0_f64;
+    let mut total_gbt_log_loss = 0.0_f64;
+    let mut total_val_samples = 0_usize;
+
     let mut start = 0;
     while start + train_window + test_window <= samples.len() {
         let train_end = start + train_window;
@@ -554,9 +600,20 @@ fn walk_forward_samples_no_lstm(
 
         for s in test_data.iter() {
             let actual_up = s.label > 0.0;
-            if (lin.predict(&s.features) > 0.0) == actual_up { fold_lin += 1; }
+            let raw_lin = lin.predict(&s.features);
+            let lin_prob = (1.0 / (1.0 + (-raw_lin).exp())).clamp(0.05, 0.95);
+            let log_prob = log.predict_probability(&s.features).clamp(0.05, 0.95);
+            let gbt_prob = gbt.predict_proba(&s.features).clamp(0.05, 0.95);
+
+            if (raw_lin > 0.0) == actual_up { fold_lin += 1; }
             if log.predict_direction(&s.features) == actual_up { fold_log += 1; }
             if gbt.predict_direction(&s.features) == actual_up { fold_gbt += 1; }
+
+            // Accumulate validation log-loss
+            total_lin_log_loss += log_loss_single(lin_prob, actual_up);
+            total_log_log_loss += log_loss_single(log_prob, actual_up);
+            total_gbt_log_loss += log_loss_single(gbt_prob, actual_up);
+            total_val_samples += 1;
         }
 
         total_lin_correct += fold_lin;
@@ -596,6 +653,18 @@ fn walk_forward_samples_no_lstm(
     let logistic_recent = last_log_correct as f64 / last_fold_size.max(1) as f64 * 100.0;
     let gbt_recent = last_gbt_correct as f64 / last_fold_size.max(1) as f64 * 100.0;
 
+    // Compute average validation log-loss per model
+    let val_log_loss = if total_val_samples > 0 {
+        let n = total_val_samples as f64;
+        Some([
+            (total_lin_log_loss / n).max(0.01),
+            (total_log_log_loss / n).max(0.01),
+            (total_gbt_log_loss / n).max(0.01),
+        ])
+    } else {
+        None
+    };
+
     println!("    walk-forward: {} folds, {} test samples", n_folds, total_tested);
     println!("      LinReg: {:.1}% (recent: {:.1}%)", linear_acc, linear_recent);
     println!("      LogReg: {:.1}% (recent: {:.1}%)", logistic_acc, logistic_recent);
@@ -629,6 +698,7 @@ fn walk_forward_samples_no_lstm(
         has_gru: false,
         has_rf: false,
         stacking_weights: None,
+        val_log_loss,
     })
 }
 
@@ -814,14 +884,21 @@ pub fn ensemble_signal_with_override(
         ("NO EDGE".to_string(), false)
     };
 
-    // Accuracy-squared weighting, masked by ensemble override.
-    // GBT gets a 1.2x bonus: it is consistently the best-performing pointwise model
-    // across all asset classes (stocks ~70%, FX ~71%, vs ~69% for LinReg/LogReg).
-    // RegimeEnsemble is NOT included in ensemble voting — it scores 47-58% and would
-    // drag down the ensemble. It is trained separately for diagnostic reporting only.
-    let lin_weight = if ov.use_linreg { (wf.linear_recent / 100.0).powi(2) } else { 0.0 };
-    let log_weight = if ov.use_logreg { (wf.logistic_recent / 100.0).powi(2) } else { 0.0 };
-    let gbt_weight = if ov.use_gbt { (wf.gbt_recent / 100.0).powi(2) * 1.2 } else { 0.0 };
+    // Inverse validation log-loss weighting (preferred) or accuracy-squared fallback.
+    // Models with lower log-loss (better calibrated probabilities) get higher weight.
+    let (lin_weight, log_weight, gbt_weight) = if let Some(ref losses) = wf.val_log_loss {
+        // Inverse-loss weights, masked by ensemble override
+        let inv_lin = if ov.use_linreg { 1.0 / losses[0] } else { 0.0 };
+        let inv_log = if ov.use_logreg { 1.0 / losses[1] } else { 0.0 };
+        let inv_gbt = if ov.use_gbt { 1.0 / losses[2] } else { 0.0 };
+        (inv_lin, inv_log, inv_gbt)
+    } else {
+        // Fallback: accuracy-squared weighting with GBT 1.2x bonus
+        let lw = if ov.use_linreg { (wf.linear_recent / 100.0).powi(2) } else { 0.0 };
+        let logw = if ov.use_logreg { (wf.logistic_recent / 100.0).powi(2) } else { 0.0 };
+        let gw = if ov.use_gbt { (wf.gbt_recent / 100.0).powi(2) * 1.2 } else { 0.0 };
+        (lw, logw, gw)
+    };
 
     // Gate LSTM per-asset: <54% exclude, 54-58% normal weight, >58% double weight
     let lstm_useful = wf.has_lstm && wf.lstm_accuracy >= 54.0;

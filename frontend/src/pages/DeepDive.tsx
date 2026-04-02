@@ -3,7 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 import { TrendingUp, Shield, DollarSign, Activity, BarChart3, Gauge } from 'lucide-react'
 import { convictionInfo } from '../lib/plain-english'
 
-type AssetTab = 'SPY' | 'GLD' | 'CL=F' | 'bitcoin'
+type AssetTab = 'SPY' | 'GLD' | 'USO' | 'bitcoin'
 
 interface DeepDiveData {
   asset: string
@@ -114,7 +114,7 @@ function computeVerdict(data: DeepDiveData, tab: AssetTab): { text: string; colo
   }
 
   const net = bullish - bearish
-  const assetName = tab === 'SPY' ? 'equities' : tab === 'GLD' ? 'gold' : tab === 'CL=F' ? 'oil' : 'bitcoin'
+  const assetName = tab === 'SPY' ? 'equities' : tab === 'GLD' ? 'gold' : tab === 'USO' ? 'oil' : 'bitcoin'
   if (net >= 2) return { text: `Macro conditions appear bullish for ${assetName} — ${bullish} of ${bullish + bearish} indicators positive.`, color: 'text-emerald-400', border: 'border-emerald-500/30' }
   if (net <= -2) return { text: `Macro headwinds detected for ${assetName} — ${bearish} of ${bullish + bearish} indicators negative.`, color: 'text-red-400', border: 'border-red-500/30' }
   return { text: `Mixed macro signals for ${assetName} — no strong directional bias from indicators.`, color: 'text-amber-400', border: 'border-amber-500/30' }
@@ -194,9 +194,9 @@ export default function DeepDive() {
       .catch(e => { setError(e.message); setLoading(false) })
   }, [tab])
 
-  const tabLabels: Record<AssetTab, string> = { SPY: 'S&P 500', GLD: 'Gold', 'CL=F': 'Oil', bitcoin: 'Bitcoin' }
+  const tabLabels: Record<AssetTab, string> = { SPY: 'S&P 500', GLD: 'Gold', USO: 'Oil (USO \u2014 WTI Tracker)', bitcoin: 'Bitcoin' }
 
-  const cards = data ? (tab === 'SPY' ? getSPYCards(data) : tab === 'GLD' ? getGoldCards(data) : tab === 'CL=F' ? getOilCards(data) : getBitcoinCards(data)) : []
+  const cards = data ? (tab === 'SPY' ? getSPYCards(data) : tab === 'GLD' ? getGoldCards(data) : tab === 'USO' ? getOilCards(data) : getBitcoinCards(data)) : []
   const verdict = data ? computeVerdict(data, tab) : null
 
   return (
@@ -205,13 +205,13 @@ export default function DeepDive() {
       <div>
         <h2 className="text-xl font-semibold text-white">Deep Dive</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Macro context for key assets — powered by 6 Rust ML models analysing 123 features.
+          Macro context for key assets — powered by 6 Rust ML models analysing 143 features.
         </p>
       </div>
 
       {/* Tab bar */}
       <div className="flex gap-2">
-        {(['SPY', 'GLD', 'CL=F', 'bitcoin'] as AssetTab[]).map(t => (
+        {(['SPY', 'GLD', 'USO', 'bitcoin'] as AssetTab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -283,7 +283,7 @@ export default function DeepDive() {
               )
             })() : (
               <div>
-                {tab === 'CL=F' ? (
+                {tab === 'USO' ? (
                   <div className="flex items-center gap-3">
                     <span className="px-3 py-1 rounded-full text-sm font-semibold border text-cyan-400 bg-cyan-500/15 border-cyan-500/30">MONITORING</span>
                     <span className="text-gray-500 text-sm">Tracking started today — signal data will appear after the next pipeline run.</span>

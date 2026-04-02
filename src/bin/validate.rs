@@ -448,6 +448,7 @@ fn infer_with_saved_models_quiet(
         has_gru: false,
         has_rf: false,
         stacking_weights: None,
+        val_log_loss: None,
     })
 }
 

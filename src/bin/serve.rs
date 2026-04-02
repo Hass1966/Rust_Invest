@@ -283,6 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/feedback", get(get_feedback))
         .route("/api/v1/simulator/data", get(get_simulator_data))
         .route("/api/v1/simulator/walkforward", get(get_walkforward_data))
+        .route("/api/v1/portfolio/managed-simulation", get(get_managed_simulation))
         .route("/api/v1/deep-dive/:asset", get(get_deep_dive))
         .layer(cors.clone())
         .with_state(state);
@@ -787,7 +788,7 @@ fn backtest_signal_accuracy(
                         let price_down = next_p < price_at_signal;
                         let correct = match signal.as_str() {
                             "BUY" => price_up,
-                            "SELL" => price_down,
+                            "SELL" | "SHORT" => price_down,
                             _ => false, // HOLD: tracked but considered incorrect for accuracy
                         };
                         (Some(next_p), Some(correct))
@@ -1934,11 +1935,11 @@ fn infer_stock_signal(
     let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
     let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-    let samples = features::build_rich_features(
+    let samples = features::build_rich_features_ext(
         &prices, &volumes, &timestamps,
         Some(market_context), "stock",
         features::sector_etf_for(symbol),
-        None, fear_greed,
+        None, fear_greed, None, None,
     );
     if samples.is_empty() { return None; }
 
@@ -1977,10 +1978,10 @@ fn infer_fx_signal(
     let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
     let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-    let samples = features::build_rich_features(
+    let samples = features::build_rich_features_ext(
         &prices, &volumes, &timestamps,
         Some(market_context), "fx",
-        Some(symbol), None, fear_greed,
+        Some(symbol), None, fear_greed, None, None,
     );
     if samples.is_empty() { return None; }
 
@@ -2368,8 +2369,8 @@ fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched
         };
 
         let was_correct = match (pred.signal.as_str(), actual_direction) {
-            ("BUY", "UP") | ("SELL", "DOWN") => true,
-            ("BUY", "DOWN") | ("SELL", "UP") => false,
+            ("BUY", "UP") | ("SELL", "DOWN") | ("SHORT", "DOWN") => true,
+            ("BUY", "DOWN") | ("SELL", "UP") | ("SHORT", "UP") => false,
             _ => true,
         };
 
@@ -3015,11 +3016,11 @@ fn record_signal_history(database: &db::Database, sig: &enriched_signals::Enrich
             let prev_price = prev.price_at_signal;
             if prev_price > 0.0 {
                 let pct_change = (current_price - prev_price) / prev_price * 100.0;
+                let threshold = min_threshold_for_class(&prev.asset_class);
                 let was_correct = match prev.signal_type.as_str() {
-                    "BUY" => current_price > prev_price,
-                    "SHORT" => current_price < prev_price,
-                    "SELL" => current_price < prev_price,
-                    "HOLD" => pct_change.abs() < 1.0,
+                    "BUY" => pct_change > threshold,
+                    "SELL" | "SHORT" => pct_change < -threshold,
+                    "HOLD" => pct_change.abs() < threshold,
                     _ => false,
                 };
                 let _ = database.resolve_signal_history(
@@ -3460,6 +3461,74 @@ async fn get_simulator_data(
     Ok(result)
 }
 
+/// GET /api/v1/portfolio/managed-simulation — all assets' signals + prices from live start
+async fn get_managed_simulation(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // Get ALL signal history from live start
+        let all_signals = database.get_signal_history_all(100000).unwrap_or_default();
+        let live_start = "2026-03-15";
+
+        // Filter to live period and collect unique assets
+        let live_signals: Vec<_> = all_signals.iter()
+            .filter(|s| &s.timestamp[..10] >= live_start)
+            .collect();
+
+        let mut asset_classes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for s in &live_signals {
+            asset_classes.entry(s.asset.clone()).or_insert_with(|| s.asset_class.clone());
+        }
+
+        // Build signal array
+        let signals: Vec<serde_json::Value> = live_signals.iter().map(|s| {
+            serde_json::json!({
+                "date": &s.timestamp[..10],
+                "asset": s.asset,
+                "signal": s.signal_type,
+                "confidence": s.confidence,
+                "price": s.price_at_signal,
+                "asset_class": s.asset_class,
+            })
+        }).collect();
+
+        // Fetch price history for all assets that have signals
+        let mut price_history = serde_json::Map::new();
+        for (asset, asset_class) in &asset_classes {
+            let points = if asset_class == "crypto" {
+                database.get_coin_history(asset).unwrap_or_default()
+            } else {
+                database.get_stock_history(asset).unwrap_or_default()
+            };
+            let arr: Vec<serde_json::Value> = points.iter()
+                .filter(|p| &p.timestamp[..10] >= live_start)
+                .map(|p| serde_json::json!({"date": &p.timestamp[..10], "price": p.price}))
+                .collect();
+            price_history.insert(asset.clone(), serde_json::Value::Array(arr));
+        }
+
+        // Also include SPY for benchmark
+        if !price_history.contains_key("SPY") {
+            let spy_points = database.get_stock_history("SPY").unwrap_or_default();
+            let arr: Vec<serde_json::Value> = spy_points.iter()
+                .filter(|p| &p.timestamp[..10] >= live_start)
+                .map(|p| serde_json::json!({"date": &p.timestamp[..10], "price": p.price}))
+                .collect();
+            price_history.insert("SPY".to_string(), serde_json::Value::Array(arr));
+        }
+
+        Ok::<_, StatusCode>(Json(serde_json::json!({
+            "price_history": price_history,
+            "signals": signals,
+        })))
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Ok(result)
+}
+
 // ════════════════════════════════════════
 // Deep Dive — Macro Dashboard
 // ════════════════════════════════════════
@@ -3489,7 +3558,7 @@ async fn get_deep_dive(
     let (asset_class, price_symbol, signal_key) = match asset.as_str() {
         "SPY" => ("stock", "SPY", "SPY"),
         "GLD" => ("commodity", "GLD", "GLD"),
-        "CL=F" | "CLF" => ("commodity", "CL=F", "CL=F"),
+        "CL=F" | "CLF" | "USO" => ("commodity", "USO", "CL=F"),
         "bitcoin" => ("crypto", "bitcoin", "bitcoin"),
         _ => return Err(StatusCode::BAD_REQUEST),
     };

@@ -27,7 +27,9 @@ const PRUNED_FEATURES: &[&str] = &[
     "VIX_above_30", "SMA50_above_200", "vol_regime",
     "daily_return", "is_month_end", "month_sin", "month_cos",
     "day_of_week_cos", "risk_on_off", "up_days_ratio_10d",
-    "up_days_ratio_20d", "momentum_3d", "momentum_5d", "momentum_10d",
+    "up_days_ratio_20d",
+    // momentum_3d, momentum_5d, momentum_10d UN-PRUNED:
+    // Python comparison validated multi-horizon returns as top-20 features
 ];
 
 /// Return indices of features to keep (those NOT in the pruned list)
@@ -105,21 +107,37 @@ pub const MARKET_TICKERS: &[&str] = &[
 pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
     match symbol {
         // Technology (XLK)
-        "AAPL" | "MSFT" | "NVDA" | "AMD" | "QQQ" | "INTC" | "AVGO" | "CRM" | "ADBE" | "ORCL" => Some("XLK"),
+        "AAPL" | "MSFT" | "NVDA" | "AMD" | "QQQ" | "INTC" | "AVGO" | "CRM" | "ADBE" | "ORCL"
+        | "SAP.DE" | "ARM" | "QCOM" | "TSM" => Some("XLK"),
         // Communication (XLC) — GOOGL/META per GICS classification
-        "GOOGL" | "META" | "NFLX" | "DIS" | "CMCSA" | "VZ" | "T" => Some("XLC"),
+        "GOOGL" | "META" | "NFLX" | "DIS" | "CMCSA" | "VZ" | "T"
+        | "VOD.L" | "BT-A.L" | "WPP.L" => Some("XLC"),
         // Financials (XLF)
-        "JPM" | "GS" | "BAC" | "WFC" | "MS" | "C" | "BLK" | "SCHW" | "DIA" => Some("XLF"),
+        "JPM" | "GS" | "BAC" | "WFC" | "MS" | "C" | "BLK" | "SCHW" | "DIA"
+        | "HSBA.L" | "LLOY.L" | "BARC.L" | "NWG.L" | "LGEN.L" | "III.L" | "MNG.L"
+        | "ALV.DE" | "V" | "MA" | "BRK-B" | "MMC" | "TRV" | "AFL" => Some("XLF"),
         // Energy (XLE)
-        "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO" => Some("XLE"),
+        "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO"
+        | "BP.L" | "SHEL.L" | "CNA.L" | "DCC.L" | "VDE" => Some("XLE"),
         // Healthcare (XLV)
-        "JNJ" | "UNH" | "LLY" | "PFE" | "MRNA" | "ABBV" | "TMO" | "ABT" | "BMY" | "AMGN" => Some("XLV"),
+        "JNJ" | "UNH" | "LLY" | "PFE" | "MRNA" | "ABBV" | "TMO" | "ABT" | "BMY" | "AMGN"
+        | "AZN.L" | "GSK.L" | "SAN.PA" | "MRK" | "CVS" | "CI" | "VHT" | "IHI" => Some("XLV"),
         // Industrials (XLI)
-        "CAT" | "DE" | "MMM" | "HON" | "GE" | "EMR" | "LMT" | "RTX" | "NOC" | "BA" | "GD" | "UPS" | "FDX" => Some("XLI"),
+        "CAT" | "DE" | "MMM" | "HON" | "GE" | "EMR" | "LMT" | "RTX" | "NOC" | "BA" | "GD" | "UPS" | "FDX"
+        | "RR.L" | "AIR.PA" | "SAF.PA" | "SIE.DE" | "MBG.DE" | "QQ.L" | "EXPN.L" => Some("XLI"),
         // Consumer Discretionary (XLY)
-        "TSLA" | "AMZN" | "HD" | "NKE" | "SBUX" | "MCD" | "TGT" | "LOW" => Some("XLY"),
+        "TSLA" | "AMZN" | "HD" | "NKE" | "SBUX" | "MCD" | "TGT" | "LOW"
+        | "OR.PA" | "MC.PA" | "PSON.L" => Some("XLY"),
         // Consumer Staples (XLP)
-        "WMT" | "COST" | "PG" | "KO" | "PEP" | "PM" | "MO" | "CL" => Some("XLP"),
+        "WMT" | "COST" | "PG" | "KO" | "PEP" | "PM" | "MO" | "CL"
+        | "ULVR.L" | "IMB.L" | "BATS.L" | "DGE.L" | "TSCO.L" | "SBRY.L" | "CPG.L"
+        | "GIS" => Some("XLP"),
+        // Utilities (XLU)
+        "NG.L" | "SSE.L" | "DUK" | "NEE" | "SO" | "VPU" | "IDU" => Some("XLU"),
+        // Materials (XLB)
+        "GLEN.L" | "AAL.L" | "ANTO.L" | "BAS.DE" | "SMDS.L" | "MNDI.L" => Some("XLB"),
+        // Real Estate (XLRE)
+        "AMT" | "VNQ" => Some("XLRE"),
         // SPY is the market itself
         "SPY" => Some("SPY"),
         _ => None,
@@ -296,6 +314,29 @@ pub fn feature_names() -> Vec<String> {
     names.push("reddit_sentiment".into());     // Reddit sentiment score (-1 to 1)
     names.push("sentiment_momentum".into());   // Today vs yesterday sentiment change
 
+    // P. Python-validated cross-asset & multi-horizon features (12 features)
+    // These features ranked in the top 20 by importance in the Python walk-forward backtest
+    names.push("vix_change_1d".into());           // VIX 1-day percentage change (#1 Python feature)
+    names.push("vix_sma10_dist".into());          // VIX distance from 10-day SMA as % (#2)
+    names.push("tnx_change_5d".into());           // 10Y Treasury yield 5-day change (#3)
+    names.push("irx_level".into());               // 3M Treasury yield level (#10)
+    names.push("spy_ret_21d".into());             // SPY 21-day cumulative return (#4)
+    names.push("rel_strength_vs_spy_1d".into());  // Asset 1d return minus SPY 1d return
+    names.push("ret_2d".into());                  // Raw 2-day return (#17)
+    names.push("ret_21d".into());                 // Raw 21-day return
+    names.push("ret_63d".into());                 // Raw 63-day (quarterly) return
+    names.push("vol_ratio_21_63".into());         // 21d volatility / 63d volatility (#19)
+    names.push("day_of_week_raw".into());         // Trading day 0-4 normalised (#12)
+    names.push("month_raw".into());               // Month 1-12 normalised (#16)
+
+    // Q. External data source features (6 features)
+    names.push("boe_rate".into());               // Bank of England base rate
+    names.push("uk_gilt_10y".into());            // UK 10-year gilt yield
+    names.push("ecb_rate".into());               // ECB main refinancing rate
+    names.push("eu_inflation".into());           // EU HICP inflation rate
+    names.push("insider_score".into());          // SEC insider buying score (US stocks, 0-1)
+    names.push("short_interest_ratio".into());   // FINRA short interest ratio (US stocks, 0-1)
+
     names
 }
 
@@ -404,6 +445,18 @@ pub struct ExtendedMacro {
     pub yield_spread: Vec<f64>,
     /// Fed funds rate
     pub fed_funds: Vec<f64>,
+    /// BOE base rate (Bank of England)
+    pub boe_rate: Vec<f64>,
+    /// UK 10-year gilt yield
+    pub uk_10y_gilt: Vec<f64>,
+    /// ECB main refinancing rate
+    pub ecb_rate: Vec<f64>,
+    /// EU inflation (HICP annual rate)
+    pub eu_inflation: Vec<f64>,
+    /// SEC insider trading score per asset (0-1)
+    pub insider_score: f64,
+    /// FINRA short interest ratio per asset (0-1)
+    pub short_interest_ratio: f64,
 }
 
 /// Crypto enrichment data for new features
@@ -1057,6 +1110,117 @@ pub fn build_rich_features_ext(
         f.push(0.0); // reddit_mentions_norm
         f.push(0.0); // reddit_sentiment
         f.push(0.0); // sentiment_momentum
+
+        // ══ P. Python-validated cross-asset & multi-horizon features (12) ══
+
+        // VIX 1-day percentage change (top Python feature by importance)
+        let vix_change_1d = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.vix.len().saturating_sub(1));
+            let vix_now = if mi < mkt.vix.len() { mkt.vix[mi] } else { 20.0 };
+            let vix_prev = if mi >= 1 && mi < mkt.vix.len() { mkt.vix[mi - 1] } else { vix_now };
+            safe_div(vix_now - vix_prev, vix_prev)
+        } else { 0.0 };
+        f.push(vix_change_1d);                                            // vix_change_1d
+
+        // VIX distance from 10-day SMA (as percentage)
+        let vix_sma10_dist = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.vix.len().saturating_sub(1));
+            let vix_now = if mi < mkt.vix.len() { mkt.vix[mi] } else { 20.0 };
+            let vix_sma10 = if mi >= 9 && mi < mkt.vix.len() {
+                mean(&mkt.vix[mi.saturating_sub(9)..=mi])
+            } else { vix_now };
+            safe_div(vix_now - vix_sma10, vix_sma10)
+        } else { 0.0 };
+        f.push(vix_sma10_dist);                                           // vix_sma10_dist
+
+        // 10Y Treasury yield 5-day change
+        let tnx_change_5d_val = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.tnx.len().saturating_sub(1));
+            let tnx_now = if mi < mkt.tnx.len() { mkt.tnx[mi] } else { 4.0 };
+            let tnx_5d = if mi >= 5 && mi < mkt.tnx.len() { mkt.tnx[mi - 5] } else { tnx_now };
+            (tnx_now - tnx_5d) / 10.0  // normalised
+        } else { 0.0 };
+        f.push(tnx_change_5d_val);                                        // tnx_change_5d
+
+        // 3M Treasury yield (IRX) level
+        let irx_level_val = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.irx.len().saturating_sub(1));
+            if mi < mkt.irx.len() { mkt.irx[mi] / 100.0 } else { 0.04 }
+        } else { 0.0 };
+        f.push(irx_level_val);                                            // irx_level
+
+        // SPY 21-day cumulative return
+        let spy_ret_21d_val = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            if mkt.spy_returns.len() > mi && mi >= 20 {
+                mkt.spy_returns[mi.saturating_sub(20)..=mi].iter().sum::<f64>()
+            } else { 0.0 }
+        } else { 0.0 };
+        f.push(spy_ret_21d_val);                                          // spy_ret_21d
+
+        // Relative strength vs SPY: asset 1d return - SPY 1d return
+        let rel_vs_spy_1d = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            let spy_1d = if mi < mkt.spy_returns.len() { mkt.spy_returns[mi] } else { 0.0 };
+            mom_1d - spy_1d
+        } else { mom_1d };
+        f.push(rel_vs_spy_1d);                                            // rel_strength_vs_spy_1d
+
+        // Multi-horizon raw returns
+        f.push(safe_div(price - prices[i.saturating_sub(2)], prices[i.saturating_sub(2)]));    // ret_2d
+        f.push(safe_div(price - prices[i.saturating_sub(21)], prices[i.saturating_sub(21)]));  // ret_21d
+        f.push(safe_div(price - prices[i.saturating_sub(63)], prices[i.saturating_sub(63)]));  // ret_63d
+
+        // Volatility ratio: 21d / 63d (vol expansion/contraction signal)
+        f.push(safe_div(vol20, vol60));                                    // vol_ratio_21_63
+
+        // Calendar raw values (integer encodings, normalised)
+        // cal_dow: 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat → map to trading day 0-4
+        let trading_dow = if cal_dow >= 1 && cal_dow <= 5 { (cal_dow - 1) as f64 } else { 2.0 };
+        f.push(trading_dow / 4.0);                                         // day_of_week_raw
+        f.push(cal_month as f64 / 12.0);                                   // month_raw
+
+        // ══ Q. External data source features (6) ══
+
+        // BOE base rate (forward-filled, normalised to ~0-1 range)
+        let boe_val = ext_macro.and_then(|m| {
+            if i < m.boe_rate.len() { Some(m.boe_rate[i]) }
+            else if !m.boe_rate.is_empty() { Some(*m.boe_rate.last().unwrap()) }
+            else { None }
+        }).unwrap_or(4.5);
+        f.push(boe_val / 10.0);                                           // boe_rate
+
+        // UK 10-year gilt yield
+        let gilt_val = ext_macro.and_then(|m| {
+            if i < m.uk_10y_gilt.len() { Some(m.uk_10y_gilt[i]) }
+            else if !m.uk_10y_gilt.is_empty() { Some(*m.uk_10y_gilt.last().unwrap()) }
+            else { None }
+        }).unwrap_or(4.0);
+        f.push(gilt_val / 10.0);                                          // uk_gilt_10y
+
+        // ECB main refinancing rate
+        let ecb_val = ext_macro.and_then(|m| {
+            if i < m.ecb_rate.len() { Some(m.ecb_rate[i]) }
+            else if !m.ecb_rate.is_empty() { Some(*m.ecb_rate.last().unwrap()) }
+            else { None }
+        }).unwrap_or(4.0);
+        f.push(ecb_val / 10.0);                                           // ecb_rate
+
+        // EU inflation (HICP annual %)
+        let eu_infl_val = ext_macro.and_then(|m| {
+            if i < m.eu_inflation.len() { Some(m.eu_inflation[i]) }
+            else if !m.eu_inflation.is_empty() { Some(*m.eu_inflation.last().unwrap()) }
+            else { None }
+        }).unwrap_or(2.0);
+        f.push(eu_infl_val / 10.0);                                       // eu_inflation
+
+        // SEC insider score (per-asset, static for all days)
+        let insider = ext_macro.map(|m| m.insider_score).unwrap_or(0.0);
+        f.push(insider);                                                    // insider_score
+
+        // FINRA short interest ratio (per-asset, static)
+        let short_int = ext_macro.map(|m| m.short_interest_ratio).unwrap_or(0.0);
+        f.push(short_int);                                                  // short_interest_ratio
 
         // ══ Label: next day return ══
         let label = prices[i+1] - prices[i]; // positive = up

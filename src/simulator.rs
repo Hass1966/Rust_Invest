@@ -202,6 +202,7 @@ pub fn infer_with_cached(
         has_gru: false,
         has_rf: false,
         stacking_weights: None,
+        val_log_loss: None,
     })
 }
 
@@ -308,6 +309,7 @@ pub fn generate_signals_bulk(
             has_gru: false,
             has_rf: false,
             stacking_weights: None,
+            val_log_loss: None,
         };
 
         // Trend at j-1 (data available before signal date)
@@ -659,5 +661,6 @@ fn infer_quiet(symbol: &str, samples: &[ml::Sample]) -> Option<ensemble::WalkFor
         has_gru: false,
         has_rf: false,
         stacking_weights: None,
+        val_log_loss: None,
     })
 }

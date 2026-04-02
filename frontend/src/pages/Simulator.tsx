@@ -3,8 +3,8 @@ import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
-import { fetchSimulation, fetchWalkForwardData } from '../lib/api'
-import type { WalkForwardData } from '../lib/api'
+import { fetchSimulation, fetchWalkForwardData, fetchManagedSimulation } from '../lib/api'
+import type { WalkForwardData, ManagedSimData, ManagedSimSignal } from '../lib/api'
 import type { SimResult as WhatIfResult } from '../lib/types'
 
 // ─── Types ───
@@ -19,19 +19,43 @@ interface SimulatorData {
 // ─── Config ───
 
 const LIVE_START = '2026-03-15'
-const AVAILABLE_ASSETS = ['AAPL', 'MSFT', 'GOOGL', 'JPM', 'HSBA.L', 'AZN.L', 'XOM', 'GLD', 'bitcoin', 'ethereum']
+const AVAILABLE_ASSETS = [
+  'AAPL', 'MSFT', 'JPM', 'XOM', 'BRK-B',          // US stocks (30%)
+  'HSBA.L', 'AZN.L',                                 // UK stocks (10%)
+  'TLT', 'AGG', 'BND',                               // Bonds (15%)
+  'GLD',                                              // Gold (8%)
+  'USO', 'CPER',                                      // Commodities (4%)
+  'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'EURJPY=X',   // FX (13%)
+  'bitcoin', 'ethereum',                              // Crypto (10%)
+]
 const STARTING_CAPITAL = 100000
 const DEFAULT_BH_WEIGHTS: { asset: string; weight: number }[] = [
-  { asset: 'AAPL', weight: 0.133 },
-  { asset: 'MSFT', weight: 0.133 },
-  { asset: 'GOOGL', weight: 0.100 },
-  { asset: 'JPM', weight: 0.083 },
-  { asset: 'HSBA.L', weight: 0.100 },
-  { asset: 'AZN.L', weight: 0.100 },
-  { asset: 'XOM', weight: 0.083 },
-  { asset: 'GLD', weight: 0.117 },
-  { asset: 'bitcoin', weight: 0.083 },
-  { asset: 'ethereum', weight: 0.068 },
+  // US Stocks (30%)
+  { asset: 'AAPL', weight: 0.06 },
+  { asset: 'MSFT', weight: 0.06 },
+  { asset: 'JPM', weight: 0.06 },
+  { asset: 'XOM', weight: 0.06 },
+  { asset: 'BRK-B', weight: 0.06 },
+  // UK Stocks (10%)
+  { asset: 'HSBA.L', weight: 0.05 },
+  { asset: 'AZN.L', weight: 0.05 },
+  // Bonds (15%)
+  { asset: 'TLT', weight: 0.08 },
+  { asset: 'AGG', weight: 0.04 },
+  { asset: 'BND', weight: 0.03 },
+  // Gold (8%)
+  { asset: 'GLD', weight: 0.08 },
+  // Commodities (4%)
+  { asset: 'USO', weight: 0.02 },
+  { asset: 'CPER', weight: 0.02 },
+  // FX (13%)
+  { asset: 'EURUSD=X', weight: 0.04 },
+  { asset: 'GBPUSD=X', weight: 0.04 },
+  { asset: 'USDJPY=X', weight: 0.03 },
+  { asset: 'EURJPY=X', weight: 0.02 },
+  // Crypto (10%)
+  { asset: 'bitcoin', weight: 0.05 },
+  { asset: 'ethereum', weight: 0.05 },
 ]
 const MAX_CUSTOM = 5
 
@@ -574,6 +598,327 @@ function runSimulation(
   }
 }
 
+// ─── Managed Portfolio Simulation ───
+
+interface ManagedTrade {
+  date: string
+  action: 'BUY' | 'SELL'
+  asset: string
+  price: number
+  shares: number
+  value: number
+  reason: string
+}
+
+interface ManagedHolding {
+  asset: string
+  shares: number
+  avgCost: number
+  currentPrice: number
+  value: number
+  pnlPct: number
+}
+
+interface ManagedResult {
+  chartData: { date: string; managed: number; buyHold: number; spy: number }[]
+  startingCapital: number
+  managedTotal: number
+  managedReturn: number
+  bhTotal: number
+  bhReturn: number
+  spyTotal: number
+  spyReturn: number
+  totalTrades: number
+  numHoldings: number
+  cashPosition: number
+  cashPct: number
+  bestTrade: { asset: string; pct: number } | null
+  worstTrade: { asset: string; pct: number } | null
+  holdings: ManagedHolding[]
+  trades: ManagedTrade[]
+  managedSharpe: number
+  bhSharpe: number
+  managedMaxDrawdown: number
+  bhMaxDrawdown: number
+  cumulativeTxCosts: number
+}
+
+const MANAGED_TX_COST = 0.002 // 0.2%
+const MANAGED_MAX_POSITION = 0.15 // 15% cap
+const MANAGED_MAX_BUYS = 8
+const MANAGED_CONFIDENCE_MIN = 10 // 10% minimum confidence
+
+function runManagedSimulation(
+  managedData: ManagedSimData,
+  capital: number,
+): ManagedResult | null {
+  const { price_history, signals } = managedData
+
+  // Build price maps for all assets
+  const priceMaps: Record<string, Map<string, number>> = {}
+  for (const [asset, points] of Object.entries(price_history)) {
+    priceMaps[asset] = buildPriceMap(points)
+  }
+
+  // Get all dates from price history (using all assets), sorted
+  const dateSet = new Set<string>()
+  for (const points of Object.values(price_history)) {
+    for (const p of points) dateSet.add(p.date)
+  }
+  const dates = Array.from(dateSet).sort()
+  if (dates.length < 2) return null
+
+  // Group signals by date
+  const signalsByDate: Record<string, ManagedSimSignal[]> = {}
+  for (const s of signals) {
+    if (!signalsByDate[s.date]) signalsByDate[s.date] = []
+    signalsByDate[s.date].push(s)
+  }
+
+  // Default BH assets
+  const bhAssets = [
+    { asset: 'AAPL', weight: 0.1 }, { asset: 'MSFT', weight: 0.1 }, { asset: 'GOOGL', weight: 0.1 },
+    { asset: 'JPM', weight: 0.1 }, { asset: 'HSBA.L', weight: 0.1 }, { asset: 'AZN.L', weight: 0.1 },
+    { asset: 'XOM', weight: 0.1 }, { asset: 'GLD', weight: 0.1 },
+    { asset: 'bitcoin', weight: 0.1 }, { asset: 'ethereum', weight: 0.1 },
+  ]
+
+  // Helper: get first available price for an asset (handles weekends/holidays)
+  function getFirstPrice(pm: Map<string, number>): number | null {
+    let earliest = ''
+    let price: number | null = null
+    for (const [d, v] of pm) {
+      if (!earliest || d < earliest) { earliest = d; price = v }
+    }
+    return price
+  }
+
+  // Initialize BH positions — use first available price per asset (handles weekend start dates)
+  const bhShares: Record<string, number> = {}
+  for (const bh of bhAssets) {
+    const pm = priceMaps[bh.asset]
+    if (!pm) continue
+    const startPrice = getPrice(pm, dates[0]) ?? getFirstPrice(pm)
+    if (startPrice && startPrice > 0) {
+      bhShares[bh.asset] = (capital * bh.weight) / startPrice
+    }
+  }
+
+  // Managed portfolio state
+  let cash = 0
+  const positions: Record<string, number> = {} // asset -> shares
+  const avgCosts: Record<string, number> = {} // asset -> average cost basis
+  const trades: ManagedTrade[] = []
+  let cumulativeTxCosts = 0
+  const tradeReturns: { asset: string; pct: number }[] = []
+
+  // Day 0: buy initial 10 assets equally — use first available price per asset
+  for (const bh of bhAssets) {
+    const pm = priceMaps[bh.asset]
+    if (!pm) { cash += capital * bh.weight; continue }
+    const startPrice = getPrice(pm, dates[0]) ?? getFirstPrice(pm)
+    if (startPrice && startPrice > 0) {
+      const investAmount = capital * bh.weight
+      const txCost = investAmount * MANAGED_TX_COST
+      const netAmount = investAmount - txCost
+      const shares = netAmount / startPrice
+      positions[bh.asset] = shares
+      avgCosts[bh.asset] = startPrice
+      cumulativeTxCosts += txCost
+      trades.push({
+        date: dates[0], action: 'BUY', asset: bh.asset,
+        price: startPrice, shares, value: investAmount,
+        reason: 'Initial allocation (10% equal weight)',
+      })
+    } else {
+      cash += capital * bh.weight
+    }
+  }
+
+  // Track last known signal per asset
+  const lastSignal: Record<string, { signal: string; confidence: number }> = {}
+
+  const chartData: { date: string; managed: number; buyHold: number; spy: number }[] = []
+  const spyMap = priceMaps['SPY']
+  const spyStart = spyMap ? (getPrice(spyMap, dates[0]) ?? getFirstPrice(spyMap)) : null
+
+  for (let di = 0; di < dates.length; di++) {
+    const date = dates[di]
+    const daySignals = signalsByDate[date] || []
+
+    // Update last known signals
+    for (const s of daySignals) {
+      lastSignal[s.asset] = { signal: s.signal, confidence: s.confidence * 100 }
+    }
+
+    if (di > 0) {
+      // Compute portfolio value before rebalance
+      let totalValue = cash
+      for (const [asset, shares] of Object.entries(positions)) {
+        const pm = priceMaps[asset]
+        const price = pm ? getPrice(pm, date) : null
+        if (price) totalValue += shares * price
+      }
+
+      // Phase 1: SELL — sell assets with SELL/SHORT signals and confidence > 10%
+      const sellAssets: string[] = []
+      for (const s of daySignals) {
+        if ((s.signal === 'SELL' || s.signal === 'SHORT') && s.confidence * 100 > MANAGED_CONFIDENCE_MIN) {
+          if (positions[s.asset] && positions[s.asset] > 0) {
+            sellAssets.push(s.asset)
+          }
+        }
+      }
+
+      for (const asset of sellAssets) {
+        const pm = priceMaps[asset]
+        const price = pm ? getPrice(pm, date) : null
+        if (!price || !positions[asset]) continue
+        const shares = positions[asset]
+        const saleValue = shares * price
+        const txCost = saleValue * MANAGED_TX_COST
+        cash += saleValue - txCost
+        cumulativeTxCosts += txCost
+
+        // Track trade return
+        const costBasis = avgCosts[asset] || price
+        const tradePnl = ((price - costBasis) / costBasis) * 100
+        tradeReturns.push({ asset, pct: tradePnl })
+
+        trades.push({
+          date, action: 'SELL', asset, price, shares,
+          value: saleValue,
+          reason: `${lastSignal[asset]?.signal} signal ${(lastSignal[asset]?.confidence || 0).toFixed(1)}% confidence`,
+        })
+        delete positions[asset]
+        delete avgCosts[asset]
+      }
+
+      // Phase 2: BUY — find all BUY signals for assets not currently held
+      const buySignals = daySignals
+        .filter(s => s.signal === 'BUY' && !positions[s.asset] && s.confidence * 100 > MANAGED_CONFIDENCE_MIN)
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, MANAGED_MAX_BUYS)
+
+      if (buySignals.length > 0 && cash > 0) {
+        // Recalculate total value after sells
+        let newTotalValue = cash
+        for (const [asset, shares] of Object.entries(positions)) {
+          const pm = priceMaps[asset]
+          const price = pm ? getPrice(pm, date) : null
+          if (price) newTotalValue += shares * price
+        }
+
+        const maxPerPosition = newTotalValue * MANAGED_MAX_POSITION
+        const perBuy = Math.min(cash / buySignals.length, maxPerPosition)
+
+        for (const s of buySignals) {
+          if (cash <= 0) break
+          const pm = priceMaps[s.asset]
+          const price = pm ? getPrice(pm, date) : null
+          if (!price || price <= 0) continue
+
+          const investAmount = Math.min(perBuy, cash)
+          const txCost = investAmount * MANAGED_TX_COST
+          const netAmount = investAmount - txCost
+          const shares = netAmount / price
+          positions[s.asset] = (positions[s.asset] || 0) + shares
+          avgCosts[s.asset] = price
+          cash -= investAmount
+          cumulativeTxCosts += txCost
+
+          trades.push({
+            date, action: 'BUY', asset: s.asset, price, shares,
+            value: investAmount,
+            reason: `BUY signal ${(s.confidence * 100).toFixed(1)}% confidence`,
+          })
+        }
+      }
+    }
+
+    // Compute end-of-day values
+    let managedValue = cash
+    for (const [asset, shares] of Object.entries(positions)) {
+      const pm = priceMaps[asset]
+      const price = pm ? getPrice(pm, date) : null
+      if (price) managedValue += shares * price
+    }
+
+    let bhValue = 0
+    for (const [asset, shares] of Object.entries(bhShares)) {
+      const pm = priceMaps[asset]
+      const price = pm ? getPrice(pm, date) : null
+      if (price) bhValue += shares * price
+    }
+
+    const spyPrice = spyMap ? getPrice(spyMap, date) : null
+    const spyValue = spyStart && spyPrice ? capital * (spyPrice / spyStart) : capital
+
+    chartData.push({
+      date,
+      managed: Math.round(managedValue),
+      buyHold: Math.round(bhValue),
+      spy: Math.round(spyValue),
+    })
+  }
+
+  if (chartData.length < 2) return null
+
+  const last = chartData[chartData.length - 1]
+  const managedValues = chartData.map(d => d.managed)
+  const bhValues = chartData.map(d => d.buyHold)
+
+  // Build current holdings
+  const lastDate = dates[dates.length - 1]
+  const holdings: ManagedHolding[] = []
+  for (const [asset, shares] of Object.entries(positions)) {
+    const pm = priceMaps[asset]
+    const price = pm ? getPrice(pm, lastDate) : null
+    if (!price || shares <= 0) continue
+    const cost = avgCosts[asset] || price
+    holdings.push({
+      asset,
+      shares,
+      avgCost: cost,
+      currentPrice: price,
+      value: shares * price,
+      pnlPct: ((price - cost) / cost) * 100,
+    })
+  }
+  holdings.sort((a, b) => b.value - a.value)
+
+  const bestTrade = tradeReturns.length > 0
+    ? tradeReturns.reduce((best, t) => t.pct > best.pct ? t : best)
+    : null
+  const worstTrade = tradeReturns.length > 0
+    ? tradeReturns.reduce((worst, t) => t.pct < worst.pct ? t : worst)
+    : null
+
+  return {
+    chartData,
+    startingCapital: capital,
+    managedTotal: last.managed,
+    managedReturn: ((last.managed - capital) / capital) * 100,
+    bhTotal: last.buyHold,
+    bhReturn: ((last.buyHold - capital) / capital) * 100,
+    spyTotal: last.spy,
+    spyReturn: ((last.spy - capital) / capital) * 100,
+    totalTrades: trades.length,
+    numHoldings: holdings.length,
+    cashPosition: cash,
+    cashPct: last.managed > 0 ? (cash / last.managed) * 100 : 0,
+    bestTrade,
+    worstTrade,
+    holdings,
+    trades: trades.slice().reverse().slice(0, 20), // last 20, newest first
+    managedSharpe: sharpeRatio(dailyReturns(managedValues)),
+    bhSharpe: sharpeRatio(dailyReturns(bhValues)),
+    managedMaxDrawdown: maxDrawdown(managedValues),
+    bhMaxDrawdown: maxDrawdown(bhValues),
+    cumulativeTxCosts,
+  }
+}
+
 // ═══════════════════════════════════════
 // Main Component
 // ═══════════════════════════════════════
@@ -583,6 +928,8 @@ type TopTab = 'backtest' | 'live' | 'whatif'
 export default function Simulator() {
   const [data, setData] = useState<SimulatorData | null>(null)
   const [wfData, setWfData] = useState<WalkForwardData | null>(null)
+  const [managedSimData, setManagedSimData] = useState<ManagedSimData | null>(null)
+  const [managedLoading, setManagedLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TopTab>('live')
 
@@ -590,7 +937,7 @@ export default function Simulator() {
   const [startingCapital, setStartingCapital] = useState(STARTING_CAPITAL)
 
   // Portfolio allocation mode
-  const [allocMode, setAllocMode] = useState<'default' | 'custom' | 'split'>('default')
+  const [allocMode, setAllocMode] = useState<'default' | 'custom' | 'split' | 'managed'>('default')
   const [splitTotal, setSplitTotal] = useState(100000)
   const [allocations, setAllocations] = useState<Allocation[]>([
     { asset: 'AAPL', pct: 30 },
@@ -601,13 +948,33 @@ export default function Simulator() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/v1/simulator/data').then(r => r.json()).catch(() => null),
+      fetch('/api/v1/simulator/data').then(r => {
+        const ct = r.headers.get('content-type') || ''
+        if (!r.ok || !ct.includes('application/json')) return null
+        return r.json()
+      }).catch(() => null),
       fetchWalkForwardData(),
     ]).then(([simData, wf]) => {
       setData(simData)
       setWfData(wf)
-    }).finally(() => setLoading(false))
+    }).catch(() => {}).finally(() => setLoading(false))
   }, [])
+
+  // Fetch managed simulation data when mode is selected
+  useEffect(() => {
+    if (allocMode === 'managed' && !managedSimData && !managedLoading) {
+      setManagedLoading(true)
+      fetchManagedSimulation()
+        .then(d => setManagedSimData(d))
+        .finally(() => setManagedLoading(false))
+    }
+  }, [allocMode, managedSimData, managedLoading])
+
+  // Compute managed portfolio result
+  const managedResult = useMemo(() => {
+    if (!managedSimData) return null
+    return runManagedSimulation(managedSimData, startingCapital)
+  }, [managedSimData, startingCapital])
 
   // Compute BH assets from weights, scaled to startingCapital
   const bhAssets = useMemo(() => {
@@ -828,7 +1195,7 @@ export default function Simulator() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-medium text-gray-400">Portfolio Allocation</h3>
               <div className="flex gap-2">
-                {(['default', 'split', 'custom'] as const).map(mode => (
+                {(['default', 'managed', 'split', 'custom'] as const).map(mode => (
                   <button
                     key={mode}
                     onClick={() => setAllocMode(mode)}
@@ -836,11 +1203,13 @@ export default function Simulator() {
                       allocMode === mode
                         ? mode === 'split'
                           ? 'bg-violet-500/15 text-violet-400 border border-violet-500/30'
-                          : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
+                          : mode === 'managed'
+                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
                         : 'text-gray-400 bg-[#0a0e17] border border-[#1f2937] hover:border-[#374151]'
                     }`}
                   >
-                    {mode === 'default' ? 'Default (10 assets)' : mode === 'split' ? '50/50 Split' : 'Custom'}
+                    {mode === 'default' ? 'Default (10 assets)' : mode === 'managed' ? 'Managed Portfolio' : mode === 'split' ? '50/50 Split' : 'Custom'}
                   </button>
                 ))}
               </div>
@@ -919,7 +1288,14 @@ export default function Simulator() {
 
             {allocMode === 'default' && (
               <div className="text-xs text-gray-500">
-                Using default 60/40 allocation across 10 assets. Switch to Custom to choose your own.
+                Diversified allocation across US stocks, UK stocks, bonds, gold, commodities, FX and crypto &mdash; 10% cash buffer. Alpha Signal rotates across all ~165 assets.
+              </div>
+            )}
+
+            {allocMode === 'managed' && (
+              <div className="text-xs text-gray-500 space-y-1">
+                <p>Alpha Signal manages your entire portfolio across ~165 assets &mdash; stocks (US, UK, European), bonds, FX, gold, commodities and crypto. Capital rotates daily into the strongest signals across all asset classes. In a falling equity market, capital can rotate into bonds, defensive sectors, or FX positions.</p>
+                <p className="text-gray-600">Rules: 15% max per position &middot; Top 8 BUY signals by confidence &middot; 0.2% tx cost per trade &middot; SELL/SHORT signals with &gt;10% confidence trigger exits</p>
               </div>
             )}
 
@@ -950,7 +1326,20 @@ export default function Simulator() {
           </div>
 
           {/* Simulation results */}
-          {!result || result.chartData.length < 2 ? (
+          {allocMode === 'managed' ? (
+            managedLoading ? (
+              <div className="bg-[#111827] rounded-xl border border-emerald-500/20 p-8 text-center">
+                <Loader2 className="w-6 h-6 animate-spin text-emerald-400 mx-auto mb-3" />
+                <div className="text-emerald-400 text-sm font-medium">Alpha Signal is managing your portfolio...</div>
+              </div>
+            ) : managedResult ? (
+              <ManagedPortfolioResults result={managedResult} />
+            ) : (
+              <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-8 text-center text-gray-500">
+                Managed portfolio data unavailable. Ensure the backend has signal history from 15 March 2026.
+              </div>
+            )
+          ) : !result || result.chartData.length < 2 ? (
             <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-8 text-center text-gray-500">
               {!pctValid && allocMode === 'custom'
                 ? 'Fix allocation percentages to run simulation.'
@@ -1292,6 +1681,220 @@ function InvestmentResults({ result }: { result: SimResult }) {
             This is a learning and research project &mdash; not a production trading system or financial advice.
           </div>
         </div>
+      </div>
+    </>
+  )
+}
+
+// ═══════════════════════════════════════
+// Managed Portfolio Results
+// ═══════════════════════════════════════
+
+function ManagedPortfolioResults({ result }: { result: ManagedResult }) {
+  const [showTradeLog, setShowTradeLog] = useState(false)
+  const cap = result.startingCapital
+
+  return (
+    <>
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <SummaryCard
+          label={`Managed Portfolio ${fmtGBP(cap)}`}
+          value={fmtGBP(result.managedTotal)}
+          returnPct={result.managedReturn}
+          borderColor="border-emerald-500/30"
+          valueColor="text-emerald-400"
+        />
+        <SummaryCard
+          label={`Buy & Hold ${fmtGBP(cap)}`}
+          value={fmtGBP(result.bhTotal)}
+          returnPct={result.bhReturn}
+          borderColor="border-[#1f2937]"
+          valueColor="text-white"
+        />
+        <SummaryCard
+          label={`S&P 500 Benchmark ${fmtGBP(cap)}`}
+          value={fmtGBP(result.spyTotal)}
+          returnPct={result.spyReturn}
+          borderColor="border-gray-700"
+          valueColor="text-gray-300"
+        />
+      </div>
+
+      {/* Risk metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <MetricCard label="Sharpe (Managed)" value={result.managedSharpe.toFixed(2)} color={result.managedSharpe >= 1 ? 'text-green-400' : result.managedSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Sharpe (B&H)" value={result.bhSharpe.toFixed(2)} color={result.bhSharpe >= 1 ? 'text-green-400' : result.bhSharpe >= 0 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Max DD (Managed)" value={`-${result.managedMaxDrawdown.toFixed(1)}%`} color={result.managedMaxDrawdown < 10 ? 'text-green-400' : result.managedMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Max DD (B&H)" value={`-${result.bhMaxDrawdown.toFixed(1)}%`} color={result.bhMaxDrawdown < 10 ? 'text-green-400' : result.bhMaxDrawdown < 25 ? 'text-amber-400' : 'text-red-400'} />
+        <MetricCard label="Tx Costs" value={fmtGBP(result.cumulativeTxCosts)} color="text-orange-400" />
+      </div>
+
+      {/* Three-line chart */}
+      <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-6">
+        <h3 className="text-sm font-medium text-gray-400 mb-4">Portfolio Value Over Time</h3>
+        <ResponsiveContainer width="100%" height={340}>
+          <LineChart data={result.chartData} margin={{ left: 10, right: 10, top: 4, bottom: 0 }}>
+            <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => v.slice(5)} interval="preserveStartEnd" />
+            <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => `\u00a3${(v / 1000).toFixed(0)}k`} width={55} />
+            <Tooltip
+              contentStyle={{ background: '#0a0e17', border: '1px solid #1f2937', borderRadius: '8px', fontSize: 12 }}
+              labelStyle={{ color: '#9ca3af' }}
+              formatter={(v: number | undefined) => [v != null ? fmtGBP(v) : '']}
+            />
+            <Legend wrapperStyle={{ fontSize: 12, color: '#9ca3af' }} />
+            <ReferenceLine y={cap} stroke="#374151" strokeDasharray="4 4" />
+            <Line type="monotone" dataKey="managed" name="Managed Portfolio" stroke="#10b981" strokeWidth={2.5} dot={false} />
+            <Line type="monotone" dataKey="buyHold" name="Buy & Hold" stroke="#e5e7eb" strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="spy" name="S&P 500" stroke="#6b7280" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Stats cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">Total Trades</div>
+          <div className="text-xl font-bold text-white">{result.totalTrades}</div>
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">Current Holdings</div>
+          <div className="text-xl font-bold text-white">{result.numHoldings}</div>
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">Cash Position</div>
+          <div className="text-xl font-bold text-white">{fmtGBP(result.cashPosition)}</div>
+          <div className="text-xs text-gray-500 mt-0.5">{result.cashPct.toFixed(1)}% of portfolio</div>
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">Best Trade</div>
+          {result.bestTrade ? (
+            <>
+              <div className="text-xl font-bold text-green-400">{fmtPct(result.bestTrade.pct)}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{result.bestTrade.asset}</div>
+            </>
+          ) : <div className="text-gray-600">N/A</div>}
+        </div>
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <div className="text-xs text-gray-500 mb-1">Worst Trade</div>
+          {result.worstTrade ? (
+            <>
+              <div className="text-xl font-bold text-red-400">{fmtPct(result.worstTrade.pct)}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{result.worstTrade.asset}</div>
+            </>
+          ) : <div className="text-gray-600">N/A</div>}
+        </div>
+      </div>
+
+      {/* Current holdings table */}
+      {result.holdings.length > 0 && (
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <h3 className="text-sm font-medium text-emerald-400 mb-3">Current Holdings</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-500 border-b border-[#1f2937]">
+                  <th className="text-left py-2 px-2">Asset</th>
+                  <th className="text-right py-2 px-2">Shares</th>
+                  <th className="text-right py-2 px-2">Avg Cost</th>
+                  <th className="text-right py-2 px-2">Current Price</th>
+                  <th className="text-right py-2 px-2">Value</th>
+                  <th className="text-right py-2 px-2">P&amp;L %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.holdings.map(h => (
+                  <tr key={h.asset} className="border-b border-[#1f2937]/50 hover:bg-white/[0.02]">
+                    <td className="py-1.5 px-2 text-gray-300 font-medium">{h.asset}</td>
+                    <td className="py-1.5 px-2 text-right text-gray-400">{h.shares.toFixed(4)}</td>
+                    <td className="py-1.5 px-2 text-right text-gray-400">{'\u00A3'}{h.avgCost.toFixed(2)}</td>
+                    <td className="py-1.5 px-2 text-right text-gray-300">{'\u00A3'}{h.currentPrice.toFixed(2)}</td>
+                    <td className="py-1.5 px-2 text-right text-gray-300">{fmtGBP(h.value)}</td>
+                    <td className={`py-1.5 px-2 text-right font-medium ${h.pnlPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {fmtPct(h.pnlPct)}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-b border-[#1f2937]/50">
+                  <td className="py-1.5 px-2 text-gray-500">Cash</td>
+                  <td className="py-1.5 px-2 text-right text-gray-600">&mdash;</td>
+                  <td className="py-1.5 px-2 text-right text-gray-600">&mdash;</td>
+                  <td className="py-1.5 px-2 text-right text-gray-600">&mdash;</td>
+                  <td className="py-1.5 px-2 text-right text-gray-500">{fmtGBP(result.cashPosition)}</td>
+                  <td className="py-1.5 px-2 text-right text-gray-600">&mdash;</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-[#374151] font-semibold">
+                  <td className="py-2 px-2 text-white">Total</td>
+                  <td className="py-2 px-2"></td>
+                  <td className="py-2 px-2"></td>
+                  <td className="py-2 px-2"></td>
+                  <td className="py-2 px-2 text-right text-white">{fmtGBP(result.managedTotal)}</td>
+                  <td className={`py-2 px-2 text-right ${result.managedReturn >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {fmtPct(result.managedReturn)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Trade log (collapsible) */}
+      {result.trades.length > 0 && (
+        <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4">
+          <button
+            onClick={() => setShowTradeLog(!showTradeLog)}
+            className="flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-gray-200 cursor-pointer transition-colors w-full"
+          >
+            <span className={`transition-transform ${showTradeLog ? 'rotate-90' : ''}`}>{'\u25B6'}</span>
+            Trade Log (last 20 trades)
+          </button>
+          {showTradeLog && (
+            <div className="overflow-x-auto mt-3">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-gray-500 border-b border-[#1f2937]">
+                    <th className="text-left py-2 px-2">Date</th>
+                    <th className="text-center py-2 px-2">Action</th>
+                    <th className="text-left py-2 px-2">Asset</th>
+                    <th className="text-right py-2 px-2">Price</th>
+                    <th className="text-right py-2 px-2">Shares</th>
+                    <th className="text-right py-2 px-2">Value</th>
+                    <th className="text-left py-2 px-2">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.trades.map((t, i) => (
+                    <tr key={i} className="border-b border-[#1f2937]/50 hover:bg-white/[0.02]">
+                      <td className="py-1.5 px-2 text-gray-400 text-xs">{t.date}</td>
+                      <td className="py-1.5 px-2 text-center">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          t.action === 'BUY' ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'
+                        }`}>{t.action}</span>
+                      </td>
+                      <td className="py-1.5 px-2 text-gray-300 font-medium">{t.asset}</td>
+                      <td className="py-1.5 px-2 text-right text-gray-400">{'\u00A3'}{t.price.toFixed(2)}</td>
+                      <td className="py-1.5 px-2 text-right text-gray-400">{t.shares.toFixed(4)}</td>
+                      <td className="py-1.5 px-2 text-right text-gray-300">{fmtGBP(t.value)}</td>
+                      <td className="py-1.5 px-2 text-gray-500 text-xs">{t.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Methodology */}
+      <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-4 text-sm text-gray-400 leading-relaxed">
+        <span className="text-emerald-400 font-medium">How the Managed Portfolio works:</span> Alpha Signal starts with {fmtGBP(cap)} diversified
+        across US stocks, UK stocks, bonds, gold, commodities, FX and crypto, then actively manages the portfolio using live signals across all ~165 tracked assets.
+        In a falling equity market, capital can rotate into bonds, defensive sectors, or FX positions.
+        SELL/SHORT signals with &gt;10% confidence trigger exits; freed capital is redeployed to the top 8 BUY signals
+        ranked by confidence, with a 15% single-position cap and 0.2% transaction cost per trade.
       </div>
     </>
   )

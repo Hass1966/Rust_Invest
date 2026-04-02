@@ -144,7 +144,7 @@ export default function MyPortfolio() {
             Add Your First Holding
           </button>
           <p className="text-gray-600 text-sm mt-4">
-            We track 91 assets across stocks, FX, and crypto. Free during beta.
+            We track 196 assets across stocks, bonds, FX, commodities and crypto. Free during beta.
           </p>
         </div>
         {showAddForm && (

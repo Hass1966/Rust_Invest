@@ -437,7 +437,35 @@ export async function fetchWalkForwardData(): Promise<WalkForwardData | null> {
     const res = await fetch(`${BASE}/api/v1/simulator/walkforward`)
     if (res.status === 404) return null
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
+    const ct = res.headers.get('content-type') || ''
+    if (!ct.includes('application/json')) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+export interface ManagedSimSignal {
+  date: string
+  asset: string
+  signal: string
+  confidence: number
+  price: number
+  asset_class: string
+}
+
+export interface ManagedSimData {
+  price_history: Record<string, { date: string; price: number }[]>
+  signals: ManagedSimSignal[]
+}
+
+export async function fetchManagedSimulation(): Promise<ManagedSimData | null> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/portfolio/managed-simulation`)
+    if (!res.ok) return null
+    const ct = res.headers.get('content-type') || ''
+    if (!ct.includes('application/json')) return null
+    return await res.json()
   } catch {
     return null
   }

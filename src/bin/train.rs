@@ -158,6 +158,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // ── Fetch BOE/ECB macro data (free APIs, no key needed) ──
+    println!("\n━━━ FETCHING BOE/ECB MACRO DATA ━━━\n");
+    let (boe_rate_res, gilt_res, ecb_rate_res, eu_infl_res) = tokio::join!(
+        macro_data::fetch_boe_base_rate(&client),
+        macro_data::fetch_uk_gilt_yield(&client),
+        macro_data::fetch_ecb_refi_rate(&client),
+        macro_data::fetch_eu_inflation(&client),
+    );
+
+    let boe_rates = boe_rate_res.unwrap_or_else(|e| { println!("  BOE base rate failed: {}", e); vec![] });
+    let gilt_yields = gilt_res.unwrap_or_else(|e| { println!("  UK gilt yield failed: {}", e); vec![] });
+    let ecb_rates = ecb_rate_res.unwrap_or_else(|e| { println!("  ECB refi rate failed: {}", e); vec![] });
+    let eu_inflation = eu_infl_res.unwrap_or_else(|e| { println!("  EU inflation failed: {}", e); vec![] });
+
+    // Store BOE/ECB data in market_history
+    for (date, val) in &boe_rates {
+        let _ = database.insert_market_history("BOE_RATE", *val, None, date);
+    }
+    for (date, val) in &gilt_yields {
+        let _ = database.insert_market_history("UK_10Y_GILT", *val, None, date);
+    }
+    for (date, val) in &ecb_rates {
+        let _ = database.insert_market_history("ECB_RATE", *val, None, date);
+    }
+    for (date, val) in &eu_inflation {
+        let _ = database.insert_market_history("EU_INFLATION", *val, None, date);
+    }
+    println!("  Stored: BOE={}, Gilt={}, ECB={}, EU_HICP={} data points",
+        boe_rates.len(), gilt_yields.len(), ecb_rates.len(), eu_inflation.len());
+
     // ── Build market context ──
     let mut market_histories: HashMap<String, Vec<f64>> = HashMap::new();
     let spy_prices: Vec<f64> = database.get_stock_history("SPY")?.iter().map(|p| p.price).collect();
@@ -167,6 +197,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         market_histories.insert(ticker.to_string(), prices);
     }
     let market_context = features::build_market_context(&market_histories);
+
+    // Build ExtendedMacro with BOE/ECB data
+    let ext_macro = features::ExtendedMacro {
+        dxy: database.get_market_prices("UUP").unwrap_or_default(),
+        yield_spread: vec![], // populated from FRED if available
+        fed_funds: vec![],
+        boe_rate: boe_rates.iter().map(|(_, v)| *v).collect(),
+        uk_10y_gilt: gilt_yields.iter().map(|(_, v)| *v).collect(),
+        ecb_rate: ecb_rates.iter().map(|(_, v)| *v).collect(),
+        eu_inflation: eu_inflation.iter().map(|(_, v)| *v).collect(),
+        insider_score: 0.0,
+        short_interest_ratio: 0.0,
+    };
 
     // ── Train & save all 6 models for stocks ──
     println!("\n━━━ TRAINING ALL 6 MODELS (Walk-Forward) ━━━\n");
@@ -189,7 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None);
+        let samples = features::build_rich_features_ext(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None, Some(&ext_macro), None);
         if samples.len() < 100 { continue; }
 
         // Class distribution analysis for SHORT labels
@@ -288,7 +331,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
-        let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None);
+        let samples = features::build_rich_features_ext(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None, Some(&ext_macro), None);
         if samples.len() < 100 { continue; }
 
         // Class distribution analysis for SHORT labels
@@ -621,10 +664,11 @@ async fn run_lstm_test(database: &db::Database) -> Result<(), Box<dyn std::error
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features(
+        let samples = features::build_rich_features_ext(
             &prices, &volumes, &timestamps,
             Some(&market_context), "stock",
             features::sector_etf_for(symbol), None, None,
+            None, None,
         );
 
         println!("  Samples built: {}", samples.len());

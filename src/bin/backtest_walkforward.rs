@@ -107,19 +107,24 @@ fn find_date_index(timestamps: &[String], target_date: &NaiveDate) -> Option<usi
     })
 }
 
-/// Generate a signal from 3 model probabilities using ensemble voting
+/// Compute binary cross-entropy (log-loss) for a single prediction
+fn log_loss_single(predicted: f64, actual_up: bool) -> f64 {
+    let p = predicted.clamp(1e-7, 1.0 - 1e-7);
+    let y = if actual_up { 1.0 } else { 0.0 };
+    -(y * p.ln() + (1.0 - y) * (1.0 - p).ln())
+}
+
+/// Generate a signal from 3 model probabilities using inverse-loss weighted voting
 fn signal_from_probs(
     symbol: &str,
     lin_prob: f64,
     log_prob: f64,
     gbt_prob: f64,
+    model_weights: &[f64; 3], // [lin_w, log_w, gbt_w] normalised to sum to 1
 ) -> (String, f64) {
-    // Accuracy-squared weighting (GBT gets 1.2x bonus)
-    let lin_w = 1.0_f64;
-    let log_w = 1.0_f64;
-    let gbt_w = 1.2_f64;
-    let total_w = lin_w + log_w + gbt_w;
-    let ensemble_prob = (lin_w * lin_prob + log_w * log_prob + gbt_w * gbt_prob) / total_w;
+    let ensemble_prob = model_weights[0] * lin_prob
+        + model_weights[1] * log_prob
+        + model_weights[2] * gbt_prob;
 
     let (buy_thresh, sell_thresh) = ensemble::get_signal_threshold(symbol);
     let short_thresh = 1.0 - buy_thresh;
@@ -153,6 +158,7 @@ fn min_threshold(asset_class: &str) -> f64 {
 }
 
 /// Train 3 models on a slice of samples and generate predictions for test samples.
+/// Uses inverse validation log-loss weighting for ensemble combination.
 /// Returns Vec<(signal, lin_prob, log_prob, gbt_prob)> for each test sample.
 fn train_and_predict(
     symbol: &str,
@@ -180,18 +186,20 @@ fn train_and_predict(
         rw * cw
     }).collect();
 
-    // Train LinReg
+    // Split: train on first 85%, validate on last 15% for model weighting
+    let val_start = (train_data.len() as f64 * 0.85) as usize;
+
+    // Train LinReg on first 85%, reserve last 15% for validation log-loss weighting
     let mut lin = ml::LinearRegression::new(n_feat);
-    lin.train_weighted(&train_data, Some(&weights), 0.005, 3000);
+    lin.train_weighted(&train_data[..val_start], Some(&weights[..val_start]), 0.005, 3000);
 
     // Train LogReg
     let mut log = ml::LogisticRegression::new(n_feat);
-    log.train_weighted(&train_data, Some(&weights), 0.01, 3000);
+    log.train_weighted(&train_data[..val_start], Some(&weights[..val_start]), 0.01, 3000);
 
-    // Train GBT
+    // Train GBT (with its own early-stopping validation)
     let x_train: Vec<Vec<f64>> = train_data.iter().map(|s| s.features.clone()).collect();
     let y_train: Vec<f64> = train_data.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
-    let val_start = (x_train.len() as f64 * 0.85) as usize;
     let (x_t, x_v) = x_train.split_at(val_start);
     let (y_t, y_v) = y_train.split_at(val_start);
     let gbt_recency = &weights[..x_t.len()];
@@ -206,11 +214,41 @@ fn train_and_predict(
         x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config
     );
 
-    // Predict on test samples (apply training normalisation)
+    // ── Compute inverse validation log-loss weights ──
+    // Evaluate each model on the held-out validation set (last 15% of training)
+    let val_data = &train_data[val_start..];
+    let mut lin_loss_sum = 0.0_f64;
+    let mut log_loss_sum = 0.0_f64;
+    let mut gbt_loss_sum = 0.0_f64;
+
+    for sample in val_data {
+        let actual_up = sample.label > 0.0;
+        let lin_pred = lin.predict(&sample.features);
+        let lin_prob = (1.0 / (1.0 + (-lin_pred).exp())).clamp(0.01, 0.99);
+        let log_prob = log.predict_probability(&sample.features).clamp(0.01, 0.99);
+        let gbt_prob = gbt_model.predict_proba(&sample.features).clamp(0.01, 0.99);
+
+        lin_loss_sum += log_loss_single(lin_prob, actual_up);
+        log_loss_sum += log_loss_single(log_prob, actual_up);
+        gbt_loss_sum += log_loss_single(gbt_prob, actual_up);
+    }
+
+    let n_val = val_data.len().max(1) as f64;
+    let lin_avg_loss = (lin_loss_sum / n_val).max(0.01);
+    let log_avg_loss = (log_loss_sum / n_val).max(0.01);
+    let gbt_avg_loss = (gbt_loss_sum / n_val).max(0.01);
+
+    // Inverse-loss weights, normalised to sum to 1
+    let inv_lin = 1.0 / lin_avg_loss;
+    let inv_log = 1.0 / log_avg_loss;
+    let inv_gbt = 1.0 / gbt_avg_loss;
+    let inv_total = inv_lin + inv_log + inv_gbt;
+    let model_weights = [inv_lin / inv_total, inv_log / inv_total, inv_gbt / inv_total];
+
+    // Predict on test samples using the 85%-trained models with inverse-loss weights
     let mut results = Vec::with_capacity(test_samples.len());
     for sample in test_samples {
         let mut features = sample.features.clone();
-        // Apply normalisation from training set
         for j in 0..features.len() {
             if j < means.len() && j < stds.len() && stds[j] > 1e-10 {
                 features[j] = (features[j] - means[j]) / stds[j];
@@ -218,11 +256,11 @@ fn train_and_predict(
         }
 
         let lin_pred = lin.predict(&features);
-        let lin_prob = 1.0 / (1.0 + (-lin_pred).exp()); // sigmoid for comparable prob
+        let lin_prob = 1.0 / (1.0 + (-lin_pred).exp());
         let log_prob = log.predict_probability(&features);
         let gbt_prob = gbt_model.predict_proba(&features);
 
-        let (signal, _) = signal_from_probs(symbol, lin_prob, log_prob, gbt_prob);
+        let (signal, _) = signal_from_probs(symbol, lin_prob, log_prob, gbt_prob, &model_weights);
         results.push((signal, lin_prob, log_prob, gbt_prob));
     }
 
@@ -403,8 +441,8 @@ fn process_asset(
     let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
     let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-    let samples = features::build_rich_features(
-        &prices, &volumes, &timestamps, Some(market_context), asset_class, sector_etf, None, None,
+    let samples = features::build_rich_features_ext(
+        &prices, &volumes, &timestamps, Some(market_context), asset_class, sector_etf, None, None, None, None,
     );
     if samples.len() < 100 { return; }
 

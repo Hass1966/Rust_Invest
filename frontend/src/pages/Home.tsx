@@ -81,7 +81,7 @@ export default function Home() {
         </h1>
 
         <p className="text-lg sm:text-xl text-gray-400 max-w-2xl mx-auto mb-8 leading-relaxed">
-          Alpha Signal watches <span className="text-cyan-400 font-semibold">91 assets</span> around the clock
+          Alpha Signal watches <span className="text-cyan-400 font-semibold">196 assets</span> around the clock
           — stocks, currencies and crypto — and tells you in plain English
           whether to <span className="text-green-400 font-medium">buy</span>,{' '}
           <span className="text-red-400 font-medium">sell</span> or{' '}
@@ -114,9 +114,9 @@ export default function Home() {
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Card icon={Eye} title="Watches 91 Assets" accent="cyan">
-            Tracks 57 stocks (US &amp; UK), 19 currency pairs, and 15 cryptocurrencies
-            including Bitcoin, Ethereum and Solana. New assets added regularly.
+          <Card icon={Eye} title="Watches 196 Assets" accent="cyan">
+            Tracks 150 stocks &amp; ETFs (US, UK, European), 30 FX pairs, and 16 cryptocurrencies
+            across bonds, commodities, defensive sectors and growth. New assets added regularly.
           </Card>
           <Card icon={Brain} title="6 AI Models Vote" accent="purple">
             Every signal comes from six different AI models that each cast a vote.
@@ -206,7 +206,7 @@ export default function Home() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[
-            { step: '1', title: 'Gather Data', desc: 'We pull the latest prices, trading volumes, technical indicators, news headlines and social media sentiment for all 91 assets.', icon: Activity },
+            { step: '1', title: 'Gather Data', desc: 'We pull the latest prices, trading volumes, technical indicators, news headlines and social media sentiment for all 196 assets.', icon: Activity },
             { step: '2', title: 'Run the AI Models', desc: 'Six different machine-learning models independently analyse the data and each casts a vote: BUY, SELL or HOLD. We combine them into one consensus signal.', icon: Brain },
             { step: '3', title: 'Deliver Your Signals', desc: 'You open the Dashboard and see a clear card for every asset with the recommendation, the confidence level, and a plain-English explanation of why.', icon: BarChart3 },
           ].map(({ step, title, desc, icon: Icon }) => (
@@ -235,7 +235,7 @@ export default function Home() {
           {[
             {
               icon: BarChart3, label: 'Dashboard', path: '/dashboard', accent: 'cyan',
-              desc: 'Your home base. See today\'s BUY / SELL / HOLD signals for all 91 assets at a glance, an AI-generated morning briefing that summarises the day\'s top opportunities, and expandable cards showing which models agree and why.'
+              desc: 'Your home base. See today\'s BUY / SELL / HOLD signals for all 196 assets at a glance, an AI-generated morning briefing that summarises the day\'s top opportunities, and expandable cards showing which models agree and why.'
             },
             {
               icon: Target, label: 'Track Record', path: '/track-record', accent: 'amber',
@@ -332,7 +332,7 @@ export default function Home() {
             name="Temporal Fusion Transformer"
             accent="text-cyan-400 bg-cyan-500/10 border-cyan-500/20"
             what="A state-of-the-art deep learning architecture that combines attention mechanisms with temporal processing. It learns which features matter most at each point in time."
-            why="TFT can weigh recent vs. older data adaptively and handles the full 123-feature set, including news sentiment, sector data, and macro indicators."
+            why="TFT can weigh recent vs. older data adaptively and handles the full 154-feature set, including news sentiment, sector data, BOE/ECB rates, macro indicators, and cross-asset signals."
           />
         </div>
 
@@ -364,7 +364,7 @@ export default function Home() {
         {/* Feature engineering note */}
         <div className="mt-4 bg-[#0d1117] border border-[#1f2937] rounded-xl p-6">
           <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-purple-400" /> 123 Features Per Asset
+            <Activity className="w-5 h-5 text-purple-400" /> 143 Features Per Asset
           </h3>
           <p className="text-gray-400 text-sm leading-relaxed mb-4">
             Each model receives a rich feature vector covering 15 categories of market data. Here are the main groups:
