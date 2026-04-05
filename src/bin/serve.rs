@@ -3409,15 +3409,28 @@ async fn get_simulator_data(
     let result = tokio::task::spawn_blocking(move || {
         let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // Simulator assets
-        let stock_symbols = ["AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD", "SPY"];
+        // Simulator assets — must match frontend AVAILABLE_ASSETS + SPY benchmark
+        let stock_symbols = [
+            "AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD", "SPY",
+            "TLT", "AGG", "BND", "USO", "CPER", "BRK-B",
+        ];
+        let fx_symbols = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "EURJPY=X"];
         let crypto_ids = ["bitcoin", "ethereum"];
 
         let mut price_history = serde_json::Map::new();
 
-        // Fetch stock prices (includes SPY benchmark)
+        // Fetch stock/ETF prices (includes SPY benchmark)
         for sym in &stock_symbols {
             let points = database.get_stock_history(sym).unwrap_or_default();
+            let arr: Vec<serde_json::Value> = points.iter().map(|p| {
+                serde_json::json!({"date": &p.timestamp[..10], "price": p.price})
+            }).collect();
+            price_history.insert(sym.to_string(), serde_json::Value::Array(arr));
+        }
+
+        // Fetch FX prices
+        for sym in &fx_symbols {
+            let points = database.get_fx_history(sym).unwrap_or_default();
             let arr: Vec<serde_json::Value> = points.iter().map(|p| {
                 serde_json::json!({"date": &p.timestamp[..10], "price": p.price})
             }).collect();
@@ -3433,8 +3446,13 @@ async fn get_simulator_data(
             price_history.insert(coin.to_string(), serde_json::Value::Array(arr));
         }
 
-        // Fetch signal history for the 10 assets (not SPY)
-        let sim_assets = ["AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD", "bitcoin", "ethereum"];
+        // Fetch signal history for all simulator assets (not SPY)
+        let sim_assets = [
+            "AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD",
+            "TLT", "AGG", "BND", "USO", "CPER", "BRK-B",
+            "EURUSD=X", "GBPUSD=X", "USDJPY=X", "EURJPY=X",
+            "bitcoin", "ethereum",
+        ];
         let all_signals = database.get_signal_history_all(10000).unwrap_or_default();
 
         let mut signal_history = serde_json::Map::new();

@@ -447,6 +447,11 @@ fn infer_with_saved_models_quiet(
         has_lstm: false,
         has_gru: false,
         has_rf: false,
+        has_lgbm: false,
+        lgbm_accuracy: 50.0,
+        lgbm_recent: 50.0,
+        final_lgbm_prob: 0.5,
+        lgbm_importance: Vec::new(),
         stacking_weights: None,
         val_log_loss: None,
     })

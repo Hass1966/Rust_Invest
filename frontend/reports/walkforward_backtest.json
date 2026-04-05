@@ -1,0 +1,143 @@
+{
+  "generated_at": "2026-03-31T14:18:31.812051836+00:00",
+  "windows": [
+    {
+      "train_end": "2022-01-02",
+      "test_start": "2022-01-03",
+      "test_end": "2022-03-31",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2022-03-31",
+      "test_start": "2022-04-01",
+      "test_end": "2022-06-30",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2022-06-30",
+      "test_start": "2022-07-01",
+      "test_end": "2022-09-30",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2022-10-02",
+      "test_start": "2022-10-03",
+      "test_end": "2022-12-30",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2023-01-02",
+      "test_start": "2023-01-03",
+      "test_end": "2023-03-31",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2023-04-02",
+      "test_start": "2023-04-03",
+      "test_end": "2023-06-30",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2023-07-02",
+      "test_start": "2023-07-03",
+      "test_end": "2023-09-29",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2023-10-01",
+      "test_start": "2023-10-02",
+      "test_end": "2023-12-29",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2024-01-01",
+      "test_start": "2024-01-02",
+      "test_end": "2024-03-28",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2024-03-31",
+      "test_start": "2024-04-01",
+      "test_end": "2024-06-28",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2024-06-30",
+      "test_start": "2024-07-01",
+      "test_end": "2024-09-30",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2024-09-30",
+      "test_start": "2024-10-01",
+      "test_end": "2024-12-31",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2025-01-01",
+      "test_start": "2025-01-02",
+      "test_end": "2025-03-31",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2025-03-31",
+      "test_start": "2025-04-01",
+      "test_end": "2025-06-30",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2025-06-30",
+      "test_start": "2025-07-01",
+      "test_end": "2025-09-30",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    },
+    {
+      "train_end": "2025-09-30",
+      "test_start": "2025-10-01",
+      "test_end": "2025-12-31",
+      "signals_generated": 0,
+      "buy_accuracy": 0.0,
+      "sell_accuracy": 0.0
+    }
+  ],
+  "signals": [],
+  "summary": {
+    "total_signals": 0,
+    "buy_accuracy": 0.0,
+    "sell_accuracy": 0.0,
+    "expected_value_bps": 0.0,
+    "profit_factor": 0.0,
+    "sharpe_ratio": 0.0,
+    "max_drawdown_pct": 0.0
+  }
+}

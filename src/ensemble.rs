@@ -13,7 +13,8 @@
 ///   walk_forward()         — takes raw prices/volumes, builds basic features (for crypto)
 
 use crate::ml::{self, Sample};
-use crate::gbt::{self, GBTConfig, TreeConfig, GradientBoostedClassifier};
+use crate::gbt::{self, GBTConfig, GradientBoostedClassifier};
+use crate::lgbm::{LGBMConfig, LightGBMClassifier};
 use crate::lstm::{self, LSTMModelConfig};
 use crate::gru::{self, GRUModelConfig};
 use crate::random_forest::{self, RandomForestConfig};
@@ -105,16 +106,22 @@ pub struct WalkForwardResult {
     pub has_gru: bool,
     pub has_rf: bool,
     /// Stacking meta-learner weights (trained on out-of-fold predictions)
-    /// Order: [linreg, logreg, gbt, lstm, gru, rf, bias]
+    /// Order: [linreg, logreg, gbt, lgbm, lstm, gru, rf, bias]
     pub stacking_weights: Option<Vec<f64>>,
     /// Per-model validation log-loss (lower = better calibrated)
     /// Used for inverse-loss weighted ensemble voting
-    pub val_log_loss: Option<[f64; 3]>, // [linreg, logreg, gbt]
+    pub val_log_loss: Option<[f64; 4]>, // [linreg, logreg, gbt, lgbm]
+    /// LightGBM model #7
+    pub lgbm_accuracy: f64,
+    pub lgbm_recent: f64,
+    pub final_lgbm_prob: f64,
+    pub has_lgbm: bool,
+    pub lgbm_importance: Vec<(String, f64)>,
 }
 
 /// A single out-of-fold prediction from all models (for stacking)
 struct StackingSample {
-    model_probs: [f64; 6], // linreg, logreg, gbt, lstm, gru, rf
+    model_probs: [f64; 7], // linreg, logreg, gbt, lgbm, lstm, gru, rf
     actual_up: bool,
 }
 
@@ -124,7 +131,7 @@ fn train_stacking_meta(stacking_data: &[StackingSample]) -> Option<Vec<f64>> {
         return None;
     }
 
-    // Convert to ml::Sample format with 5 features (model probs)
+    // Convert to ml::Sample format with 7 features (model probs)
     let samples: Vec<Sample> = stacking_data.iter().map(|s| {
         Sample {
             features: s.model_probs.to_vec(),
@@ -132,7 +139,7 @@ fn train_stacking_meta(stacking_data: &[StackingSample]) -> Option<Vec<f64>> {
         }
     }).collect();
 
-    let n_feat = 6;
+    let n_feat = 7;
     let mut meta = ml::LogisticRegression::new(n_feat);
     // No normalisation — inputs are already [0,1] probabilities
     meta.train(&samples, 0.05, 2000);
@@ -148,17 +155,17 @@ fn train_stacking_meta(stacking_data: &[StackingSample]) -> Option<Vec<f64>> {
     }).count();
     let acc = correct as f64 / stacking_data.len() as f64 * 100.0;
     println!("    [Stacking] Meta-learner trained on {} samples, accuracy: {:.1}%", stacking_data.len(), acc);
-    println!("    [Stacking] Weights: lin={:.3} log={:.3} gbt={:.3} lstm={:.3} gru={:.3} rf={:.3} bias={:.3}",
-        meta.weights[0], meta.weights[1], meta.weights[2], meta.weights[3], meta.weights[4], meta.weights[5], meta.bias);
+    println!("    [Stacking] Weights: lin={:.3} log={:.3} gbt={:.3} lgbm={:.3} lstm={:.3} gru={:.3} rf={:.3} bias={:.3}",
+        meta.weights[0], meta.weights[1], meta.weights[2], meta.weights[3], meta.weights[4], meta.weights[5], meta.weights[6], meta.bias);
 
     Some(weights)
 }
 
 /// Apply stacking meta-learner to produce ensemble probability
-pub fn stacking_predict(weights: &[f64], model_probs: &[f64; 6]) -> f64 {
-    if weights.len() < 7 { return 0.5; }
+pub fn stacking_predict(weights: &[f64], model_probs: &[f64; 7]) -> f64 {
+    if weights.len() < 8 { return 0.5; }
     let logit: f64 = model_probs.iter().zip(weights.iter())
-        .map(|(p, w)| p * w).sum::<f64>() + weights[6]; // weights[6] = bias
+        .map(|(p, w)| p * w).sum::<f64>() + weights[7]; // weights[7] = bias
     // Sigmoid
     (1.0 / (1.0 + (-logit).exp())).clamp(0.15, 0.85)
 }
@@ -210,18 +217,23 @@ pub fn walk_forward_samples(
     let mut total_lin_correct = 0_usize;
     let mut total_log_correct = 0_usize;
     let mut total_gbt_correct = 0_usize;
+    let mut total_lgbm_correct = 0_usize;
     let mut total_tested = 0_usize;
     let mut n_folds = 0_usize;
 
     let mut last_lin_correct = 0_usize;
     let mut last_log_correct = 0_usize;
     let mut last_gbt_correct = 0_usize;
+    let mut last_lgbm_correct = 0_usize;
     let mut last_fold_size = 0_usize;
 
     let mut last_lin_prob = 0.5;
     let mut last_log_prob = 0.5;
     let mut last_gbt_prob = 0.5;
+    let mut last_lgbm_prob = 0.5;
     let mut last_gbt_importance = Vec::new();
+    let mut last_lgbm_importance = Vec::new();
+    let mut has_lgbm = false;
 
     // Collect out-of-fold predictions for stacking meta-learner
     let mut stacking_data: Vec<StackingSample> = Vec::new();
@@ -230,6 +242,7 @@ pub fn walk_forward_samples(
     let mut total_lin_log_loss = 0.0_f64;
     let mut total_log_log_loss = 0.0_f64;
     let mut total_gbt_log_loss = 0.0_f64;
+    let mut total_lgbm_log_loss = 0.0_f64;
     let mut total_val_samples = 0_usize;
 
     let mut start = 0;
@@ -266,26 +279,24 @@ pub fn walk_forward_samples(
         let (y_t, y_v) = y_train.split_at(val_start);
         let gbt_recency = &recency_weights[..x_t.len()]; // only training portion
 
-        let gbt_config = GBTConfig {
-            n_trees: 80,
-            learning_rate: 0.08,
-            tree_config: TreeConfig {
-                max_depth: 4,
-                min_samples_leaf: 8,
-                min_samples_split: 16,
-            },
-            subsample_ratio: 0.8,
-            early_stopping_rounds: Some(8),
-        };
+        let gbt_config = GBTConfig::default();
 
         let gbt = GradientBoostedClassifier::train_weighted(
             x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config,
+        );
+
+        // Train LightGBM model #7
+        let lgbm_config = LGBMConfig::default();
+        let lgbm_recency: Vec<f64> = recency_weights[..x_t.len()].to_vec();
+        let lgbm_model = LightGBMClassifier::train(
+            x_t, y_t, Some(&lgbm_recency), Some(x_v), Some(y_v), &lgbm_config,
         );
 
         // Evaluate + collect stacking data
         let mut fold_lin = 0;
         let mut fold_log = 0;
         let mut fold_gbt = 0;
+        let mut fold_lgbm = 0;
 
         for s in test_data.iter() {
             let actual_up = s.label > 0.0;
@@ -293,20 +304,25 @@ pub fn walk_forward_samples(
             let lin_prob = (1.0 / (1.0 + (-raw_lin).exp())).clamp(0.05, 0.95);
             let log_prob = log.predict_probability(&s.features).clamp(0.05, 0.95);
             let gbt_prob_val = gbt.predict_proba(&s.features).clamp(0.05, 0.95);
+            let lgbm_prob_val = lgbm_model.as_ref()
+                .map(|m| m.predict_proba(&s.features).clamp(0.05, 0.95))
+                .unwrap_or(0.5);
 
             if (raw_lin > 0.0) == actual_up { fold_lin += 1; }
             if log.predict_direction(&s.features) == actual_up { fold_log += 1; }
             if gbt.predict_direction(&s.features) == actual_up { fold_gbt += 1; }
+            if lgbm_model.as_ref().map(|m| m.predict_direction(&s.features)).unwrap_or(false) == actual_up { fold_lgbm += 1; }
 
             // Accumulate validation log-loss for inverse-loss weighting
             total_lin_log_loss += log_loss_single(lin_prob, actual_up);
             total_log_log_loss += log_loss_single(log_prob, actual_up);
             total_gbt_log_loss += log_loss_single(gbt_prob_val, actual_up);
+            total_lgbm_log_loss += log_loss_single(lgbm_prob_val, actual_up);
             total_val_samples += 1;
 
             // Store for stacking (LSTM/GRU/RF probs filled later with 0.5 placeholder)
             stacking_data.push(StackingSample {
-                model_probs: [lin_prob, log_prob, gbt_prob_val, 0.5, 0.5, 0.5],
+                model_probs: [lin_prob, log_prob, gbt_prob_val, lgbm_prob_val, 0.5, 0.5, 0.5],
                 actual_up,
             });
         }
@@ -314,12 +330,14 @@ pub fn walk_forward_samples(
         total_lin_correct += fold_lin;
         total_log_correct += fold_log;
         total_gbt_correct += fold_gbt;
+        total_lgbm_correct += fold_lgbm;
         total_tested += test_len;
         n_folds += 1;
 
         last_lin_correct = fold_lin;
         last_log_correct = fold_log;
         last_gbt_correct = fold_gbt;
+        last_lgbm_correct = fold_lgbm;
         last_fold_size = test_len;
 
         // Final predictions (sigmoid + clamp)
@@ -328,6 +346,9 @@ pub fn walk_forward_samples(
             last_lin_prob = (1.0 / (1.0 + (-raw_lin).exp())).clamp(0.15, 0.85);
             last_log_prob = log.predict_probability(&last_sample.features).clamp(0.15, 0.85);
             last_gbt_prob = gbt.predict_proba(&last_sample.features).clamp(0.15, 0.85);
+            last_lgbm_prob = lgbm_model.as_ref()
+                .map(|m| m.predict_proba(&last_sample.features).clamp(0.15, 0.85))
+                .unwrap_or(0.5);
         }
 
         let feat_names: Vec<String> = {
@@ -340,6 +361,10 @@ pub fn walk_forward_samples(
         };
         let feat_refs: Vec<&str> = feat_names.iter().map(|s| s.as_str()).collect();
         last_gbt_importance = gbt.feature_importance(&feat_refs);
+        if let Ok(ref m) = lgbm_model {
+            last_lgbm_importance = m.feature_importance(&feat_refs);
+            has_lgbm = true;
+        }
 
         start += step;
     }
@@ -351,20 +376,28 @@ pub fn walk_forward_samples(
     let linear_acc = total_lin_correct as f64 / total_tested as f64 * 100.0;
     let logistic_acc = total_log_correct as f64 / total_tested as f64 * 100.0;
     let gbt_acc = total_gbt_correct as f64 / total_tested as f64 * 100.0;
+    let lgbm_acc = total_lgbm_correct as f64 / total_tested as f64 * 100.0;
 
     let linear_recent = last_lin_correct as f64 / last_fold_size.max(1) as f64 * 100.0;
     let logistic_recent = last_log_correct as f64 / last_fold_size.max(1) as f64 * 100.0;
     let gbt_recent = last_gbt_correct as f64 / last_fold_size.max(1) as f64 * 100.0;
+    let lgbm_recent = last_lgbm_correct as f64 / last_fold_size.max(1) as f64 * 100.0;
 
     println!("    walk-forward: {} folds, {} test samples", n_folds, total_tested);
-    println!("      LinReg: {:.1}% (recent: {:.1}%)", linear_acc, linear_recent);
-    println!("      LogReg: {:.1}% (recent: {:.1}%)", logistic_acc, logistic_recent);
-    println!("      GBT:    {:.1}% (recent: {:.1}%)", gbt_acc, gbt_recent);
+    println!("      LinReg:  {:.1}% (recent: {:.1}%)", linear_acc, linear_recent);
+    println!("      LogReg:  {:.1}% (recent: {:.1}%)", logistic_acc, logistic_recent);
+    println!("      GBT:     {:.1}% (recent: {:.1}%)", gbt_acc, gbt_recent);
+    println!("      LightGBM:{:.1}% (recent: {:.1}%)", lgbm_acc, lgbm_recent);
 
-    // Extract top-30 GBT feature indices for LSTM input
+    // Extract top-30 feature indices for LSTM input
+    // Prefer LightGBM importance (better feature ranking) if available, else fall back to custom GBT
+    let importance_source = if has_lgbm && !last_lgbm_importance.is_empty() {
+        &last_lgbm_importance
+    } else {
+        &last_gbt_importance
+    };
     let top_feature_indices: Vec<usize> = {
-        // GBT importance is returned in feature-index order; sort by importance descending
-        let mut indexed: Vec<(usize, f64)> = last_gbt_importance.iter()
+        let mut indexed: Vec<(usize, f64)> = importance_source.iter()
             .enumerate()
             .map(|(i, (_name, imp))| (i, *imp))
             .collect();
@@ -372,7 +405,8 @@ pub fn walk_forward_samples(
         indexed.iter().take(30).map(|(idx, _)| *idx).collect()
     };
     let lstm_n_features = if top_feature_indices.len() >= 20 { top_feature_indices.len() } else { n_features };
-    println!("    [LSTM] Using top {} GBT features (indices: {:?})", lstm_n_features, &top_feature_indices[..top_feature_indices.len().min(10)]);
+    let source_name = if has_lgbm { "LightGBM" } else { "GBT" };
+    println!("    [LSTM] Using top {} {} features (indices: {:?})", lstm_n_features, source_name, &top_feature_indices[..top_feature_indices.len().min(10)]);
     let lstm_feature_indices = if top_feature_indices.len() >= 20 { Some(top_feature_indices) } else { None };
 
     // Run LSTM walk-forward with top GBT features, larger hidden, shorter sequence
@@ -442,11 +476,12 @@ pub fn walk_forward_samples(
             (total_lin_log_loss / n).max(0.01),
             (total_log_log_loss / n).max(0.01),
             (total_gbt_log_loss / n).max(0.01),
+            (total_lgbm_log_loss / n).max(0.01),
         ];
-        println!("    [Val LogLoss] lin={:.4} log={:.4} gbt={:.4}", losses[0], losses[1], losses[2]);
-        let inv_sum = 1.0 / losses[0] + 1.0 / losses[1] + 1.0 / losses[2];
-        println!("    [Inv-Loss Weights] lin={:.3} log={:.3} gbt={:.3}",
-            (1.0 / losses[0]) / inv_sum, (1.0 / losses[1]) / inv_sum, (1.0 / losses[2]) / inv_sum);
+        println!("    [Val LogLoss] lin={:.4} log={:.4} gbt={:.4} lgbm={:.4}", losses[0], losses[1], losses[2], losses[3]);
+        let inv_sum = 1.0 / losses[0] + 1.0 / losses[1] + 1.0 / losses[2] + 1.0 / losses[3];
+        println!("    [Inv-Loss Weights] lin={:.3} log={:.3} gbt={:.3} lgbm={:.3}",
+            (1.0 / losses[0]) / inv_sum, (1.0 / losses[1]) / inv_sum, (1.0 / losses[2]) / inv_sum, (1.0 / losses[3]) / inv_sum);
         Some(losses)
     } else {
         None
@@ -460,6 +495,7 @@ pub fn walk_forward_samples(
         lstm_accuracy: lstm_acc,
         gru_accuracy: gru_acc,
         rf_accuracy: rf_acc,
+        lgbm_accuracy: lgbm_acc,
         n_folds,
         total_test_samples: total_tested,
         linear_recent,
@@ -468,17 +504,21 @@ pub fn walk_forward_samples(
         lstm_recent: lstm_recent_acc,
         gru_recent: gru_recent_acc,
         rf_recent: rf_recent_acc,
+        lgbm_recent,
         final_linear_prob: last_lin_prob,
         final_logistic_prob: last_log_prob,
         final_gbt_prob: last_gbt_prob,
         final_lstm_prob: lstm_prob,
         final_gru_prob: gru_prob,
         final_rf_prob: rf_prob,
+        final_lgbm_prob: last_lgbm_prob,
         gbt_importance: last_gbt_importance,
+        lgbm_importance: last_lgbm_importance,
         n_features,
         has_lstm,
         has_gru,
         has_rf,
+        has_lgbm,
         stacking_weights,
         val_log_loss,
     })
@@ -578,17 +618,7 @@ fn walk_forward_samples_no_lstm(
         let (y_t, y_v) = y_train.split_at(val_start);
         let gbt_recency = &recency_weights[..x_t.len()];
 
-        let gbt_config = GBTConfig {
-            n_trees: 80,
-            learning_rate: 0.08,
-            tree_config: TreeConfig {
-                max_depth: 4,
-                min_samples_leaf: 8,
-                min_samples_split: 16,
-            },
-            subsample_ratio: 0.8,
-            early_stopping_rounds: Some(8),
-        };
+        let gbt_config = GBTConfig::default();
 
         let gbt = GradientBoostedClassifier::train_weighted(
             x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config,
@@ -660,6 +690,7 @@ fn walk_forward_samples_no_lstm(
             (total_lin_log_loss / n).max(0.01),
             (total_log_log_loss / n).max(0.01),
             (total_gbt_log_loss / n).max(0.01),
+            0.693, // placeholder for LGBM (not trained in no_lstm path)
         ])
     } else {
         None
@@ -675,6 +706,7 @@ fn walk_forward_samples_no_lstm(
         linear_accuracy: linear_acc,
         logistic_accuracy: logistic_acc,
         gbt_accuracy: gbt_acc,
+        lgbm_accuracy: 50.0,
         lstm_accuracy: 50.0,
         gru_accuracy: 50.0,
         rf_accuracy: 50.0,
@@ -683,20 +715,24 @@ fn walk_forward_samples_no_lstm(
         linear_recent,
         logistic_recent,
         gbt_recent,
+        lgbm_recent: 50.0,
         lstm_recent: 50.0,
         gru_recent: 50.0,
         rf_recent: 50.0,
         final_linear_prob: last_lin_prob,
         final_logistic_prob: last_log_prob,
         final_gbt_prob: last_gbt_prob,
+        final_lgbm_prob: 0.5,
         final_lstm_prob: 0.5,
         final_gru_prob: 0.5,
         final_rf_prob: 0.5,
         gbt_importance: last_gbt_importance,
+        lgbm_importance: Vec::new(),
         n_features,
         has_lstm: false,
         has_gru: false,
         has_rf: false,
+        has_lgbm: false,
         stacking_weights: None,
         val_log_loss,
     })
@@ -715,12 +751,14 @@ pub struct TradingSignal {
     pub linear_prob: f64,
     pub logistic_prob: f64,
     pub gbt_prob: f64,
+    pub lgbm_prob: f64,
     pub lstm_prob: f64,
     pub gru_prob: f64,
     pub rf_prob: f64,
     pub linear_weight: f64,
     pub logistic_weight: f64,
     pub gbt_weight: f64,
+    pub lgbm_weight: f64,
     pub lstm_weight: f64,
     pub gru_weight: f64,
     pub rf_weight: f64,
@@ -734,21 +772,15 @@ pub struct TradingSignal {
     pub has_lstm: bool,
     pub has_gru: bool,
     pub has_rf: bool,
+    pub has_lgbm: bool,
     pub llm_sentiment: f64,
     pub llm_analysis: Option<String>,
 }
 
-/// Per-asset signal thresholds — noisy assets need higher confidence.
-/// Hardcoded fallback; use `get_adaptive_threshold()` when DB data available.
-pub fn get_signal_threshold(symbol: &str) -> (f64, f64) {
-    match symbol {
-        "TSLA" | "DIA" => (0.62, 0.38),
-        "QQQ" | "AMZN" | "GOOGL" => (0.60, 0.40),
-        "MSFT" => (0.58, 0.42),
-        "META" | "NVDA" | "AAPL" | "SPY" => (0.57, 0.43),
-        "USDJPY=X" | "AUDUSD=X" | "EURUSD=X" | "GBPUSD=X" | "USDCHF=X" => (0.55, 0.45),
-        _ => (0.57, 0.43),
-    }
+/// Fixed global signal thresholds — simpler, less overfit.
+/// BUY when ensemble_prob > 0.55, SELL when < 0.45.
+pub fn get_signal_threshold(_symbol: &str) -> (f64, f64) {
+    (0.55, 0.45)
 }
 
 /// Compute adaptive thresholds from historical signal accuracy.
@@ -863,12 +895,14 @@ pub fn ensemble_signal_with_override(
     let best_overall = wf.linear_accuracy
         .max(wf.logistic_accuracy)
         .max(wf.gbt_accuracy)
+        .max(if wf.has_lgbm { wf.lgbm_accuracy } else { 0.0 })
         .max(if wf.has_lstm { wf.lstm_accuracy } else { 0.0 })
         .max(if wf.has_gru { wf.gru_accuracy } else { 0.0 })
         .max(if wf.has_rf { wf.rf_accuracy } else { 0.0 });
 
     let mut acc_sum = wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy;
     let mut acc_count = 3.0_f64;
+    if wf.has_lgbm { acc_sum += wf.lgbm_accuracy; acc_count += 1.0; }
     if wf.has_lstm { acc_sum += wf.lstm_accuracy; acc_count += 1.0; }
     if wf.has_gru { acc_sum += wf.gru_accuracy; acc_count += 1.0; }
     if wf.has_rf { acc_sum += wf.rf_accuracy; acc_count += 1.0; }
@@ -886,18 +920,18 @@ pub fn ensemble_signal_with_override(
 
     // Inverse validation log-loss weighting (preferred) or accuracy-squared fallback.
     // Models with lower log-loss (better calibrated probabilities) get higher weight.
-    let (lin_weight, log_weight, gbt_weight) = if let Some(ref losses) = wf.val_log_loss {
-        // Inverse-loss weights, masked by ensemble override
+    let (lin_weight, log_weight, gbt_weight, lgbm_weight_base) = if let Some(ref losses) = wf.val_log_loss {
         let inv_lin = if ov.use_linreg { 1.0 / losses[0] } else { 0.0 };
         let inv_log = if ov.use_logreg { 1.0 / losses[1] } else { 0.0 };
         let inv_gbt = if ov.use_gbt { 1.0 / losses[2] } else { 0.0 };
-        (inv_lin, inv_log, inv_gbt)
+        let inv_lgbm = if wf.has_lgbm { 1.0 / losses[3] } else { 0.0 };
+        (inv_lin, inv_log, inv_gbt, inv_lgbm)
     } else {
-        // Fallback: accuracy-squared weighting with GBT 1.2x bonus
         let lw = if ov.use_linreg { (wf.linear_recent / 100.0).powi(2) } else { 0.0 };
         let logw = if ov.use_logreg { (wf.logistic_recent / 100.0).powi(2) } else { 0.0 };
-        let gw = if ov.use_gbt { (wf.gbt_recent / 100.0).powi(2) * 1.2 } else { 0.0 };
-        (lw, logw, gw)
+        let gw = if ov.use_gbt { (wf.gbt_recent / 100.0).powi(2) } else { 0.0 };
+        let lgw = if wf.has_lgbm { (wf.lgbm_recent / 100.0).powi(2) } else { 0.0 };
+        (lw, logw, gw, lgw)
     };
 
     // Gate LSTM per-asset: <54% exclude, 54-58% normal weight, >58% double weight
@@ -930,27 +964,30 @@ pub fn ensemble_signal_with_override(
         (wf.rf_recent / 100.0).powi(2)
     };
 
-    let total_weight = lin_weight + log_weight + gbt_weight + lstm_weight + gru_weight + rf_weight;
+    let lgbm_useful = wf.has_lgbm;
+    let total_weight = lin_weight + log_weight + gbt_weight + lgbm_weight_base + lstm_weight + gru_weight + rf_weight;
 
-    let (lw, logw, gw, lstmw, gruw, rfw) = if total_weight > 0.0 {
+    let (lw, logw, gw, lgbmw, lstmw, gruw, rfw) = if total_weight > 0.0 {
         (
             lin_weight / total_weight,
             log_weight / total_weight,
             gbt_weight / total_weight,
+            lgbm_weight_base / total_weight,
             lstm_weight / total_weight,
             gru_weight / total_weight,
             rf_weight / total_weight,
         )
     } else {
-        (1.0/3.0, 1.0/3.0, 1.0/3.0, 0.0, 0.0, 0.0)
+        (1.0/4.0, 1.0/4.0, 1.0/4.0, 1.0/4.0, 0.0, 0.0, 0.0)
     };
 
-    // Use stacking meta-learner if available, otherwise fall back to accuracy-weighted average
+    // Use stacking meta-learner if available, otherwise fall back to inverse-loss weighted average
     let ensemble_prob = if let Some(ref sw) = wf.stacking_weights {
         let model_probs = [
             wf.final_linear_prob,
             wf.final_logistic_prob,
             wf.final_gbt_prob,
+            if lgbm_useful { wf.final_lgbm_prob } else { 0.5 },
             if lstm_useful { wf.final_lstm_prob } else { 0.5 },
             if gru_useful { wf.final_gru_prob } else { 0.5 },
             if rf_useful { wf.final_rf_prob } else { 0.5 },
@@ -960,6 +997,7 @@ pub fn ensemble_signal_with_override(
         lw * wf.final_linear_prob
             + logw * wf.final_logistic_prob
             + gw * wf.final_gbt_prob
+            + lgbmw * wf.final_lgbm_prob
             + lstmw * wf.final_lstm_prob
             + gruw * wf.final_gru_prob
             + rfw * wf.final_rf_prob
@@ -971,6 +1009,7 @@ pub fn ensemble_signal_with_override(
     if ov.use_linreg { n_models += 1; if wf.final_linear_prob > 0.5 { ups += 1; } }
     if ov.use_logreg { n_models += 1; if wf.final_logistic_prob > 0.5 { ups += 1; } }
     if ov.use_gbt { n_models += 1; if wf.final_gbt_prob > 0.5 { ups += 1; } }
+    if lgbm_useful { n_models += 1; if wf.final_lgbm_prob > 0.5 { ups += 1; } }
     if lstm_useful { n_models += 1; if wf.final_lstm_prob > 0.5 { ups += 1; } }
     if gru_useful { n_models += 1; if wf.final_gru_prob > 0.5 { ups += 1; } }
     if rf_useful { n_models += 1; if wf.final_rf_prob > 0.5 { ups += 1; } }
@@ -1022,6 +1061,7 @@ pub fn ensemble_signal_with_override(
     let wf_accuracy = wf.linear_accuracy * lw
         + wf.logistic_accuracy * logw
         + wf.gbt_accuracy * gw
+        + wf.lgbm_accuracy * lgbmw
         + wf.lstm_accuracy * lstmw
         + wf.gru_accuracy * gruw
         + wf.rf_accuracy * rfw;
@@ -1034,12 +1074,14 @@ pub fn ensemble_signal_with_override(
         linear_prob: wf.final_linear_prob,
         logistic_prob: wf.final_logistic_prob,
         gbt_prob: wf.final_gbt_prob,
+        lgbm_prob: wf.final_lgbm_prob,
         lstm_prob: wf.final_lstm_prob,
         gru_prob: wf.final_gru_prob,
         rf_prob: wf.final_rf_prob,
         linear_weight: lw,
         logistic_weight: logw,
         gbt_weight: gw,
+        lgbm_weight: lgbmw,
         lstm_weight: lstmw,
         gru_weight: gruw,
         rf_weight: rfw,
@@ -1053,6 +1095,7 @@ pub fn ensemble_signal_with_override(
         has_lstm: lstm_useful,
         has_gru: gru_useful,
         has_rf: rf_useful,
+        has_lgbm: lgbm_useful,
         llm_sentiment: 0.0,
         llm_analysis: None,
     }

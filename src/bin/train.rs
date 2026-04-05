@@ -7,6 +7,7 @@ use rust_invest::*;
 use chrono::Utc;
 use tokio::time::{sleep, Duration};
 use std::collections::HashMap;
+use rayon::prelude::*;
 
 /// Accuracy results for one asset (used in comparison report)
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -26,6 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = reqwest::Client::new();
     let database = db::Database::new("rust_invest.db")?;
+    // Enable WAL mode for safe concurrent reads during parallel training
+    database.set_wal_mode();
 
     // Load Polygon API key for primary price data
     let polygon_key = std::env::var("POLYGON_API_KEY").ok();
@@ -224,25 +227,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bt_config = backtester::BacktestConfig::default();
     // let tft_config = tft::TFTConfig::default();
 
-    for stock in stocks::STOCK_LIST {
-        let points = database.get_stock_history(stock.symbol)?;
-        if points.len() < 300 { continue; }
+    // Pre-fetch all stock data from database (sequential reads)
+    let stock_data: Vec<_> = stocks::STOCK_LIST.iter().filter_map(|stock| {
+        database.get_stock_history(stock.symbol).ok()
+            .filter(|points| points.len() >= 300)
+            .map(|points| (stock, points))
+    }).collect();
+    println!("  Loaded {} stocks with sufficient data — training in parallel\n", stock_data.len());
 
+    // Train all stocks in parallel using all CPU cores
+    type RetrainLog = (String, f64, f64, i64, i64, i64, i64);
+    let stock_results: Vec<(Option<(String, AssetAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
+        stock_data.par_iter().filter_map(|(stock, points)| {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
         let samples = features::build_rich_features_ext(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None, Some(&ext_macro), None);
-        if samples.len() < 100 { continue; }
+        if samples.len() < 100 { return None; }
 
-        // Class distribution analysis for SHORT labels
         let vol_threshold = features::compute_volatility_threshold(&samples);
         let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&samples, vol_threshold);
         let (w_down, w_up) = features::compute_class_weights(&samples, vol_threshold);
         println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
             stock.symbol, buy_count, short_count, sell_count, hold_count, w_down, w_up);
 
-        // Record pre-retrain accuracy baseline
         let pre_acc = model_store::load_model_accuracy(stock.symbol);
 
         let n_feat = samples[0].features.len();
@@ -250,27 +259,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let test_window = 30.min(samples.len() / 10);
         let step = test_window;
 
-        // Model 1-4: Core ensemble (LinReg, LogReg, GBT, LSTM)
+        let mut accuracy_data = None;
+
         if let Some(wf) = ensemble::walk_forward_samples(stock.symbol, &samples, train_window, test_window, step) {
             let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
 
-            // Model 5: Regime-Aware Ensemble
             let mut regime_acc = 0.0;
             if let Some(rw) = regime::walk_forward_regime(stock.symbol, &samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
 
-            // Track accuracy for comparison report
             let ov = ensemble::get_override(&ensemble_overrides, stock.symbol);
             let ens_acc = compute_ensemble_accuracy(&wf, &ov);
-            accuracy_results.insert(stock.symbol.to_string(), AssetAccuracy {
-                linreg: wf.linear_accuracy,
-                logreg: wf.logistic_accuracy,
-                gbt: wf.gbt_accuracy,
-                lstm: lstm_acc,
-                regime: regime_acc,
-                ensemble: ens_acc,
-            });
 
             // Save final-fold models
             let last_train_end = {
@@ -281,7 +281,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
 
-            // Recency weighting with class weight adjustment
             let recency_weights = ensemble::compute_recency_weights(last_fold.len());
             let class_adjusted_weights: Vec<f64> = last_fold.iter().zip(recency_weights.iter()).map(|(s, &rw)| {
                 let cw = if s.label > 0.0 { w_up } else { w_down };
@@ -302,39 +301,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
             let gbt_recency = &class_adjusted_weights[..x_t.len()];
-            let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
+            let gbt_config = gbt::GBTConfig::default();
             let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(stock.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            // Log retrain results with class distribution
-            let _ = database.insert_retrain_log(
-                stock.symbol, "ensemble", pre_acc,
-                (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
-                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64,
-            );
-
+            let post_acc = (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0;
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 stock.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
                 lstm_acc, regime_acc);
+
+            accuracy_data = Some((stock.symbol.to_string(), AssetAccuracy {
+                linreg: wf.linear_accuracy,
+                logreg: wf.logistic_accuracy,
+                gbt: wf.gbt_accuracy,
+                lstm: lstm_acc,
+                regime: regime_acc,
+                ensemble: ens_acc,
+            }, (stock.symbol.to_string(), pre_acc, post_acc,
+                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64)));
         }
 
-        if let Some(bt) = backtester::run_backtest(stock.symbol, &samples, &prices, train_window, test_window, step, &bt_config) {
+        let backtest = backtester::run_backtest(stock.symbol, &samples, &prices, train_window, test_window, step, &bt_config);
+        Some((accuracy_data, backtest))
+    }).collect();
+
+    // Merge results and write retrain logs (sequential DB writes)
+    for (accuracy_opt, backtest_opt) in stock_results {
+        if let Some((symbol, acc, (sym, pre_acc, post_acc, buy, sell, short, hold))) = accuracy_opt {
+            accuracy_results.insert(symbol, acc);
+            let _ = database.insert_retrain_log(&sym, "ensemble", pre_acc, post_acc, buy, sell, short, hold);
+        }
+        if let Some(bt) = backtest_opt {
             backtest_results.push(bt);
         }
     }
 
     // ── Train & save all 6 models for FX ──
     println!("\n━━━ TRAINING FX MODELS ━━━\n");
-    for fx in stocks::FX_LIST {
-        let points = database.get_fx_history(fx.symbol)?;
-        if points.len() < 300 { continue; }
+    // Pre-fetch all FX data from database (sequential reads)
+    let fx_data: Vec<_> = stocks::FX_LIST.iter().filter_map(|fx| {
+        database.get_fx_history(fx.symbol).ok()
+            .filter(|points| points.len() >= 300)
+            .map(|points| (fx, points))
+    }).collect();
+    println!("  Loaded {} FX pairs — training in parallel\n", fx_data.len());
+
+    let fx_results: Vec<(Option<(String, AssetAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
+        fx_data.par_iter().filter_map(|(fx, points)| {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
         let samples = features::build_rich_features_ext(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None, Some(&ext_macro), None);
-        if samples.len() < 100 { continue; }
+        if samples.len() < 100 { return None; }
 
-        // Class distribution analysis for SHORT labels
         let vol_threshold = features::compute_volatility_threshold(&samples);
         let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&samples, vol_threshold);
         let (w_down, w_up) = features::compute_class_weights(&samples, vol_threshold);
@@ -348,6 +367,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let test_window = 30.min(samples.len() / 10);
         let step = test_window;
 
+        let mut accuracy_data = None;
+
         if let Some(wf) = ensemble::walk_forward_samples(fx.symbol, &samples, train_window, test_window, step) {
             let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
 
@@ -358,16 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let ov = ensemble::get_override(&ensemble_overrides, fx.symbol);
             let ens_acc = compute_ensemble_accuracy(&wf, &ov);
-            accuracy_results.insert(fx.symbol.to_string(), AssetAccuracy {
-                linreg: wf.linear_accuracy,
-                logreg: wf.logistic_accuracy,
-                gbt: wf.gbt_accuracy,
-                lstm: lstm_acc,
-                regime: regime_acc,
-                ensemble: ens_acc,
-            });
 
-            // Save final-fold models with class-weighted training
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
                 while s + train_window + test_window <= samples.len() { last = s + train_window; s += step; }
@@ -395,22 +407,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
             let gbt_recency = &class_adjusted_weights[..x_t.len()];
-            let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
+            let gbt_config = gbt::GBTConfig::default();
             let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(fx.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            let _ = database.insert_retrain_log(
-                fx.symbol, "ensemble", pre_acc,
-                (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
-                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64,
-            );
-
+            let post_acc = (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0;
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 fx.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
                 lstm_acc, regime_acc);
+
+            accuracy_data = Some((fx.symbol.to_string(), AssetAccuracy {
+                linreg: wf.linear_accuracy,
+                logreg: wf.logistic_accuracy,
+                gbt: wf.gbt_accuracy,
+                lstm: lstm_acc,
+                regime: regime_acc,
+                ensemble: ens_acc,
+            }, (fx.symbol.to_string(), pre_acc, post_acc,
+                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64)));
         }
 
-        if let Some(bt) = backtester::run_backtest(fx.symbol, &samples, &prices, train_window, test_window, step, &bt_config) {
+        let backtest = backtester::run_backtest(fx.symbol, &samples, &prices, train_window, test_window, step, &bt_config);
+        Some((accuracy_data, backtest))
+    }).collect();
+
+    for (accuracy_opt, backtest_opt) in fx_results {
+        if let Some((symbol, acc, (sym, pre_acc, post_acc, buy, sell, short, hold))) = accuracy_opt {
+            accuracy_results.insert(symbol, acc);
+            let _ = database.insert_retrain_log(&sym, "ensemble", pre_acc, post_acc, buy, sell, short, hold);
+        }
+        if let Some(bt) = backtest_opt {
             backtest_results.push(bt);
         }
     }
@@ -434,13 +460,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crypto_syms: Vec<&str> = coin_ids.iter().map(|s| s.as_str()).collect();
     let crypto_enrichment = crypto_features::enrich_crypto_features(&crypto_syms, &crypto_prices_map, &crypto_returns_map, &crypto_dates_map);
 
-    for coin_id in &coin_ids {
-        let points = database.get_coin_history(coin_id)?;
-        if points.len() < 200 { continue; }
+    // Pre-fetch and build enriched crypto samples (sequential DB reads)
+    let crypto_prepared: Vec<_> = coin_ids.iter().filter_map(|coin_id| {
+        let points = database.get_coin_history(coin_id).ok()?;
+        if points.len() < 200 { return None; }
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let base_samples = gbt::build_extended_features(&prices, &volumes);
-        if base_samples.is_empty() { continue; }
+        if base_samples.is_empty() { return None; }
 
         let enriched_samples: Vec<ml::Sample> = if let Some(crypto_rows) = crypto_enrichment.get(coin_id.as_str()) {
             let base_start = 33_usize;
@@ -462,12 +489,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }).collect()
         };
 
-        if enriched_samples.len() < 100 { continue; }
+        if enriched_samples.len() < 100 { return None; }
+        Some((coin_id.clone(), enriched_samples, prices))
+    }).collect();
+    println!("  Prepared {} crypto assets — training in parallel\n", crypto_prepared.len());
 
-        // Class distribution for crypto
-        let vol_threshold = features::compute_volatility_threshold(&enriched_samples);
-        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&enriched_samples, vol_threshold);
-        let (w_down, w_up) = features::compute_class_weights(&enriched_samples, vol_threshold);
+    let crypto_results: Vec<(Option<(String, AssetAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
+        crypto_prepared.par_iter().filter_map(|(coin_id, enriched_samples, prices)| {
+        let vol_threshold = features::compute_volatility_threshold(enriched_samples);
+        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(enriched_samples, vol_threshold);
+        let (w_down, w_up) = features::compute_class_weights(enriched_samples, vol_threshold);
         println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
             coin_id, buy_count, short_count, sell_count, hold_count, w_down, w_up);
 
@@ -478,24 +509,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let test_window = 20.min(enriched_samples.len() / 10);
         let step = test_window;
 
-        if let Some(wf) = ensemble::walk_forward_samples(coin_id, &enriched_samples, train_window, test_window, step) {
+        let mut accuracy_data = None;
+
+        if let Some(wf) = ensemble::walk_forward_samples(coin_id, enriched_samples, train_window, test_window, step) {
             let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
 
             let mut regime_acc = 0.0;
-            if let Some(rw) = regime::walk_forward_regime(coin_id, &enriched_samples, train_window, test_window, step) {
+            if let Some(rw) = regime::walk_forward_regime(coin_id, enriched_samples, train_window, test_window, step) {
                 regime_acc = rw.overall_accuracy;
             }
 
-            accuracy_results.insert(coin_id.to_string(), AssetAccuracy {
-                linreg: wf.linear_accuracy,
-                logreg: wf.logistic_accuracy,
-                gbt: wf.gbt_accuracy,
-                lstm: lstm_acc,
-                regime: regime_acc,
-                ensemble: (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
-            });
-
-            // Save final-fold models with class-weighted training
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
                 while s + train_window + test_window <= enriched_samples.len() { last = s + train_window; s += step; }
@@ -523,22 +546,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
             let gbt_recency = &class_adjusted_weights[..x_t.len()];
-            let gbt_config = gbt::GBTConfig { n_trees: 80, learning_rate: 0.08, tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 }, subsample_ratio: 0.8, early_stopping_rounds: Some(8) };
+            let gbt_config = gbt::GBTConfig::default();
             let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(coin_id, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            let _ = database.insert_retrain_log(
-                coin_id, "ensemble", pre_acc,
-                (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0,
-                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64,
-            );
-
+            let post_acc = (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0;
             println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
                 coin_id, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
                 lstm_acc, regime_acc);
+
+            accuracy_data = Some((coin_id.to_string(), AssetAccuracy {
+                linreg: wf.linear_accuracy,
+                logreg: wf.logistic_accuracy,
+                gbt: wf.gbt_accuracy,
+                lstm: lstm_acc,
+                regime: regime_acc,
+                ensemble: post_acc,
+            }, (coin_id.to_string(), pre_acc, post_acc,
+                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64)));
         }
 
-        if let Some(bt) = backtester::run_backtest(coin_id, &enriched_samples, &prices, train_window, test_window, step, &bt_config) {
+        let backtest = backtester::run_backtest(coin_id, enriched_samples, prices, train_window, test_window, step, &bt_config);
+        Some((accuracy_data, backtest))
+    }).collect();
+
+    for (accuracy_opt, backtest_opt) in crypto_results {
+        if let Some((symbol, acc, (sym, pre_acc, post_acc, buy, sell, short, hold))) = accuracy_opt {
+            accuracy_results.insert(symbol, acc);
+            let _ = database.insert_retrain_log(&sym, "ensemble", pre_acc, post_acc, buy, sell, short, hold);
+        }
+        if let Some(bt) = backtest_opt {
             backtest_results.push(bt);
         }
     }

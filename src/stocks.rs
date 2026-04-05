@@ -28,6 +28,7 @@ pub const STOCK_LIST: &[StockInfo] = &[
     StockInfo { symbol: "CRM", name: "Salesforce" },
     StockInfo { symbol: "ARM", name: "ARM Holdings" },
     StockInfo { symbol: "INTC", name: "Intel" },
+    StockInfo { symbol: "IBM", name: "IBM" },
     StockInfo { symbol: "QCOM", name: "Qualcomm" },
     StockInfo { symbol: "TSM", name: "Taiwan Semiconductor" },
     // Finance
@@ -38,6 +39,7 @@ pub const STOCK_LIST: &[StockInfo] = &[
     StockInfo { symbol: "V", name: "Visa" },
     StockInfo { symbol: "MA", name: "Mastercard" },
     // Healthcare & Pharma
+    StockInfo { symbol: "SNY", name: "Sanofi" },
     StockInfo { symbol: "JNJ", name: "Johnson & Johnson" },
     StockInfo { symbol: "UNH", name: "UnitedHealth" },
     StockInfo { symbol: "LLY", name: "Eli Lilly" },

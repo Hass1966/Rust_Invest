@@ -54,6 +54,11 @@ candle-core = { version = "0.9" }
 candle-nn = { version = "0.9" }
 safetensors = "0.4"
 
+# LightGBM — high-performance gradient boosting via Rust bindings.
+# Leaf-wise growth, histogram splitting, native L1/L2 regularization.
+# Requires: cmake, clang, libclang-dev on build machine.
+lightgbm3 = "1.0"
+
 # Rayon — data-parallel iterator library for CPU-bound work.
 # Used to parallelise GBT tree building (feature-scan loop) and
 # diagnostic walk-forward folds across CPU cores.

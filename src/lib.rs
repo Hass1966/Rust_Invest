@@ -33,6 +33,7 @@ pub mod llm;
 pub mod daily_tracker;
 pub mod hints;
 pub mod random_forest;
+pub mod lgbm;
 pub mod simulator;
 pub mod backtest_compare;
 pub mod auth;

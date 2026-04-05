@@ -6,7 +6,7 @@
 //!
 //! Output: reports/walkforward_backtest.json
 
-use rust_invest::{analysis, db, features, ml, gbt, ensemble, stocks};
+use rust_invest::{analysis, db, features, ml, gbt, lgbm, ensemble, stocks, lstm, regime};
 use std::collections::HashMap;
 use chrono::NaiveDate;
 
@@ -32,6 +32,9 @@ struct WFSignal {
     linreg_prob: f64,
     logreg_prob: f64,
     gbt_prob: f64,
+    lgbm_prob: f64,
+    lstm_prob: f64,
+    regime_prob: f64,
 }
 
 /// Per-window summary
@@ -114,32 +117,33 @@ fn log_loss_single(predicted: f64, actual_up: bool) -> f64 {
     -(y * p.ln() + (1.0 - y) * (1.0 - p).ln())
 }
 
-/// Generate a signal from 3 model probabilities using inverse-loss weighted voting
+/// Generate a signal from 6 model probabilities using inverse-loss weighted voting
 fn signal_from_probs(
     symbol: &str,
-    lin_prob: f64,
-    log_prob: f64,
-    gbt_prob: f64,
-    model_weights: &[f64; 3], // [lin_w, log_w, gbt_w] normalised to sum to 1
+    probs: &[f64; 6], // [lin, log, gbt, lgbm, lstm, regime]
+    weights: &[f64; 6], // normalised to sum to 1
 ) -> (String, f64) {
-    let ensemble_prob = model_weights[0] * lin_prob
-        + model_weights[1] * log_prob
-        + model_weights[2] * gbt_prob;
+    let ensemble_prob: f64 = probs.iter().zip(weights.iter())
+        .map(|(p, w)| p * w)
+        .sum();
 
     let (buy_thresh, sell_thresh) = ensemble::get_signal_threshold(symbol);
     let short_thresh = 1.0 - buy_thresh;
 
-    let mut ups = 0usize;
-    if lin_prob > 0.5 { ups += 1; }
-    if log_prob > 0.5 { ups += 1; }
-    if gbt_prob > 0.5 { ups += 1; }
-    let downs = 3 - ups;
+    let n_models = probs.iter().zip(weights.iter())
+        .filter(|(_, &w)| w > 0.0)
+        .count();
+    let ups = probs.iter().zip(weights.iter())
+        .filter(|(&p, &w)| w > 0.0 && p > 0.5)
+        .count();
+    let downs = n_models - ups;
+    let majority = (n_models + 1) / 2;
 
     let signal = if ensemble_prob > buy_thresh {
         "BUY"
-    } else if ensemble_prob < short_thresh && downs >= 2 && (ensemble_prob - 0.5).abs() > (buy_thresh - 0.5) {
+    } else if ensemble_prob < short_thresh && downs >= majority && (ensemble_prob - 0.5).abs() > (buy_thresh - 0.5) {
         "SHORT"
-    } else if ensemble_prob < sell_thresh && downs >= 2 {
+    } else if ensemble_prob < sell_thresh && downs >= majority {
         "SELL"
     } else {
         "HOLD"
@@ -157,14 +161,15 @@ fn min_threshold(asset_class: &str) -> f64 {
     }
 }
 
-/// Train 3 models on a slice of samples and generate predictions for test samples.
+/// Train 6 models on a slice of samples and generate predictions for test samples.
+/// Models: LinReg, LogReg, GBT, LightGBM, LSTM, RegimeEnsemble
 /// Uses inverse validation log-loss weighting for ensemble combination.
-/// Returns Vec<(signal, lin_prob, log_prob, gbt_prob)> for each test sample.
+/// Returns Vec<(signal, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)> for each test sample.
 fn train_and_predict(
     symbol: &str,
     train_samples: &[ml::Sample],
     test_samples: &[ml::Sample],
-) -> Vec<(String, f64, f64, f64)> {
+) -> Vec<(String, f64, f64, f64, f64, f64, f64)> {
     if train_samples.len() < 50 || test_samples.is_empty() {
         return Vec::new();
     }
@@ -189,64 +194,156 @@ fn train_and_predict(
     // Split: train on first 85%, validate on last 15% for model weighting
     let val_start = (train_data.len() as f64 * 0.85) as usize;
 
-    // Train LinReg on first 85%, reserve last 15% for validation log-loss weighting
+    // ── Model 1: LinReg ──
     let mut lin = ml::LinearRegression::new(n_feat);
     lin.train_weighted(&train_data[..val_start], Some(&weights[..val_start]), 0.005, 3000);
 
-    // Train LogReg
+    // ── Model 2: LogReg ──
     let mut log = ml::LogisticRegression::new(n_feat);
     log.train_weighted(&train_data[..val_start], Some(&weights[..val_start]), 0.01, 3000);
 
-    // Train GBT (with its own early-stopping validation)
+    // ── Model 3: GBT ──
     let x_train: Vec<Vec<f64>> = train_data.iter().map(|s| s.features.clone()).collect();
     let y_train: Vec<f64> = train_data.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
     let (x_t, x_v) = x_train.split_at(val_start);
     let (y_t, y_v) = y_train.split_at(val_start);
     let gbt_recency = &weights[..x_t.len()];
-    let gbt_config = gbt::GBTConfig {
-        n_trees: 80,
-        learning_rate: 0.08,
-        tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 },
-        subsample_ratio: 0.8,
-        early_stopping_rounds: Some(8),
-    };
+    let gbt_config = gbt::GBTConfig::default();
     let gbt_model = gbt::GradientBoostedClassifier::train_weighted(
         x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config
     );
 
-    // ── Compute inverse validation log-loss weights ──
-    // Evaluate each model on the held-out validation set (last 15% of training)
-    let val_data = &train_data[val_start..];
-    let mut lin_loss_sum = 0.0_f64;
-    let mut log_loss_sum = 0.0_f64;
-    let mut gbt_loss_sum = 0.0_f64;
+    // ── Model 4: LightGBM ──
+    let lgbm_config = lgbm::LGBMConfig::default();
+    let lgbm_model = lgbm::LightGBMClassifier::train(
+        x_t, y_t, Some(&weights[..x_t.len()]),
+        Some(x_v), Some(y_v), &lgbm_config,
+    ).ok();
 
-    for sample in val_data {
+    // ── Model 5: LSTM (top 30 features, reduced epochs for speed) ──
+    let feature_names_list = features::active_feature_names();
+    let feature_name_refs: Vec<&str> = feature_names_list.iter().map(|s| s.as_str()).collect();
+    // Use LightGBM importance if available, fall back to GBT importance
+    let gbt_importance = if let Some(ref lgbm) = lgbm_model {
+        lgbm.feature_importance(&feature_name_refs)
+    } else {
+        gbt_model.feature_importance(&feature_name_refs)
+    };
+    let top_feature_indices: Vec<usize> = gbt_importance.iter()
+        .take(30.min(gbt_importance.len()))
+        .filter_map(|(name, _)| feature_names_list.iter().position(|n| n == name))
+        .collect();
+    let lstm_indices = if top_feature_indices.len() >= 20 { Some(top_feature_indices.as_slice()) } else { None };
+    let lstm_input_size = lstm_indices.map_or(n_feat, |idx| idx.len());
+
+    let lstm_model = lstm::LSTMModel::new(lstm::LSTMModelConfig {
+        input_size: lstm_input_size,
+        hidden_size: 64,
+        seq_length: 10,
+        learning_rate: 0.0005,
+        epochs: 20, // reduced from 50 for walk-forward speed
+        batch_size: 32,
+    }).ok().and_then(|mut model| {
+        let lstm_val_start = val_start.saturating_sub(10); // need seq_length buffer
+        if lstm_val_start < 50 { return None; }
+        match model.train(&train_data[..lstm_val_start], &train_data[lstm_val_start..], lstm_indices) {
+            Ok(result) if result.final_val_loss.is_finite() => Some(model),
+            _ => None,
+        }
+    });
+
+    // ── Model 6: RegimeEnsemble ──
+    let regime_model = if train_data.len() >= 100 {
+        Some(regime::RegimeEnsemble::train(&train_data[..val_start]))
+    } else {
+        None
+    };
+
+    // ── Compute inverse validation log-loss weights for all 6 models ──
+    let val_data = &train_data[val_start..];
+    let mut losses = [0.0_f64; 6]; // [lin, log, gbt, lgbm, lstm, regime]
+    let mut lstm_correct = 0usize;
+    let mut lstm_total = 0usize;
+
+    // Build LSTM sequences from validation data for batch evaluation
+    let val_seqs = lstm::build_sequences_with_subset(val_data, 10, lstm_indices);
+
+    for (vi, sample) in val_data.iter().enumerate() {
         let actual_up = sample.label > 0.0;
         let lin_pred = lin.predict(&sample.features);
         let lin_prob = (1.0 / (1.0 + (-lin_pred).exp())).clamp(0.01, 0.99);
         let log_prob = log.predict_probability(&sample.features).clamp(0.01, 0.99);
         let gbt_prob = gbt_model.predict_proba(&sample.features).clamp(0.01, 0.99);
 
-        lin_loss_sum += log_loss_single(lin_prob, actual_up);
-        log_loss_sum += log_loss_single(log_prob, actual_up);
-        gbt_loss_sum += log_loss_single(gbt_prob, actual_up);
+        losses[0] += log_loss_single(lin_prob, actual_up);
+        losses[1] += log_loss_single(log_prob, actual_up);
+        losses[2] += log_loss_single(gbt_prob, actual_up);
+
+        // LightGBM
+        if let Some(ref model) = lgbm_model {
+            let lgbm_prob = model.predict_proba(&sample.features).clamp(0.01, 0.99);
+            losses[3] += log_loss_single(lgbm_prob, actual_up);
+        }
+
+        // LSTM: only evaluate if we have a matching sequence
+        if let Some(ref model) = lstm_model {
+            if vi < val_seqs.len() {
+                if let Ok(lstm_p) = model.predict_proba(&val_seqs[vi].features) {
+                    let lstm_prob = lstm_p.clamp(0.01, 0.99);
+                    losses[4] += log_loss_single(lstm_prob, actual_up);
+                    if (lstm_prob > 0.5) == actual_up { lstm_correct += 1; }
+                    lstm_total += 1;
+                }
+            }
+        }
+
+        // RegimeEnsemble
+        if let Some(ref model) = regime_model {
+            let regime_prob = model.predict_proba(&sample.features).clamp(0.01, 0.99);
+            losses[5] += log_loss_single(regime_prob, actual_up);
+        }
     }
 
     let n_val = val_data.len().max(1) as f64;
-    let lin_avg_loss = (lin_loss_sum / n_val).max(0.01);
-    let log_avg_loss = (log_loss_sum / n_val).max(0.01);
-    let gbt_avg_loss = (gbt_loss_sum / n_val).max(0.01);
+    let lstm_accuracy = if lstm_total > 0 { lstm_correct as f64 / lstm_total as f64 * 100.0 } else { 0.0 };
+    // Gate LSTM: only include if accuracy >= 54%
+    let lstm_useful = lstm_model.is_some() && lstm_accuracy >= 54.0;
 
-    // Inverse-loss weights, normalised to sum to 1
-    let inv_lin = 1.0 / lin_avg_loss;
-    let inv_log = 1.0 / log_avg_loss;
-    let inv_gbt = 1.0 / gbt_avg_loss;
-    let inv_total = inv_lin + inv_log + inv_gbt;
-    let model_weights = [inv_lin / inv_total, inv_log / inv_total, inv_gbt / inv_total];
+    // Compute inverse-loss weights for all active models
+    let mut inv_weights = [0.0_f64; 6];
+    for i in 0..3 {
+        inv_weights[i] = 1.0 / (losses[i] / n_val).max(0.01);
+    }
+    // LightGBM
+    if lgbm_model.is_some() {
+        inv_weights[3] = 1.0 / (losses[3] / n_val).max(0.01);
+    }
+    if lstm_useful {
+        let lstm_n = lstm_total.max(1) as f64;
+        inv_weights[4] = 1.0 / (losses[4] / lstm_n).max(0.01);
+        // Bonus if accuracy >= 58%
+        if lstm_accuracy >= 58.0 { inv_weights[4] *= 1.5; }
+    }
+    if regime_model.is_some() {
+        inv_weights[5] = 1.0 / (losses[5] / n_val).max(0.01);
+    }
+    let inv_total: f64 = inv_weights.iter().sum();
+    let model_weights: [f64; 6] = if inv_total > 0.0 {
+        [
+            inv_weights[0] / inv_total,
+            inv_weights[1] / inv_total,
+            inv_weights[2] / inv_total,
+            inv_weights[3] / inv_total,
+            inv_weights[4] / inv_total,
+            inv_weights[5] / inv_total,
+        ]
+    } else {
+        [1.0/4.0, 1.0/4.0, 1.0/4.0, 1.0/4.0, 0.0, 0.0]
+    };
 
-    // Predict on test samples using the 85%-trained models with inverse-loss weights
-    let mut results = Vec::with_capacity(test_samples.len());
+    // ── Generate predictions for test samples ──
+    // Pre-build LSTM sequences from test samples
+    let mut test_norm: Vec<ml::Sample> = Vec::with_capacity(test_samples.len());
     for sample in test_samples {
         let mut features = sample.features.clone();
         for j in 0..features.len() {
@@ -254,14 +351,36 @@ fn train_and_predict(
                 features[j] = (features[j] - means[j]) / stds[j];
             }
         }
+        test_norm.push(ml::Sample { features, label: sample.label });
+    }
+    let test_seqs = lstm::build_sequences_with_subset(&test_norm, 10, lstm_indices);
 
-        let lin_pred = lin.predict(&features);
-        let lin_prob = 1.0 / (1.0 + (-lin_pred).exp());
-        let log_prob = log.predict_probability(&features);
-        let gbt_prob = gbt_model.predict_proba(&features);
+    let mut results = Vec::with_capacity(test_samples.len());
+    for (ti, sample) in test_norm.iter().enumerate() {
+        let lin_pred = lin.predict(&sample.features);
+        let lin_prob = (1.0 / (1.0 + (-lin_pred).exp())).clamp(0.15, 0.85);
+        let log_prob = log.predict_probability(&sample.features).clamp(0.15, 0.85);
+        let gbt_prob = gbt_model.predict_proba(&sample.features).clamp(0.15, 0.85);
 
-        let (signal, _) = signal_from_probs(symbol, lin_prob, log_prob, gbt_prob, &model_weights);
-        results.push((signal, lin_prob, log_prob, gbt_prob));
+        let lgbm_prob = if let Some(ref model) = lgbm_model {
+            model.predict_proba(&sample.features).clamp(0.15, 0.85)
+        } else { 0.5 };
+
+        let lstm_prob = if lstm_useful {
+            if let Some(ref model) = lstm_model {
+                if ti < test_seqs.len() {
+                    model.predict_proba(&test_seqs[ti].features).unwrap_or(0.5).clamp(0.15, 0.85)
+                } else { 0.5 }
+            } else { 0.5 }
+        } else { 0.5 };
+
+        let regime_prob = if let Some(ref model) = regime_model {
+            model.predict_proba(&sample.features).clamp(0.15, 0.85)
+        } else { 0.5 };
+
+        let probs = [lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob];
+        let (signal, _) = signal_from_probs(symbol, &probs, &model_weights);
+        results.push((signal, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob));
     }
 
     results
@@ -481,7 +600,7 @@ fn process_asset(
 
         let predictions = train_and_predict(symbol, train_samples, test_samples);
 
-        for (i, (signal, lin_prob, log_prob, gbt_prob)) in predictions.iter().enumerate() {
+        for (i, (signal, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)) in predictions.iter().enumerate() {
             let sample_idx = train_end_idx + i;
             if sample_idx >= timestamps.len() { break; }
             let date = timestamps[sample_idx][..10.min(timestamps[sample_idx].len())].to_string();
@@ -518,6 +637,9 @@ fn process_asset(
                 linreg_prob: *lin_prob,
                 logreg_prob: *log_prob,
                 gbt_prob: *gbt_prob,
+                lgbm_prob: *lgbm_prob,
+                lstm_prob: *lstm_prob,
+                regime_prob: *regime_prob,
             });
             asset_signals += 1;
         }

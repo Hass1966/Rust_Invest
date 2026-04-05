@@ -8,7 +8,7 @@
 /// Outputs: exports/backtest_comparison.csv, exports/backtest_report.md
 
 use crate::ml::{self, Sample};
-use crate::gbt::{GBTConfig, TreeConfig, GradientBoostedClassifier};
+use crate::gbt::{GBTConfig, GradientBoostedClassifier};
 use chrono::Datelike;
 
 // ════════════════════════════════════════
@@ -142,11 +142,7 @@ pub fn run_comparison(
         let val_start = (x_train.len() as f64 * 0.85) as usize;
         let (x_t, x_v) = x_train.split_at(val_start);
         let (y_t, y_v) = y_train.split_at(val_start);
-        let gbt_config = GBTConfig {
-            n_trees: 80, learning_rate: 0.08,
-            tree_config: TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 },
-            subsample_ratio: 0.8, early_stopping_rounds: Some(8),
-        };
+        let gbt_config = GBTConfig::default();
         let gbt = GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
 
         // Replay test window

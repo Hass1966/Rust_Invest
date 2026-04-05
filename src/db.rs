@@ -13,6 +13,11 @@ impl Database {
         Ok(db)
     }
 
+    /// Enable WAL journal mode for safe concurrent reads during parallel training
+    pub fn set_wal_mode(&self) {
+        let _ = self.conn.execute_batch("PRAGMA journal_mode=WAL;");
+    }
+
     fn create_tables(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS crypto_prices (

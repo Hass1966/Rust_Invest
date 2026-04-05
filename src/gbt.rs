@@ -136,8 +136,9 @@ impl Default for TreeConfig {
 
 /// Build a regression tree on (features, targets) indexed by `indices`.
 ///
-/// Uses variance reduction to find the best split at each node.
+/// Uses XGBoost-style regularized gain for split finding.
 /// The indices pattern lets us partition without copying data.
+/// `feature_mask`: optional subset of feature indices to consider (column subsampling).
 pub fn build_tree(
     x: &[Vec<f64>],
     y: &[f64],
@@ -145,24 +146,55 @@ pub fn build_tree(
     config: &TreeConfig,
     depth: usize,
 ) -> Node {
+    build_tree_reg(x, y, indices, config, depth, 0.0, 0.0, None)
+}
+
+/// Regularized tree building with L1/L2 and optional column subsampling
+pub fn build_tree_reg(
+    x: &[Vec<f64>],
+    y: &[f64],
+    indices: &[usize],
+    config: &TreeConfig,
+    depth: usize,
+    reg_lambda: f64,
+    reg_alpha: f64,
+    feature_mask: Option<&[usize]>,
+) -> Node {
     let n = indices.len();
-    let mean_y: f64 = indices.iter().map(|&i| y[i]).sum::<f64>() / n as f64;
+    let sum_y: f64 = indices.iter().map(|&i| y[i]).sum();
+
+    // Regularized leaf value: w* = -G / (H + lambda) with L1 shrinkage
+    // For squared-error: G = -sum_y, H = n
+    let leaf_value = {
+        let raw = sum_y / (n as f64 + reg_lambda);
+        // L1 soft-thresholding
+        if raw > reg_alpha { raw - reg_alpha }
+        else if raw < -reg_alpha { raw + reg_alpha }
+        else { 0.0 }
+    };
 
     // Base cases → leaf
     if depth >= config.max_depth || n < config.min_samples_split {
-        return Node::Leaf { value: mean_y, n_samples: n };
+        return Node::Leaf { value: leaf_value, n_samples: n };
     }
 
     let n_features = x[0].len();
+    let features_to_scan: Vec<usize> = match feature_mask {
+        Some(mask) => mask.to_vec(),
+        None => (0..n_features).collect(),
+    };
 
     // Pre-compute totals for O(n) split evaluation
-    let total_sum: f64 = indices.iter().map(|&i| y[i]).sum();
-    let total_sq_sum: f64 = indices.iter().map(|&i| y[i] * y[i]).sum();
+    let total_sum: f64 = sum_y;
+
+    // XGBoost-style regularized gain:
+    // Gain = 0.5 * [G_L^2/(H_L+λ) + G_R^2/(H_R+λ) - (G_L+G_R)^2/(H_L+H_R+λ)] - γ
+    // For squared-error pseudo-residuals: G = -sum(residuals), H = n_samples
+    // Simplified: Gain = 0.5 * [sum_L^2/(n_L+λ) + sum_R^2/(n_R+λ) - total_sum^2/(n+λ)]
+    let parent_score = total_sum * total_sum / (n as f64 + reg_lambda);
 
     // ── Parallel feature scan using rayon ──
-    // Each feature is evaluated independently, so we scan all 83 in parallel.
-    // Each thread returns its best (gain, feature_idx, threshold, left, right).
-    let best_split = (0..n_features).into_par_iter().filter_map(|feat| {
+    let best_split = features_to_scan.into_par_iter().filter_map(|feat| {
         let mut sorted: Vec<usize> = indices.to_vec();
         sorted.sort_by(|&a, &b| {
             x[a][feat].partial_cmp(&x[b][feat]).unwrap_or(std::cmp::Ordering::Equal)
@@ -173,14 +205,12 @@ pub fn build_tree(
         let mut local_best_split_idx = 0_usize;
 
         let mut left_sum = 0.0_f64;
-        let mut left_sq_sum = 0.0_f64;
         let mut left_count = 0_usize;
 
         for i in 0..sorted.len() - 1 {
             let idx = sorted[i];
             let val = y[idx];
             left_sum += val;
-            left_sq_sum += val * val;
             left_count += 1;
 
             let right_count = n - left_count;
@@ -195,13 +225,11 @@ pub fn build_tree(
             }
 
             let right_sum = total_sum - left_sum;
-            let right_sq_sum = total_sq_sum - left_sq_sum;
 
-            let parent_loss = total_sq_sum - (total_sum * total_sum) / n as f64;
-            let left_loss = left_sq_sum - (left_sum * left_sum) / left_count as f64;
-            let right_loss = right_sq_sum - (right_sum * right_sum) / right_count as f64;
-
-            let gain = parent_loss - left_loss - right_loss;
+            // XGBoost-style regularized gain
+            let left_score = left_sum * left_sum / (left_count as f64 + reg_lambda);
+            let right_score = right_sum * right_sum / (right_count as f64 + reg_lambda);
+            let gain = 0.5 * (left_score + right_score - parent_score);
 
             if gain > local_best_gain {
                 local_best_gain = gain;
@@ -211,7 +239,6 @@ pub fn build_tree(
         }
 
         if local_best_gain > 0.0 {
-            // Rebuild the left/right partition from the sorted order
             let left_indices: Vec<usize> = sorted[..=local_best_split_idx].to_vec();
             let right_indices: Vec<usize> = sorted[local_best_split_idx + 1..].to_vec();
             Some((local_best_gain, feat, local_best_threshold, left_indices, right_indices))
@@ -222,11 +249,11 @@ pub fn build_tree(
 
     let (best_gain, best_feature, best_threshold, best_left, best_right) = match best_split {
         Some((g, f, t, l, r)) if !l.is_empty() && !r.is_empty() => (g, f, t, l, r),
-        _ => return Node::Leaf { value: mean_y, n_samples: n },
+        _ => return Node::Leaf { value: leaf_value, n_samples: n },
     };
 
-    let left_node = build_tree(x, y, &best_left, config, depth + 1);
-    let right_node = build_tree(x, y, &best_right, config, depth + 1);
+    let left_node = build_tree_reg(x, y, &best_left, config, depth + 1, reg_lambda, reg_alpha, feature_mask);
+    let right_node = build_tree_reg(x, y, &best_right, config, depth + 1, reg_lambda, reg_alpha, feature_mask);
 
     Node::Split {
         feature_idx: best_feature,
@@ -260,16 +287,29 @@ pub struct GBTConfig {
     pub tree_config: TreeConfig,
     pub subsample_ratio: f64,
     pub early_stopping_rounds: Option<usize>,
+    /// L2 regularization on leaf values (like XGBoost reg_lambda)
+    pub reg_lambda: f64,
+    /// L1 regularization on leaf values (like XGBoost reg_alpha)
+    pub reg_alpha: f64,
+    /// Fraction of features to consider per tree (column subsampling)
+    pub colsample_bytree: f64,
 }
 
 impl Default for GBTConfig {
     fn default() -> Self {
         GBTConfig {
-            n_trees: 100,
-            learning_rate: 0.1,
-            tree_config: TreeConfig::default(),
+            n_trees: 300,
+            learning_rate: 0.05,
+            tree_config: TreeConfig {
+                max_depth: 6,
+                min_samples_leaf: 10,
+                min_samples_split: 20,
+            },
             subsample_ratio: 0.8,
-            early_stopping_rounds: Some(10),
+            early_stopping_rounds: Some(15),
+            reg_lambda: 1.0,
+            reg_alpha: 0.1,
+            colsample_bytree: 0.7,
         }
     }
 }
@@ -342,6 +382,9 @@ impl GradientBoostedClassifier {
 
         let subsample_n = (n_train as f64 * config.subsample_ratio) as usize;
 
+        // Column subsampling: number of features per tree
+        let colsample_n = ((n_features as f64 * config.colsample_bytree).round() as usize).max(1);
+
         // Class weighting to fix bullish bias
         let n_positive = y_train.iter().filter(|&&y| y > 0.5).count() as f64;
         let n_negative = n_train as f64 - n_positive;
@@ -366,10 +409,23 @@ impl GradientBoostedClassifier {
                 (0..n_train).collect()
             };
 
-            // 3. Fit tree to residuals
-            let tree = build_tree(x_train, &residuals, &indices, &config.tree_config, 0);
+            // 3. Column subsampling: deterministic feature subset per tree
+            let feature_mask: Option<Vec<usize>> = if colsample_n < n_features {
+                let start = (round * 13) % n_features;
+                let mask: Vec<usize> = (0..colsample_n).map(|i| (start + i) % n_features).collect();
+                Some(mask)
+            } else {
+                None
+            };
 
-            // 4. Update predictions
+            // 4. Fit tree to residuals with regularization and column subsampling
+            let tree = build_tree_reg(
+                x_train, &residuals, &indices, &config.tree_config, 0,
+                config.reg_lambda, config.reg_alpha,
+                feature_mask.as_deref(),
+            );
+
+            // 5. Update predictions
             for i in 0..n_train {
                 f_train[i] += config.learning_rate * tree.predict(&x_train[i]);
             }
@@ -379,7 +435,7 @@ impl GradientBoostedClassifier {
                 }
             }
 
-            // 5. Track losses
+            // 6. Track losses
             let t_loss = mean_log_loss(y_train, &f_train);
             train_losses.push(t_loss);
 
@@ -406,7 +462,7 @@ impl GradientBoostedClassifier {
 
             trees.push(tree);
 
-            if (round + 1) % 20 == 0 || round == 0 {
+            if (round + 1) % 50 == 0 || round == 0 {
                 let val_str = val_losses.last()
                     .map(|v| format!(", val={:.4}", v))
                     .unwrap_or_default();
@@ -769,17 +825,7 @@ pub fn run_extended_pipeline(
         .map(|s| if s.label > 0.0 { 1.0 } else { 0.0 })
         .collect();
 
-    let gbt_config = GBTConfig {
-        n_trees: 100,
-        learning_rate: 0.08,
-        tree_config: TreeConfig {
-            max_depth: 4,
-            min_samples_leaf: 8,
-            min_samples_split: 16,
-        },
-        subsample_ratio: 0.8,
-        early_stopping_rounds: Some(10),
-    };
+    let gbt_config = GBTConfig::default();
 
     let gbt_model = GradientBoostedClassifier::train(
         &x_train, &y_train,
@@ -979,13 +1025,7 @@ mod tests {
         ];
         let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
-        let config = GBTConfig {
-            n_trees: 50,
-            learning_rate: 0.3,
-            tree_config: TreeConfig { max_depth: 3, min_samples_leaf: 1, min_samples_split: 2 },
-            subsample_ratio: 1.0,
-            early_stopping_rounds: None,
-        };
+        let config = GBTConfig::default();
 
         let model = GradientBoostedClassifier::train(&x, &y, None, None, config);
 

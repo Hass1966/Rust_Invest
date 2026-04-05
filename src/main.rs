@@ -586,13 +586,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
 
-            let gbt_config = gbt::GBTConfig {
-                n_trees: 80,
-                learning_rate: 0.08,
-                tree_config: gbt::TreeConfig { max_depth: 4, min_samples_leaf: 8, min_samples_split: 16 },
-                subsample_ratio: 0.8,
-                early_stopping_rounds: Some(8),
-            };
+            let gbt_config = gbt::GBTConfig::default();
             let gbt_model = gbt::GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), gbt_config);
             let _ = model_store::save_gbt(
                 stock.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds,

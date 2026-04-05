@@ -415,12 +415,24 @@ function runSimulation(
     priceMaps[k] = buildPriceMap(v)
   }
 
+  // Filter to only assets that have price data — prevents crash when backend is missing assets
+  const availableAssets = new Set(Object.keys(data.price_history))
+  const filteredBhAssets = bhAssets.filter(a => availableAssets.has(a.asset))
+  if (filteredBhAssets.length === 0) return null
+
+  // Re-scale weights so they still sum to the full capital
+  const totalOrigWeight = filteredBhAssets.reduce((s, a) => s + a.amount, 0)
+  if (totalOrigWeight > 0 && totalOrigWeight < capital) {
+    const scale = capital / totalOrigWeight
+    for (const a of filteredBhAssets) a.amount = Math.round(a.amount * scale)
+  }
+
   const startDate = dates[0]
-  const assetNames = bhAssets.map(a => a.asset)
+  const assetNames = filteredBhAssets.map(a => a.asset)
 
   // ── Buy & Hold: allocate capital proportionally ──
   const bhShares: Record<string, number> = {}
-  for (const { asset, amount } of bhAssets) {
+  for (const { asset, amount } of filteredBhAssets) {
     const startPrice = getPrice(priceMaps[asset], startDate)
     bhShares[asset] = startPrice ? amount / startPrice : 0
   }

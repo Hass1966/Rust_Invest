@@ -22,7 +22,7 @@
 /// Implements train(), predict(), evaluate() matching the ml.rs interface.
 
 use crate::ml::{self, Sample};
-use crate::gbt::{GBTConfig, TreeConfig, GradientBoostedClassifier};
+use crate::gbt::{GBTConfig, GradientBoostedClassifier};
 
 /// The 4 market regimes
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -345,17 +345,7 @@ impl RegimeSpecialist {
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
 
-            let config = GBTConfig {
-                n_trees: 50,
-                learning_rate: 0.08,
-                tree_config: TreeConfig {
-                    max_depth: 3,
-                    min_samples_leaf: 6,
-                    min_samples_split: 12,
-                },
-                subsample_ratio: 0.8,
-                early_stopping_rounds: Some(6),
-            };
+            let config = GBTConfig::default();
 
             Some(GradientBoostedClassifier::train(x_t, y_t, Some(x_v), Some(y_v), config))
         } else {

@@ -28,6 +28,8 @@ const PRUNED_FEATURES: &[&str] = &[
     "daily_return", "is_month_end", "month_sin", "month_cos",
     "day_of_week_cos", "risk_on_off", "up_days_ratio_10d",
     "up_days_ratio_20d",
+    // Duplicate calendar features from Section P — Section E sin/cos already covers these
+    "day_of_week_raw", "month_raw",
     // momentum_3d, momentum_5d, momentum_10d UN-PRUNED:
     // Python comparison validated multi-horizon returns as top-20 features
 ];
@@ -108,7 +110,7 @@ pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
     match symbol {
         // Technology (XLK)
         "AAPL" | "MSFT" | "NVDA" | "AMD" | "QQQ" | "INTC" | "AVGO" | "CRM" | "ADBE" | "ORCL"
-        | "SAP.DE" | "ARM" | "QCOM" | "TSM" => Some("XLK"),
+        | "SAP.DE" | "ARM" | "QCOM" | "TSM" | "IBM" => Some("XLK"),
         // Communication (XLC) — GOOGL/META per GICS classification
         "GOOGL" | "META" | "NFLX" | "DIS" | "CMCSA" | "VZ" | "T"
         | "VOD.L" | "BT-A.L" | "WPP.L" => Some("XLC"),
@@ -118,10 +120,10 @@ pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
         | "ALV.DE" | "V" | "MA" | "BRK-B" | "MMC" | "TRV" | "AFL" => Some("XLF"),
         // Energy (XLE)
         "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO"
-        | "BP.L" | "SHEL.L" | "CNA.L" | "DCC.L" | "VDE" => Some("XLE"),
+        | "BP.L" | "SHEL.L" | "CNA.L" | "DCC.L" | "VDE" | "CL=F" | "USO" => Some("XLE"),
         // Healthcare (XLV)
         "JNJ" | "UNH" | "LLY" | "PFE" | "MRNA" | "ABBV" | "TMO" | "ABT" | "BMY" | "AMGN"
-        | "AZN.L" | "GSK.L" | "SAN.PA" | "MRK" | "CVS" | "CI" | "VHT" | "IHI" => Some("XLV"),
+        | "AZN.L" | "GSK.L" | "SAN.PA" | "MRK" | "CVS" | "CI" | "VHT" | "IHI" | "SNY" => Some("XLV"),
         // Industrials (XLI)
         "CAT" | "DE" | "MMM" | "HON" | "GE" | "EMR" | "LMT" | "RTX" | "NOC" | "BA" | "GD" | "UPS" | "FDX"
         | "RR.L" | "AIR.PA" | "SAF.PA" | "SIE.DE" | "MBG.DE" | "QQ.L" | "EXPN.L" => Some("XLI"),
@@ -579,31 +581,31 @@ pub fn build_rich_features_ext(
         let s50 = sma_val(window, 50);
         let s200 = sma_val(window, 200);
 
-        f.push(safe_div(price - s7, s7));                        // SMA7_ratio
-        f.push(safe_div(price - s30, s30));                      // SMA30_ratio
-        f.push(safe_div(price - s50, s50));                      // SMA50_ratio
-        f.push(safe_div(price - s200, s200));                    // SMA200_ratio
+        f.push(safe_div(price - s7, s7) * 100.0);                 // SMA7_ratio (%)
+        f.push(safe_div(price - s30, s30) * 100.0);             // SMA30_ratio (%)
+        f.push(safe_div(price - s50, s50) * 100.0);             // SMA50_ratio (%)
+        f.push(safe_div(price - s200, s200) * 100.0);           // SMA200_ratio (%)
         f.push(if s50 > s200 { 1.0 } else { -1.0 });           // SMA50_above_200
-        f.push(safe_div(s50 - s200, s200));                      // SMA_spread_50_200
+        f.push(safe_div(s50 - s200, s200) * 100.0);             // SMA_spread_50_200 (%)
 
         // 52-week high/low (252 trading days)
         let lookback_252 = &prices[i.saturating_sub(252)..=i];
         let high_52w = lookback_252.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let low_52w = lookback_252.iter().cloned().fold(f64::INFINITY, f64::min);
-        f.push(safe_div(price - high_52w, high_52w));            // price_vs_52w_high
-        f.push(safe_div(price - low_52w, low_52w));              // price_vs_52w_low
+        f.push(safe_div(price - high_52w, high_52w) * 100.0);     // price_vs_52w_high (%)
+        f.push(safe_div(price - low_52w, low_52w) * 100.0);     // price_vs_52w_low (%)
 
         let e12 = if i < ema12.len() { ema12[i] } else { price };
         let e26 = if i < ema26.len() { ema26[i] } else { price };
-        f.push(safe_div(price - e12, e12));                      // EMA12_ratio
-        f.push(safe_div(price - e26, e26));                      // EMA26_ratio
+        f.push(safe_div(price - e12, e12) * 100.0);               // EMA12_ratio (%)
+        f.push(safe_div(price - e26, e26) * 100.0);               // EMA26_ratio (%)
 
-        let daily_ret = safe_div(price - prices[i-1], prices[i-1]);
-        f.push(daily_ret);                                       // daily_return
+        let daily_ret = safe_div(price - prices[i-1], prices[i-1]) * 100.0;
+        f.push(daily_ret);                                       // daily_return (%)
 
         // Daily range (high - low) / close — approximate from returns
-        let dr = if i >= 1 { (prices[i] - prices[i-1]).abs() / prices[i-1] } else { 0.0 };
-        f.push(dr);                                               // daily_range_pct
+        let dr = if i >= 1 { (prices[i] - prices[i-1]).abs() / prices[i-1] * 100.0 } else { 0.0 };
+        f.push(dr);                                               // daily_range_pct (%)
 
         // ══ B. Volume features (6) ══
         let v_now = vol_f64[i];
@@ -613,7 +615,7 @@ pub fn build_rich_features_ext(
 
         f.push(safe_div(v_now, v_sma20));                       // volume_ratio_20d
         f.push(safe_div(v_now, v_sma5));                         // volume_ratio_5d
-        f.push(safe_div(v_now - v_prev, v_prev));                // volume_delta_1d
+        f.push(safe_div(v_now - v_prev, v_prev) * 100.0);         // volume_delta_1d (%)
         f.push(safe_div(v_sma5, v_sma20));                       // volume_sma5_vs_20
 
         // Price-volume correlation (10d)
@@ -637,13 +639,18 @@ pub fn build_rich_features_ext(
         let ret_20d = &all_returns[i.saturating_sub(20)..i.min(all_returns.len())];
         let ret_60d = &all_returns[i.saturating_sub(60)..i.min(all_returns.len())];
 
-        let vol5 = std_dev(ret_5d);
-        let vol20 = std_dev(ret_20d);
-        let vol60 = std_dev(ret_60d);
+        let vol5_raw = std_dev(ret_5d);
+        let vol20_raw = std_dev(ret_20d);
+        let vol60_raw = std_dev(ret_60d);
+        // Annualise: × √252 × 100 to get percentage annualised volatility
+        let ann_factor = (252.0_f64).sqrt() * 100.0;
+        let vol5 = vol5_raw * ann_factor;
+        let vol20 = vol20_raw * ann_factor;
+        let vol60 = vol60_raw * ann_factor;
 
-        f.push(vol5);                                             // volatility_5d
-        f.push(vol20);                                            // volatility_20d
-        f.push(vol60);                                            // volatility_60d
+        f.push(vol5);                                             // volatility_5d (ann %)
+        f.push(vol20);                                            // volatility_20d (ann %)
+        f.push(vol60);                                            // volatility_60d (ann %)
         f.push(safe_div(vol5, vol20));                            // vol_ratio_5_20
 
         // Volatility regime: low=1, normal=0, high=-1
@@ -672,18 +679,18 @@ pub fn build_rich_features_ext(
         f.push(safe_div(trough - peak, peak));                    // max_drawdown_20d
 
         // ══ D. Momentum multi-timeframe (10) ══
-        f.push(safe_div(price - prices[i.saturating_sub(1)], prices[i.saturating_sub(1)]));   // momentum_1d
-        f.push(safe_div(price - prices[i.saturating_sub(3)], prices[i.saturating_sub(3)]));   // momentum_3d
-        f.push(safe_div(price - prices[i.saturating_sub(5)], prices[i.saturating_sub(5)]));   // momentum_5d
-        f.push(safe_div(price - prices[i.saturating_sub(10)], prices[i.saturating_sub(10)])); // momentum_10d
-        f.push(safe_div(price - prices[i.saturating_sub(20)], prices[i.saturating_sub(20)])); // momentum_20d
+        f.push(safe_div(price - prices[i.saturating_sub(1)], prices[i.saturating_sub(1)]) * 100.0);   // momentum_1d (%)
+        f.push(safe_div(price - prices[i.saturating_sub(3)], prices[i.saturating_sub(3)]) * 100.0);   // momentum_3d (%)
+        f.push(safe_div(price - prices[i.saturating_sub(5)], prices[i.saturating_sub(5)]) * 100.0);   // momentum_5d (%)
+        f.push(safe_div(price - prices[i.saturating_sub(10)], prices[i.saturating_sub(10)]) * 100.0); // momentum_10d (%)
+        f.push(safe_div(price - prices[i.saturating_sub(20)], prices[i.saturating_sub(20)]) * 100.0); // momentum_20d (%)
 
-        let ret_3d_avg = mean(&all_returns[i.saturating_sub(3)..i.min(all_returns.len())]);
-        let ret_5d_avg = mean(&all_returns[i.saturating_sub(5)..i.min(all_returns.len())]);
-        let ret_10d_avg = mean(&all_returns[i.saturating_sub(10)..i.min(all_returns.len())]);
-        f.push(ret_3d_avg);                                       // return_3d_avg
-        f.push(ret_5d_avg);                                       // return_5d_avg
-        f.push(ret_10d_avg);                                      // return_10d_avg
+        let ret_3d_avg = mean(&all_returns[i.saturating_sub(3)..i.min(all_returns.len())]) * 100.0;
+        let ret_5d_avg = mean(&all_returns[i.saturating_sub(5)..i.min(all_returns.len())]) * 100.0;
+        let ret_10d_avg = mean(&all_returns[i.saturating_sub(10)..i.min(all_returns.len())]) * 100.0;
+        f.push(ret_3d_avg);                                       // return_3d_avg (%)
+        f.push(ret_5d_avg);                                       // return_5d_avg (%)
+        f.push(ret_10d_avg);                                      // return_10d_avg (%)
 
         let up_10 = all_returns[i.saturating_sub(10)..i.min(all_returns.len())]
             .iter().filter(|&&r| r > 0.0).count() as f64;
@@ -712,25 +719,27 @@ pub fn build_rich_features_ext(
             let vix_now = if mi < mkt.vix.len() { mkt.vix[mi] } else { 20.0 };
             let vix_5d = if mi >= 5 && mi < mkt.vix.len() { mkt.vix[mi - 5] } else { vix_now };
 
-            f.push(vix_now / 100.0);                              // VIX_level (normalised)
-            f.push((vix_now - vix_5d) / 100.0);                   // VIX_delta_5d
+            f.push(vix_now);                                       // VIX_level (raw, matches Python)
+            f.push(vix_now - vix_5d);                              // VIX_delta_5d (raw)
             f.push(if vix_now > 20.0 { 1.0 } else { 0.0 });     // VIX_above_20
             f.push(if vix_now > 30.0 { 1.0 } else { 0.0 });     // VIX_above_30
 
             let tnx_now = if mi < mkt.tnx.len() { mkt.tnx[mi] } else { 4.0 };
             let irx_now = if mi < mkt.irx.len() { mkt.irx[mi] } else { 4.0 };
-            f.push(tnx_now / 100.0);                              // treasury_10y
-            f.push((tnx_now - irx_now) / 100.0);                  // treasury_spread
+            f.push(tnx_now);                                       // treasury_10y (raw, matches Python tnx_level)
+            f.push(tnx_now - irx_now);                             // treasury_spread (raw)
 
             let spy_r = |idx: usize| -> f64 {
                 if idx < mkt.spy_returns.len() { mkt.spy_returns[idx] } else { 0.0 }
             };
-            f.push(spy_r(mi));                                    // SPY_return_1d
-            f.push(mean(&mkt.spy_returns[mi.saturating_sub(5)..=mi.min(mkt.spy_returns.len().saturating_sub(1))])); // SPY_return_5d
+            f.push(spy_r(mi) * 100.0);                             // SPY_return_1d (%)
+            let spy_5d_cum = mkt.spy_returns[mi.saturating_sub(4)..=mi.min(mkt.spy_returns.len().saturating_sub(1))]
+                .iter().sum::<f64>() * 100.0;
+            f.push(spy_5d_cum);                                      // SPY_return_5d (% cumulative)
 
             // SPY 10d momentum
             let spy_10d: Vec<f64> = (0..10).map(|j| spy_r(mi.saturating_sub(j))).collect();
-            f.push(spy_10d.iter().sum::<f64>());                  // SPY_momentum_10d
+            f.push(spy_10d.iter().sum::<f64>() * 100.0);          // SPY_momentum_10d (%)
 
             // Sector returns (8 sectors)
             let sectors = ["XLK", "XLF", "XLE", "XLV", "XLI", "XLC", "XLP", "XLY"];
@@ -738,20 +747,20 @@ pub fn build_rich_features_ext(
                 let sr = mkt.sector_returns.get(*sector)
                     .and_then(|v| if mi < v.len() { Some(v[mi]) } else { None })
                     .unwrap_or(0.0);
-                f.push(sr);
+                f.push(sr * 100.0);                                // sector return (%)
             }
 
-            // Gold 5d return
+            // Gold 5d return (cumulative %)
             let gold_5d = if mkt.gold_returns.len() > mi && mi >= 5 {
-                mean(&mkt.gold_returns[mi-5..=mi])
+                mkt.gold_returns[mi-4..=mi].iter().sum::<f64>() * 100.0
             } else { 0.0 };
-            f.push(gold_5d);                                      // gold_return_5d
+            f.push(gold_5d);                                      // gold_return_5d (%)
 
-            // Dollar 5d return
+            // Dollar 5d return (cumulative %)
             let dollar_5d = if mkt.dollar_returns.len() > mi && mi >= 5 {
-                mean(&mkt.dollar_returns[mi-5..=mi])
+                mkt.dollar_returns[mi-4..=mi].iter().sum::<f64>() * 100.0
             } else { 0.0 };
-            f.push(dollar_5d);                                    // dollar_return_5d
+            f.push(dollar_5d);                                    // dollar_return_5d (%)
 
             // Risk-on/off: SPY up AND VIX down = risk-on (+1), opposite = risk-off (-1)
             let risk = if spy_r(mi) > 0.0 && vix_now < vix_5d { 1.0 }
@@ -764,12 +773,12 @@ pub fn build_rich_features_ext(
         }
 
         // ══ G. Lagged features (8) — yesterday's indicators ══
-        let lag1_ret = if i >= 2 { safe_div(prices[i-1] - prices[i-2], prices[i-2]) } else { 0.0 };
-        let lag2_ret = if i >= 3 { safe_div(prices[i-2] - prices[i-3], prices[i-3]) } else { 0.0 };
-        let lag3_ret = if i >= 4 { safe_div(prices[i-3] - prices[i-4], prices[i-4]) } else { 0.0 };
-        f.push(lag1_ret);
-        f.push(lag2_ret);
-        f.push(lag3_ret);
+        let lag1_ret = if i >= 2 { safe_div(prices[i-1] - prices[i-2], prices[i-2]) * 100.0 } else { 0.0 };
+        let lag2_ret = if i >= 3 { safe_div(prices[i-2] - prices[i-3], prices[i-3]) * 100.0 } else { 0.0 };
+        let lag3_ret = if i >= 4 { safe_div(prices[i-3] - prices[i-4], prices[i-4]) * 100.0 } else { 0.0 };
+        f.push(lag1_ret);                                           // lag1_return (%)
+        f.push(lag2_ret);                                           // lag2_return (%)
+        f.push(lag3_ret);                                           // lag3_return (%)
 
         let lag1_vol_ratio = if i >= 1 {
             safe_div(vol_f64[i-1], mean(&vol_f64[i.saturating_sub(21)..i]))
@@ -788,8 +797,8 @@ pub fn build_rich_features_ext(
         let lag1_macd = if i >= 1 && macd_hist.len() > i - 1 { macd_hist[i-1] } else { 0.0 };
         f.push(lag1_macd);                                        // lag1_macd_hist
 
-        let lag1_vol = std_dev(&all_returns[i.saturating_sub(21)..i.saturating_sub(1).min(all_returns.len())]);
-        f.push(lag1_vol);                                         // lag1_volatility
+        let lag1_vol = std_dev(&all_returns[i.saturating_sub(21)..i.saturating_sub(1).min(all_returns.len())]) * ann_factor;
+        f.push(lag1_vol);                                         // lag1_volatility (ann %)
 
         // ══ H. Statistical features (6) ══
         let stat_returns = &all_returns[i.saturating_sub(20)..i.min(all_returns.len())];
@@ -827,13 +836,18 @@ pub fn build_rich_features_ext(
 
         // ══ I. Relative & Cross-Asset features (12) ══
 
-        // Precompute momentum values used by multiple features below
-        let mom_1d = safe_div(price - prices[i.saturating_sub(1)], prices[i.saturating_sub(1)]);
-        let mom_5d = safe_div(price - prices[i.saturating_sub(5)], prices[i.saturating_sub(5)]);
-        let mom_10d = safe_div(price - prices[i.saturating_sub(10)], prices[i.saturating_sub(10)]);
-        let mom_20d = safe_div(price - prices[i.saturating_sub(20)], prices[i.saturating_sub(20)]);
+        // Precompute raw (fractional) momentum values used by multiple features below
+        let mom_1d_raw = safe_div(price - prices[i.saturating_sub(1)], prices[i.saturating_sub(1)]);
+        let mom_5d_raw = safe_div(price - prices[i.saturating_sub(5)], prices[i.saturating_sub(5)]);
+        let mom_10d_raw = safe_div(price - prices[i.saturating_sub(10)], prices[i.saturating_sub(10)]);
+        let mom_20d_raw = safe_div(price - prices[i.saturating_sub(20)], prices[i.saturating_sub(20)]);
+        // Percentage versions for feature output
+        let mom_1d = mom_1d_raw * 100.0;
+        let mom_5d = mom_5d_raw * 100.0;
+        let mom_10d = mom_10d_raw * 100.0;
+        let mom_20d = mom_20d_raw * 100.0;
 
-        // stock_vs_sector_5d / stock_vs_sector_20d
+        // stock_vs_sector_5d / stock_vs_sector_20d (all in %)
         if let (Some(mkt), Some(etf)) = (market, sector_etf) {
             let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
             let sector_rets = mkt.sector_returns.get(etf);
@@ -845,14 +859,14 @@ pub fn build_rich_features_ext(
                 .filter(|v| v.len() > mi && mi >= 20)
                 .map(|v| v[mi.saturating_sub(19)..=mi].iter().sum::<f64>())
                 .unwrap_or(0.0);
-            f.push(mom_5d - sector_5d);                              // stock_vs_sector_5d
-            f.push(mom_20d - sector_20d);                            // stock_vs_sector_20d
+            f.push((mom_5d_raw - sector_5d) * 100.0);                // stock_vs_sector_5d (%)
+            f.push((mom_20d_raw - sector_20d) * 100.0);              // stock_vs_sector_20d (%)
         } else {
             f.push(0.0);                                             // stock_vs_sector_5d (FX/no data)
             f.push(0.0);                                             // stock_vs_sector_20d (FX/no data)
         }
 
-        // stock_vs_spy_5d / stock_vs_spy_20d
+        // stock_vs_spy_5d / stock_vs_spy_20d (all in %)
         if let Some(mkt) = market {
             let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
             let spy_5d = if mkt.spy_returns.len() > mi && mi >= 5 {
@@ -861,8 +875,8 @@ pub fn build_rich_features_ext(
             let spy_20d = if mkt.spy_returns.len() > mi && mi >= 20 {
                 mkt.spy_returns[mi.saturating_sub(19)..=mi].iter().sum::<f64>()
             } else { 0.0 };
-            f.push(mom_5d - spy_5d);                                 // stock_vs_spy_5d
-            f.push(mom_20d - spy_20d);                               // stock_vs_spy_20d
+            f.push((mom_5d_raw - spy_5d) * 100.0);                   // stock_vs_spy_5d (%)
+            f.push((mom_20d_raw - spy_20d) * 100.0);                 // stock_vs_spy_20d (%)
         } else {
             f.push(0.0);                                             // stock_vs_spy_5d
             f.push(0.0);                                             // stock_vs_spy_20d
@@ -872,13 +886,11 @@ pub fn build_rich_features_ext(
 
         // momentum_volume_confirm: sign(momentum_5d) * volume_ratio_20d
         let vol_ratio_20d = safe_div(v_now, v_sma20);
-        let mom_sign = if mom_5d > 0.0 { 1.0 } else if mom_5d < 0.0 { -1.0 } else { 0.0 };
+        let mom_sign = if mom_5d_raw > 0.0 { 1.0 } else if mom_5d_raw < 0.0 { -1.0 } else { 0.0 };
         f.push(mom_sign * vol_ratio_20d);                           // momentum_volume_confirm
 
-        // vol_adjusted_momentum_5d: mom_5d / vol_20d
+        // vol_adjusted_momentum: mom / vol (both in %, so ratio is unitless Sharpe-like)
         f.push(safe_div(mom_5d, vol20));                            // vol_adjusted_momentum_5d
-
-        // vol_adjusted_momentum_20d: mom_20d / vol_60d
         f.push(safe_div(mom_20d, vol60));                           // vol_adjusted_momentum_20d
 
         // consecutive_up_days (capped at 10)
@@ -959,8 +971,8 @@ pub fn build_rich_features_ext(
             else { None }
         }).unwrap_or(0.0);
 
-        f.push(dxy_val / 100.0);                                    // dxy_level (normalised ~1.0)
-        f.push(dxy_5d / 100.0);                                     // dxy_delta_5d
+        f.push(dxy_val);                                              // dxy_level (raw)
+        f.push(dxy_5d);                                              // dxy_delta_5d (raw)
 
         // Yield spread (10Y-2Y): positive = normal, negative = inverted
         let ys_val = ext_macro.and_then(|m| {
@@ -978,12 +990,18 @@ pub fn build_rich_features_ext(
         }).unwrap_or(5.0);
         f.push(ffr_val / 10.0);                                     // fed_funds_rate (normalised)
 
-        // Yield curve slope: derivative of yield spread (positive = steepening)
-        let ys_prev = ext_macro.and_then(|m| {
-            if i >= 5 && i < m.yield_spread.len() { Some(m.yield_spread[i] - m.yield_spread[i-5]) }
-            else { None }
-        }).unwrap_or(0.0);
-        f.push(ys_prev / 3.0);                                      // yield_curve_slope
+        // Yield curve slope: raw yield spread (TNX - IRX), positive = normal curve
+        let yc_slope = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.tnx.len().saturating_sub(1));
+            let tnx_now = if mi < mkt.tnx.len() { mkt.tnx[mi] } else { 4.0 };
+            let irx_now = if mi < mkt.irx.len() { mkt.irx[mi] } else { 4.0 };
+            tnx_now - irx_now
+        } else {
+            ext_macro.and_then(|m| {
+                if i < m.yield_spread.len() { Some(m.yield_spread[i]) } else { None }
+            }).unwrap_or(0.0)
+        };
+        f.push(yc_slope);                                           // yield_curve_slope (raw spread)
 
         // ══ L. Crypto on-chain & sentiment (8) ══
 
@@ -1048,12 +1066,12 @@ pub fn build_rich_features_ext(
             if mi >= 5 && mi < mkt.tnx.len() && mi < mkt.irx.len() {
                 let spread_now = mkt.tnx[mi] - mkt.irx[mi];
                 let spread_5d = mkt.tnx[mi - 5] - mkt.irx[mi - 5];
-                (spread_now - spread_5d) / 100.0
+                spread_now - spread_5d
             } else { 0.0 }
         } else { 0.0 };
         f.push(yc_trend);                                              // yield_curve_trend
 
-        // stock_vs_sector_10d: 10-day relative strength vs sector ETF
+        // stock_vs_sector_10d: 10-day relative strength vs sector ETF (%)
         let svs_10d = if let (Some(mkt), Some(etf)) = (market, sector_etf) {
             let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
             let sector_rets = mkt.sector_returns.get(etf);
@@ -1061,9 +1079,9 @@ pub fn build_rich_features_ext(
                 .filter(|v| v.len() > mi && mi >= 10)
                 .map(|v| v[mi.saturating_sub(9)..=mi].iter().sum::<f64>())
                 .unwrap_or(0.0);
-            mom_10d - sector_10d
+            (mom_10d_raw - sector_10d) * 100.0
         } else { 0.0 };
-        f.push(svs_10d);                                              // stock_vs_sector_10d
+        f.push(svs_10d);                                              // stock_vs_sector_10d (%)
 
         // btc_minus_eth_10d: BTC dominance proxy (only meaningful for crypto)
         // Conservative: set to 0.0 for non-crypto; for crypto, computed from
@@ -1118,9 +1136,9 @@ pub fn build_rich_features_ext(
             let mi = (i.saturating_sub(1)).min(mkt.vix.len().saturating_sub(1));
             let vix_now = if mi < mkt.vix.len() { mkt.vix[mi] } else { 20.0 };
             let vix_prev = if mi >= 1 && mi < mkt.vix.len() { mkt.vix[mi - 1] } else { vix_now };
-            safe_div(vix_now - vix_prev, vix_prev)
+            safe_div(vix_now - vix_prev, vix_prev) * 100.0
         } else { 0.0 };
-        f.push(vix_change_1d);                                            // vix_change_1d
+        f.push(vix_change_1d);                                            // vix_change_1d (%)
 
         // VIX distance from 10-day SMA (as percentage)
         let vix_sma10_dist = if let Some(mkt) = market {
@@ -1129,47 +1147,47 @@ pub fn build_rich_features_ext(
             let vix_sma10 = if mi >= 9 && mi < mkt.vix.len() {
                 mean(&mkt.vix[mi.saturating_sub(9)..=mi])
             } else { vix_now };
-            safe_div(vix_now - vix_sma10, vix_sma10)
+            safe_div(vix_now - vix_sma10, vix_sma10) * 100.0
         } else { 0.0 };
-        f.push(vix_sma10_dist);                                           // vix_sma10_dist
+        f.push(vix_sma10_dist);                                           // vix_sma10_dist (%)
 
         // 10Y Treasury yield 5-day change
         let tnx_change_5d_val = if let Some(mkt) = market {
             let mi = (i.saturating_sub(1)).min(mkt.tnx.len().saturating_sub(1));
             let tnx_now = if mi < mkt.tnx.len() { mkt.tnx[mi] } else { 4.0 };
             let tnx_5d = if mi >= 5 && mi < mkt.tnx.len() { mkt.tnx[mi - 5] } else { tnx_now };
-            (tnx_now - tnx_5d) / 10.0  // normalised
+            tnx_now - tnx_5d  // raw, matches Python
         } else { 0.0 };
         f.push(tnx_change_5d_val);                                        // tnx_change_5d
 
         // 3M Treasury yield (IRX) level
         let irx_level_val = if let Some(mkt) = market {
             let mi = (i.saturating_sub(1)).min(mkt.irx.len().saturating_sub(1));
-            if mi < mkt.irx.len() { mkt.irx[mi] / 100.0 } else { 0.04 }
+            if mi < mkt.irx.len() { mkt.irx[mi] } else { 4.0 }
         } else { 0.0 };
         f.push(irx_level_val);                                            // irx_level
 
-        // SPY 21-day cumulative return
+        // SPY 21-day cumulative return (%)
         let spy_ret_21d_val = if let Some(mkt) = market {
             let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
             if mkt.spy_returns.len() > mi && mi >= 20 {
-                mkt.spy_returns[mi.saturating_sub(20)..=mi].iter().sum::<f64>()
+                mkt.spy_returns[mi.saturating_sub(20)..=mi].iter().sum::<f64>() * 100.0
             } else { 0.0 }
         } else { 0.0 };
-        f.push(spy_ret_21d_val);                                          // spy_ret_21d
+        f.push(spy_ret_21d_val);                                          // spy_ret_21d (%)
 
-        // Relative strength vs SPY: asset 1d return - SPY 1d return
+        // Relative strength vs SPY: asset 1d return - SPY 1d return (%)
         let rel_vs_spy_1d = if let Some(mkt) = market {
             let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
             let spy_1d = if mi < mkt.spy_returns.len() { mkt.spy_returns[mi] } else { 0.0 };
-            mom_1d - spy_1d
-        } else { mom_1d };
-        f.push(rel_vs_spy_1d);                                            // rel_strength_vs_spy_1d
+            (mom_1d_raw - spy_1d) * 100.0
+        } else { mom_1d_raw * 100.0 };
+        f.push(rel_vs_spy_1d);                                            // rel_strength_vs_spy_1d (%)
 
-        // Multi-horizon raw returns
-        f.push(safe_div(price - prices[i.saturating_sub(2)], prices[i.saturating_sub(2)]));    // ret_2d
-        f.push(safe_div(price - prices[i.saturating_sub(21)], prices[i.saturating_sub(21)]));  // ret_21d
-        f.push(safe_div(price - prices[i.saturating_sub(63)], prices[i.saturating_sub(63)]));  // ret_63d
+        // Multi-horizon raw returns (%)
+        f.push(safe_div(price - prices[i.saturating_sub(2)], prices[i.saturating_sub(2)]) * 100.0);    // ret_2d (%)
+        f.push(safe_div(price - prices[i.saturating_sub(21)], prices[i.saturating_sub(21)]) * 100.0);  // ret_21d (%)
+        f.push(safe_div(price - prices[i.saturating_sub(63)], prices[i.saturating_sub(63)]) * 100.0);  // ret_63d (%)
 
         // Volatility ratio: 21d / 63d (vol expansion/contraction signal)
         f.push(safe_div(vol20, vol60));                                    // vol_ratio_21_63
@@ -1700,13 +1718,7 @@ mod tests {
         let x_test: Vec<Vec<f64>> = test_copy.iter().map(|s| s.features.clone()).collect();
         let y_test: Vec<f64> = test_copy.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
 
-        let gbt_config = crate::gbt::GBTConfig {
-            n_trees: 20,
-            learning_rate: 0.1,
-            tree_config: crate::gbt::TreeConfig { max_depth: 3, min_samples_leaf: 5, min_samples_split: 10 },
-            subsample_ratio: 0.8,
-            early_stopping_rounds: Some(5),
-        };
+        let gbt_config = crate::gbt::GBTConfig::default();
         let gbt_model = crate::gbt::GradientBoostedClassifier::train(
             &x_train, &y_train, None, None, gbt_config
         );

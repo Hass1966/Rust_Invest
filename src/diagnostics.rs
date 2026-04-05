@@ -18,7 +18,7 @@
 /// change any signal logic. Think of it as an X-ray of your models.
 
 use crate::ml::{self, Sample};
-use crate::gbt::{GBTConfig, TreeConfig, GradientBoostedClassifier};
+use crate::gbt::{GBTConfig, GradientBoostedClassifier};
 use crate::lstm::{LSTMModelConfig, LSTMModel, build_sequences};
 use crate::features;
 
@@ -248,17 +248,7 @@ pub fn run_diagnostics(
         let (x_t, x_v) = x_train.split_at(val_start);
         let (y_t, y_v) = y_train.split_at(val_start);
 
-        let gbt_config = GBTConfig {
-            n_trees: 80,
-            learning_rate: 0.08,
-            tree_config: TreeConfig {
-                max_depth: 4,
-                min_samples_leaf: 8,
-                min_samples_split: 16,
-            },
-            subsample_ratio: 0.8,
-            early_stopping_rounds: Some(8),
-        };
+        let gbt_config = GBTConfig::default();
 
         let gbt = GradientBoostedClassifier::train(
             x_t, y_t, Some(x_v), Some(y_v), gbt_config,
