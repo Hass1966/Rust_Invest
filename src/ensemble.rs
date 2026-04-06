@@ -1340,28 +1340,28 @@ mod tests {
         // Typical stacking weights: [w_linreg, w_logreg, w_gbt, w_lstm, w_gru, w_rf, bias]
         let weights = vec![0.5, 0.3, 0.8, 0.2, 0.1, 0.4, -1.0];
 
-        // All models predict UP strongly
-        let probs_up: [f64; 6] = [0.9, 0.85, 0.95, 0.7, 0.6, 0.8];
+        // All models predict UP strongly (7 models)
+        let probs_up: [f64; 7] = [0.9, 0.85, 0.95, 0.7, 0.6, 0.8, 0.75];
         let result = stacking_predict(&weights, &probs_up);
         assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
 
         // All models predict DOWN strongly
-        let probs_down: [f64; 6] = [0.1, 0.15, 0.05, 0.3, 0.4, 0.2];
+        let probs_down: [f64; 7] = [0.1, 0.15, 0.05, 0.3, 0.4, 0.2, 0.25];
         let result = stacking_predict(&weights, &probs_down);
         assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
 
         // Mixed predictions
-        let probs_mixed: [f64; 6] = [0.8, 0.3, 0.6, 0.5, 0.4, 0.7];
+        let probs_mixed: [f64; 7] = [0.8, 0.3, 0.6, 0.5, 0.4, 0.7, 0.55];
         let result = stacking_predict(&weights, &probs_mixed);
         assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
 
         // Edge: all 0.5 (neutral)
-        let probs_neutral: [f64; 6] = [0.5; 6];
+        let probs_neutral: [f64; 7] = [0.5; 7];
         let result = stacking_predict(&weights, &probs_neutral);
         assert!((0.0..=1.0).contains(&result), "stacking_predict should be in [0,1], got {}", result);
 
         // Edge: extreme weights
-        let extreme_weights = vec![10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 50.0];
+        let extreme_weights = vec![10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 50.0];
         let result = stacking_predict(&extreme_weights, &probs_up);
         assert!((0.0..=1.0).contains(&result), "extreme weights should still be bounded, got {}", result);
 

@@ -1,6 +1,6 @@
 /// Comprehensive Feature Engineering Module
 /// ==========================================
-/// Expands from 14 features to 80+ features per sample.
+/// Expands from 14 features to 76 active features per sample (164 raw, 76 whitelisted).
 ///
 /// Feature categories:
 ///   A. Price-derived technical indicators (existing + new)
@@ -19,45 +19,72 @@ use crate::ml::Sample;
 use std::collections::HashMap;
 
 // ════════════════════════════════════════
-// Feature pruning — noise features identified by diagnostic analysis
+// Feature selection — whitelist of features validated by Python comparison
 // ════════════════════════════════════════
 
-const PRUNED_FEATURES: &[&str] = &[
-    // VIX_above_20 un-pruned: user explicitly wants VIX regime feature
-    "VIX_above_30", "SMA50_above_200", "vol_regime",
-    "daily_return", "is_month_end", "month_sin", "month_cos",
-    "day_of_week_cos", "risk_on_off", "up_days_ratio_10d",
-    "up_days_ratio_20d",
-    // Duplicate calendar features from Section P — Section E sin/cos already covers these
-    "day_of_week_raw", "month_raw",
-    // momentum_3d, momentum_5d, momentum_10d UN-PRUNED:
-    // Python comparison validated multi-horizon returns as top-20 features
+const KEPT_FEATURES: &[&str] = &[
+    // A: Price-derived technical (15)
+    "RSI_14", "RSI_7", "RSI_delta_3d", "MACD_hist", "MACD_hist_delta",
+    "BB_position", "BB_width", "SMA7_ratio", "SMA30_ratio", "SMA50_ratio",
+    "SMA200_ratio", "SMA_spread_50_200", "price_vs_52w_high", "price_vs_52w_low",
+    "daily_range_pct",
+    // B: Volume (3)
+    "volume_ratio_20d", "volume_ratio_5d", "obv_slope_10d",
+    // C: Volatility (6)
+    "volatility_5d", "volatility_20d", "volatility_60d", "vol_ratio_5_20",
+    "atr_14d", "max_drawdown_20d",
+    // D: Momentum (5)
+    "momentum_1d", "momentum_3d", "momentum_5d", "momentum_10d", "momentum_20d",
+    // F: Market context (11) — includes VIX_above_30 and risk_on_off
+    "VIX_level", "VIX_above_20", "VIX_above_30", "treasury_10y",
+    "treasury_spread", "SPY_return_1d", "SPY_return_5d",
+    "SPY_momentum_10d", "gold_return_5d", "dollar_return_5d", "risk_on_off",
+    // G: Lagged (1)
+    "lag1_return",
+    // H: Statistical (2)
+    "skewness_20d", "hurst_exponent_est",
+    // I: Cross-asset relative (2)
+    "stock_vs_sector_5d", "stock_vs_spy_5d",
+    // K: Extended macro (3)
+    "yield_spread_10y2y", "fed_funds_rate", "yield_curve_slope",
+    // N: Additional (2)
+    "quarter", "days_since_52w_high",
+    // P: Python-validated (12) — includes day_of_week_raw and month_raw
+    "vix_change_1d", "vix_sma10_dist", "tnx_change_5d", "irx_level",
+    "spy_ret_21d", "rel_strength_vs_spy_1d", "ret_2d", "ret_21d", "ret_63d",
+    "vol_ratio_21_63", "day_of_week_raw", "month_raw",
+    // Q: External (4)
+    "boe_rate", "uk_gilt_10y", "ecb_rate", "eu_inflation",
+    // R: Python-alignment features (10)
+    "vix_regime", "logret_1d", "logret_5d", "logret_21d",
+    "zscore_20", "zscore_50", "stoch_k", "stoch_d",
+    "price_pos_20d", "price_pos_63d",
 ];
 
-/// Return indices of features to keep (those NOT in the pruned list)
-fn pruned_feature_indices() -> Vec<usize> {
+/// Return indices of features to keep (those IN the kept list)
+fn kept_feature_indices() -> Vec<usize> {
     let names = feature_names();
     names.iter().enumerate()
-        .filter(|(_, name)| !PRUNED_FEATURES.contains(&name.as_str()))
+        .filter(|(_, name)| KEPT_FEATURES.contains(&name.as_str()))
         .map(|(i, _)| i)
         .collect()
 }
 
-/// Feature names after pruning
+/// Feature names after selection
 pub fn active_feature_names() -> Vec<String> {
     let names = feature_names();
-    let keep = pruned_feature_indices();
+    let keep = kept_feature_indices();
     keep.iter().map(|&i| names[i].clone()).collect()
 }
 
-/// Number of active features after pruning
+/// Number of active features after selection
 pub fn active_feature_count() -> usize {
-    feature_names().len() - PRUNED_FEATURES.len()
+    kept_feature_indices().len()
 }
 
-/// Apply feature pruning to a set of samples (removes pruned columns)
+/// Apply feature selection to a set of samples (keeps only whitelisted columns)
 pub fn prune_features(samples: &[Sample]) -> Vec<Sample> {
-    let keep = pruned_feature_indices();
+    let keep = kept_feature_indices();
     samples.iter().map(|s| {
         let features: Vec<f64> = keep.iter().map(|&i| s.features[i]).collect();
         Sample { features, label: s.label }
@@ -110,26 +137,35 @@ pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
     match symbol {
         // Technology (XLK)
         "AAPL" | "MSFT" | "NVDA" | "AMD" | "QQQ" | "INTC" | "AVGO" | "CRM" | "ADBE" | "ORCL"
-        | "SAP.DE" | "ARM" | "QCOM" | "TSM" | "IBM" => Some("XLK"),
+        | "SAP.DE" | "ARM" | "QCOM" | "TSM" | "IBM"
+        | "NOW" | "INTU" | "AMAT" | "MU" | "LRCX" | "KLAC" | "SNPS" | "CDNS"
+        | "FTNT" | "PANW" | "CRWD" | "TEAM" | "ZS" | "DDOG" | "NET" | "MDB" | "SNOW" => Some("XLK"),
         // Communication (XLC) — GOOGL/META per GICS classification
         "GOOGL" | "META" | "NFLX" | "DIS" | "CMCSA" | "VZ" | "T"
         | "VOD.L" | "BT-A.L" | "WPP.L" => Some("XLC"),
         // Financials (XLF)
         "JPM" | "GS" | "BAC" | "WFC" | "MS" | "C" | "BLK" | "SCHW" | "DIA"
         | "HSBA.L" | "LLOY.L" | "BARC.L" | "NWG.L" | "LGEN.L" | "III.L" | "MNG.L"
-        | "ALV.DE" | "V" | "MA" | "BRK-B" | "MMC" | "TRV" | "AFL" => Some("XLF"),
+        | "ALV.DE" | "V" | "MA" | "BRK-B" | "MMC" | "TRV" | "AFL"
+        | "AXP" | "COF" | "USB" | "PNC" | "TFC" | "SPGI" | "MCO" | "ICE" | "CME" | "CB" => Some("XLF"),
         // Energy (XLE)
         "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO"
-        | "BP.L" | "SHEL.L" | "CNA.L" | "DCC.L" | "VDE" | "CL=F" | "USO" => Some("XLE"),
+        | "BP.L" | "SHEL.L" | "CNA.L" | "DCC.L" | "VDE" | "CL=F" | "USO"
+        | "HAL" | "BKR" | "DVN" | "FANG" => Some("XLE"),
         // Healthcare (XLV)
         "JNJ" | "UNH" | "LLY" | "PFE" | "MRNA" | "ABBV" | "TMO" | "ABT" | "BMY" | "AMGN"
-        | "AZN.L" | "GSK.L" | "SAN.PA" | "MRK" | "CVS" | "CI" | "VHT" | "IHI" | "SNY" => Some("XLV"),
+        | "AZN.L" | "GSK.L" | "SAN.PA" | "MRK" | "CVS" | "CI" | "VHT" | "IHI" | "SNY"
+        | "ELV" | "HUM" | "MOH" | "ISRG" | "BSX" | "SYK" | "MDT" | "EW"
+        | "REGN" | "VRTX" | "BIIB" | "GILD" => Some("XLV"),
         // Industrials (XLI)
         "CAT" | "DE" | "MMM" | "HON" | "GE" | "EMR" | "LMT" | "RTX" | "NOC" | "BA" | "GD" | "UPS" | "FDX"
-        | "RR.L" | "AIR.PA" | "SAF.PA" | "SIE.DE" | "MBG.DE" | "QQ.L" | "EXPN.L" => Some("XLI"),
+        | "RR.L" | "AIR.PA" | "SAF.PA" | "SIE.DE" | "MBG.DE" | "QQ.L" | "EXPN.L"
+        | "CSX" | "NSC" | "UNP" | "ETN" | "PH" | "ROK" | "IR" | "CARR" | "OTIS" => Some("XLI"),
         // Consumer Discretionary (XLY)
         "TSLA" | "AMZN" | "HD" | "NKE" | "SBUX" | "MCD" | "TGT" | "LOW"
-        | "OR.PA" | "MC.PA" | "PSON.L" => Some("XLY"),
+        | "OR.PA" | "MC.PA" | "PSON.L"
+        | "TJX" | "ORLY" | "AZO" | "DLTR" | "DG" | "YUM" | "CMG"
+        | "ABNB" | "BKNG" | "MAR" | "HLT" => Some("XLY"),
         // Consumer Staples (XLP)
         "WMT" | "COST" | "PG" | "KO" | "PEP" | "PM" | "MO" | "CL"
         | "ULVR.L" | "IMB.L" | "BATS.L" | "DGE.L" | "TSCO.L" | "SBRY.L" | "CPG.L"
@@ -137,9 +173,10 @@ pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
         // Utilities (XLU)
         "NG.L" | "SSE.L" | "DUK" | "NEE" | "SO" | "VPU" | "IDU" => Some("XLU"),
         // Materials (XLB)
-        "GLEN.L" | "AAL.L" | "ANTO.L" | "BAS.DE" | "SMDS.L" | "MNDI.L" => Some("XLB"),
+        "GLEN.L" | "AAL.L" | "ANTO.L" | "BAS.DE" | "SMDS.L" | "MNDI.L"
+        | "LIN" | "APD" | "ECL" | "NEM" | "FCX" | "NUE" | "ALB" => Some("XLB"),
         // Real Estate (XLRE)
-        "AMT" | "VNQ" => Some("XLRE"),
+        "AMT" | "VNQ" | "PLD" | "EQIX" | "PSA" | "EXR" | "AVB" | "EQR" | "O" => Some("XLRE"),
         // SPY is the market itself
         "SPY" => Some("SPY"),
         _ => None,
@@ -339,6 +376,18 @@ pub fn feature_names() -> Vec<String> {
     names.push("insider_score".into());          // SEC insider buying score (US stocks, 0-1)
     names.push("short_interest_ratio".into());   // FINRA short interest ratio (US stocks, 0-1)
 
+    // R. Python-alignment features (10 features)
+    names.push("vix_regime".into());             // VIX regime categorical: 0=low(<15), 1=medium(15-25), 2=high(>25)
+    names.push("logret_1d".into());              // Log return 1-day (%)
+    names.push("logret_5d".into());              // Log return 5-day (%)
+    names.push("logret_21d".into());             // Log return 21-day (%)
+    names.push("zscore_20".into());              // Price z-score vs 20-day mean
+    names.push("zscore_50".into());              // Price z-score vs 50-day mean
+    names.push("stoch_k".into());               // Stochastic %K (14-day) [0-100]
+    names.push("stoch_d".into());               // Stochastic %D (3-day SMA of %K) [0-100]
+    names.push("price_pos_20d".into());          // Price position in 20-day range [0-1]
+    names.push("price_pos_63d".into());          // Price position in 63-day range [0-1]
+
     names
 }
 
@@ -398,6 +447,14 @@ fn kurtosis(data: &[f64]) -> f64 {
     if s < 1e-12 { return 0.0; }
     let kurt = data.iter().map(|x| ((x - m) / s).powi(4)).sum::<f64>() / n;
     kurt - 3.0 // excess kurtosis
+}
+
+fn mean_std(data: &[f64]) -> (f64, f64) {
+    let n = data.len() as f64;
+    if n < 2.0 { return (data.first().copied().unwrap_or(0.0), 1.0); }
+    let m = data.iter().sum::<f64>() / n;
+    let var = data.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1.0);
+    (m, var.sqrt().max(1e-10))
 }
 
 fn rsi_at(prices: &[f64], period: usize) -> f64 {
@@ -720,7 +777,7 @@ pub fn build_rich_features_ext(
             let vix_5d = if mi >= 5 && mi < mkt.vix.len() { mkt.vix[mi - 5] } else { vix_now };
 
             f.push(vix_now);                                       // VIX_level (raw, matches Python)
-            f.push(vix_now - vix_5d);                              // VIX_delta_5d (raw)
+            f.push(safe_div(vix_now - vix_5d, vix_5d) * 100.0);   // VIX_delta_5d (% change)
             f.push(if vix_now > 20.0 { 1.0 } else { 0.0 });     // VIX_above_20
             f.push(if vix_now > 30.0 { 1.0 } else { 0.0 });     // VIX_above_30
 
@@ -1240,6 +1297,61 @@ pub fn build_rich_features_ext(
         let short_int = ext_macro.map(|m| m.short_interest_ratio).unwrap_or(0.0);
         f.push(short_int);                                                  // short_interest_ratio
 
+        // ══ R. Python-alignment features (10) ══
+
+        // vix_regime: categorical 0=low(<15), 1=medium(15-25), 2=high(>25)
+        let vix_regime_val = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.vix.len().saturating_sub(1));
+            let v = if mi < mkt.vix.len() { mkt.vix[mi] } else { 20.0 };
+            if v < 15.0 { 0.0 } else if v <= 25.0 { 1.0 } else { 2.0 }
+        } else { 1.0 };
+        f.push(vix_regime_val);                                             // vix_regime
+
+        // Log returns (% scale)
+        let lp = price.max(1e-10).ln();
+        let logret_1d = (lp - prices[i.saturating_sub(1)].max(1e-10).ln()) * 100.0;
+        let logret_5d = (lp - prices[i.saturating_sub(5)].max(1e-10).ln()) * 100.0;
+        let logret_21d = (lp - prices[i.saturating_sub(21)].max(1e-10).ln()) * 100.0;
+        f.push(logret_1d);                                                  // logret_1d (%)
+        f.push(logret_5d);                                                  // logret_5d (%)
+        f.push(logret_21d);                                                 // logret_21d (%)
+
+        // Z-scores: (price - mean) / std
+        let zs_start_20 = i.saturating_sub(19);
+        let (zm_20, zs_20) = mean_std(&prices[zs_start_20..=i]);
+        let zs_start_50 = i.saturating_sub(49);
+        let (zm_50, zs_50) = mean_std(&prices[zs_start_50..=i]);
+        f.push(safe_div(price - zm_20, zs_20));                            // zscore_20
+        f.push(safe_div(price - zm_50, zs_50));                            // zscore_50
+
+        // Stochastic %K (14-day) and %D (3-day SMA of %K)
+        let stoch_window = &prices[i.saturating_sub(13)..=i];
+        let s_lo = stoch_window.iter().cloned().fold(f64::INFINITY, f64::min);
+        let s_hi = stoch_window.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let sk = safe_div(price - s_lo, s_hi - s_lo) * 100.0;
+        f.push(sk);                                                         // stoch_k [0-100]
+        // %D: 3-period SMA of %K
+        let sk_prev = |offset: usize| -> f64 {
+            let end = i.saturating_sub(offset);
+            let start = end.saturating_sub(13);
+            let w = &prices[start..=end];
+            let lo = w.iter().cloned().fold(f64::INFINITY, f64::min);
+            let hi = w.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            safe_div(prices[end] - lo, hi - lo) * 100.0
+        };
+        let sd = (sk + sk_prev(1) + sk_prev(2)) / 3.0;
+        f.push(sd);                                                         // stoch_d [0-100]
+
+        // Price position in range: (price - low) / (high - low)
+        let price_pos = |n: usize| -> f64 {
+            let w = &prices[i.saturating_sub(n)..=i];
+            let lo = w.iter().cloned().fold(f64::INFINITY, f64::min);
+            let hi = w.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            safe_div(price - lo, hi - lo)
+        };
+        f.push(price_pos(19));                                              // price_pos_20d [0,1]
+        f.push(price_pos(62));                                              // price_pos_63d [0,1]
+
         // ══ Label: next day return ══
         let label = prices[i+1] - prices[i]; // positive = up
 
@@ -1252,13 +1364,13 @@ pub fn build_rich_features_ext(
     println!("  Built {} samples × {} features (raw) for {}",
         samples.len(), feat_count, asset_type);
 
-    // Apply feature pruning
-    let pruned = prune_features(&samples);
-    let pruned_count = feat_count - pruned[0].features.len();
-    println!("  Built {} samples × {} features for {} ({} pruned)",
-        pruned.len(), pruned[0].features.len(), asset_type, pruned_count);
+    // Apply feature selection (whitelist)
+    let selected = prune_features(&samples);
+    let dropped_count = feat_count - selected[0].features.len();
+    println!("  Built {} samples × {} features for {} ({} dropped by whitelist)",
+        selected.len(), selected[0].features.len(), asset_type, dropped_count);
 
-    pruned
+    selected
 }
 
 /// Simplified features for assets without enough history
@@ -1547,10 +1659,10 @@ mod tests {
             assert!(any_nonzero, "dollar_return_5d should have non-zero values");
         }
 
-        // yield_curve_trend should be present and some non-zero
-        if let Some(idx) = find_idx("yield_curve_trend") {
+        // vix_change_1d should be present and some non-zero
+        if let Some(idx) = find_idx("vix_change_1d") {
             let any_nonzero = samples.iter().any(|s| s.features[idx].abs() > 1e-10);
-            assert!(any_nonzero, "yield_curve_trend should have non-zero values");
+            assert!(any_nonzero, "vix_change_1d should have non-zero values");
         }
     }
 
@@ -1576,11 +1688,11 @@ mod tests {
         let names = active_feature_names();
         let find_idx = |name: &str| names.iter().position(|n| n == name);
 
-        // day_of_week_sin should be in [-1, 1]
-        if let Some(idx) = find_idx("day_of_week_sin") {
+        // day_of_week_raw should be in [0, 1] (normalised trading day / 4)
+        if let Some(idx) = find_idx("day_of_week_raw") {
             for s in &samples {
-                assert!((-1.0..=1.0).contains(&s.features[idx]),
-                    "day_of_week_sin out of range: {}", s.features[idx]);
+                assert!((0.0..=1.0).contains(&s.features[idx]),
+                    "day_of_week_raw out of range: {}", s.features[idx]);
             }
         }
 
@@ -1592,19 +1704,11 @@ mod tests {
             }
         }
 
-        // is_monday should be 0.0 or 1.0
-        if let Some(idx) = find_idx("is_monday") {
+        // month_raw should be in (0, 1] (month/12)
+        if let Some(idx) = find_idx("month_raw") {
             for s in &samples {
-                assert!(s.features[idx] == 0.0 || s.features[idx] == 1.0,
-                    "is_monday should be 0 or 1, got {}", s.features[idx]);
-            }
-        }
-
-        // is_friday should be 0.0 or 1.0
-        if let Some(idx) = find_idx("is_friday") {
-            for s in &samples {
-                assert!(s.features[idx] == 0.0 || s.features[idx] == 1.0,
-                    "is_friday should be 0 or 1, got {}", s.features[idx]);
+                assert!((0.0..=1.01).contains(&s.features[idx]),
+                    "month_raw out of range: {}", s.features[idx]);
             }
         }
 
@@ -1613,6 +1717,22 @@ mod tests {
             for s in &samples {
                 assert!((0.0..=1.0).contains(&s.features[idx]),
                     "days_since_52w_high out of range: {}", s.features[idx]);
+            }
+        }
+
+        // price_pos_20d should be in [0.0, 1.0]
+        if let Some(idx) = find_idx("price_pos_20d") {
+            for s in &samples {
+                assert!((0.0..=1.001).contains(&s.features[idx]),
+                    "price_pos_20d out of range: {}", s.features[idx]);
+            }
+        }
+
+        // stoch_k should be in [0, 100]
+        if let Some(idx) = find_idx("stoch_k") {
+            for s in &samples {
+                assert!((-0.001..=100.001).contains(&s.features[idx]),
+                    "stoch_k out of range: {}", s.features[idx]);
             }
         }
     }

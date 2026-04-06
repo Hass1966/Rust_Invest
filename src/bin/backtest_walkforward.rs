@@ -29,6 +29,8 @@ struct WFSignal {
     pct_return: Option<f64>,
     was_correct: Option<bool>,
     train_window_end: String,
+    buy_probability: f64,
+    confidence: f64,
     linreg_prob: f64,
     logreg_prob: f64,
     gbt_prob: f64,
@@ -118,17 +120,35 @@ fn log_loss_single(predicted: f64, actual_up: bool) -> f64 {
 }
 
 /// Generate a signal from 6 model probabilities using inverse-loss weighted voting
+/// Now includes quality gating, dead zone, tighter SHORT rules, and consensus adjustment
 fn signal_from_probs(
     symbol: &str,
     probs: &[f64; 6], // [lin, log, gbt, lgbm, lstm, regime]
     weights: &[f64; 6], // normalised to sum to 1
+    accuracies: &[f64; 6], // per-model validation accuracy (0-100 scale)
 ) -> (String, f64) {
     let ensemble_prob: f64 = probs.iter().zip(weights.iter())
         .map(|(p, w)| p * w)
         .sum();
 
-    let (buy_thresh, sell_thresh) = ensemble::get_signal_threshold(symbol);
-    let short_thresh = 1.0 - buy_thresh;
+    // ── Quality gating: skip signals when models have no edge ──
+    let active_accuracies: Vec<f64> = accuracies.iter().zip(weights)
+        .filter(|(_, &w)| w > 0.0)
+        .map(|(&a, _)| a)
+        .collect();
+    let best = active_accuracies.iter().cloned().fold(0.0_f64, f64::max);
+    let avg = if !active_accuracies.is_empty() {
+        active_accuracies.iter().sum::<f64>() / active_accuracies.len() as f64
+    } else { 0.0 };
+
+    if best < 52.0 || (best < 55.0 && avg < 50.0) {
+        return ("HOLD".to_string(), ensemble_prob);
+    }
+
+    // ── Dead zone: marginal probabilities → HOLD ──
+    if ensemble_prob > 0.47 && ensemble_prob < 0.53 {
+        return ("HOLD".to_string(), ensemble_prob);
+    }
 
     let n_models = probs.iter().zip(weights.iter())
         .filter(|(_, &w)| w > 0.0)
@@ -139,9 +159,24 @@ fn signal_from_probs(
     let downs = n_models - ups;
     let majority = (n_models + 1) / 2;
 
-    let signal = if ensemble_prob > buy_thresh {
+    // ── Consensus threshold adjustment: relax when all models agree ──
+    let (base_buy, base_sell) = ensemble::get_signal_threshold(symbol);
+    let (buy_thresh, sell_thresh) = if ups == n_models && n_models >= 3 {
+        (base_buy - 0.02, base_sell + 0.02)
+    } else if downs == n_models && n_models >= 3 {
+        (base_buy - 0.02, base_sell + 0.02)
+    } else {
+        (base_buy, base_sell)
+    };
+
+    // ── SHORT: require very strong conviction (supermajority + tighter threshold) ──
+    let short_thresh = 1.0 - buy_thresh - 0.03; // 0.42 instead of 0.45
+    let supermajority = ((n_models as f64 * 2.0 / 3.0).ceil() as usize).max(majority);
+
+    let signal = if ensemble_prob > buy_thresh && ups >= majority {
         "BUY"
-    } else if ensemble_prob < short_thresh && downs >= majority && (ensemble_prob - 0.5).abs() > (buy_thresh - 0.5) {
+    } else if ensemble_prob < short_thresh && downs >= supermajority
+        && (ensemble_prob - 0.5).abs() > (buy_thresh - 0.5) {
         "SHORT"
     } else if ensemble_prob < sell_thresh && downs >= majority {
         "SELL"
@@ -164,14 +199,14 @@ fn min_threshold(asset_class: &str) -> f64 {
 /// Train 6 models on a slice of samples and generate predictions for test samples.
 /// Models: LinReg, LogReg, GBT, LightGBM, LSTM, RegimeEnsemble
 /// Uses inverse validation log-loss weighting for ensemble combination.
-/// Returns Vec<(signal, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)> for each test sample.
+/// Returns (Vec<(signal, ensemble_prob, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)>, model_accuracies)
 fn train_and_predict(
     symbol: &str,
     train_samples: &[ml::Sample],
     test_samples: &[ml::Sample],
-) -> Vec<(String, f64, f64, f64, f64, f64, f64)> {
+) -> (Vec<(String, f64, f64, f64, f64, f64, f64, f64)>, [f64; 6]) {
     if train_samples.len() < 50 || test_samples.is_empty() {
-        return Vec::new();
+        return (Vec::new(), [0.0; 6]);
     }
 
     let n_feat = train_samples[0].features.len();
@@ -262,6 +297,8 @@ fn train_and_predict(
     // ── Compute inverse validation log-loss weights for all 6 models ──
     let val_data = &train_data[val_start..];
     let mut losses = [0.0_f64; 6]; // [lin, log, gbt, lgbm, lstm, regime]
+    let mut correct_counts = [0usize; 6];
+    let mut total_counts = [0usize; 6];
     let mut lstm_correct = 0usize;
     let mut lstm_total = 0usize;
 
@@ -278,11 +315,20 @@ fn train_and_predict(
         losses[0] += log_loss_single(lin_prob, actual_up);
         losses[1] += log_loss_single(log_prob, actual_up);
         losses[2] += log_loss_single(gbt_prob, actual_up);
+        // Track per-model accuracy
+        if (lin_prob > 0.5) == actual_up { correct_counts[0] += 1; }
+        total_counts[0] += 1;
+        if (log_prob > 0.5) == actual_up { correct_counts[1] += 1; }
+        total_counts[1] += 1;
+        if (gbt_prob > 0.5) == actual_up { correct_counts[2] += 1; }
+        total_counts[2] += 1;
 
         // LightGBM
         if let Some(ref model) = lgbm_model {
             let lgbm_prob = model.predict_proba(&sample.features).clamp(0.01, 0.99);
             losses[3] += log_loss_single(lgbm_prob, actual_up);
+            if (lgbm_prob > 0.5) == actual_up { correct_counts[3] += 1; }
+            total_counts[3] += 1;
         }
 
         // LSTM: only evaluate if we have a matching sequence
@@ -291,8 +337,9 @@ fn train_and_predict(
                 if let Ok(lstm_p) = model.predict_proba(&val_seqs[vi].features) {
                     let lstm_prob = lstm_p.clamp(0.01, 0.99);
                     losses[4] += log_loss_single(lstm_prob, actual_up);
-                    if (lstm_prob > 0.5) == actual_up { lstm_correct += 1; }
+                    if (lstm_prob > 0.5) == actual_up { lstm_correct += 1; correct_counts[4] += 1; }
                     lstm_total += 1;
+                    total_counts[4] += 1;
                 }
             }
         }
@@ -301,11 +348,18 @@ fn train_and_predict(
         if let Some(ref model) = regime_model {
             let regime_prob = model.predict_proba(&sample.features).clamp(0.01, 0.99);
             losses[5] += log_loss_single(regime_prob, actual_up);
+            if (regime_prob > 0.5) == actual_up { correct_counts[5] += 1; }
+            total_counts[5] += 1;
         }
     }
 
     let n_val = val_data.len().max(1) as f64;
     let lstm_accuracy = if lstm_total > 0 { lstm_correct as f64 / lstm_total as f64 * 100.0 } else { 0.0 };
+
+    // Compute per-model validation accuracies (0-100 scale)
+    let model_accuracies: [f64; 6] = std::array::from_fn(|i| {
+        if total_counts[i] > 0 { correct_counts[i] as f64 / total_counts[i] as f64 * 100.0 } else { 0.0 }
+    });
     // Gate LSTM: only include if accuracy >= 54%
     let lstm_useful = lstm_model.is_some() && lstm_accuracy >= 54.0;
 
@@ -379,11 +433,11 @@ fn train_and_predict(
         } else { 0.5 };
 
         let probs = [lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob];
-        let (signal, _) = signal_from_probs(symbol, &probs, &model_weights);
-        results.push((signal, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob));
+        let (signal, ensemble_prob) = signal_from_probs(symbol, &probs, &model_weights, &model_accuracies);
+        results.push((signal, ensemble_prob, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob));
     }
 
-    results
+    (results, model_accuracies)
 }
 
 fn main() {
@@ -598,9 +652,9 @@ fn process_asset(
 
         if test_samples.is_empty() { continue; }
 
-        let predictions = train_and_predict(symbol, train_samples, test_samples);
+        let (predictions, _model_accuracies) = train_and_predict(symbol, train_samples, test_samples);
 
-        for (i, (signal, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)) in predictions.iter().enumerate() {
+        for (i, (signal, ensemble_prob, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)) in predictions.iter().enumerate() {
             let sample_idx = train_end_idx + i;
             if sample_idx >= timestamps.len() { break; }
             let date = timestamps[sample_idx][..10.min(timestamps[sample_idx].len())].to_string();
@@ -624,6 +678,9 @@ fn process_asset(
                 (None, None)
             };
 
+            // Confidence: distance from 0.5, capped at 1.0
+            let confidence = ((*ensemble_prob - 0.5).abs() * 2.0).min(1.0);
+
             all_signals.push(WFSignal {
                 date,
                 asset: symbol.to_string(),
@@ -634,6 +691,8 @@ fn process_asset(
                 pct_return,
                 was_correct,
                 train_window_end: window.train_end.format("%Y-%m-%d").to_string(),
+                buy_probability: *ensemble_prob,
+                confidence,
                 linreg_prob: *lin_prob,
                 logreg_prob: *log_prob,
                 gbt_prob: *gbt_prob,

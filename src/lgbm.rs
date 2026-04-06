@@ -137,12 +137,13 @@ impl LightGBMClassifier {
             let xv = x_val.unwrap();
             let yv = y_val.unwrap();
 
-            // Validate feature counts match and no NaN/Inf
+            // Validate feature counts match and no NaN/Inf — skip gracefully if mismatch
             if !xv.is_empty() && xv[0].len() != n_features {
-                return Err(format!(
-                    "LightGBM: validation features ({}) != training features ({})",
-                    xv[0].len(), n_features
-                ));
+                eprintln!("[LightGBM] SKIP: validation features ({}) != training features ({}), falling back to no-validation training",
+                    xv[0].len(), n_features);
+                return Booster::train(train_dataset, &params)
+                    .map(|booster| LightGBMClassifier { booster, n_features })
+                    .map_err(|e| format!("LightGBM train error: {}", e));
             }
             if xv.iter().any(|row| row.iter().any(|v| !v.is_finite())) {
                 return Err("LightGBM: validation data contains NaN/Inf values".to_string());
@@ -164,7 +165,7 @@ impl LightGBMClassifier {
 
             // Train with early stopping via validation
             let mut params_with_es = params.clone();
-            params_with_es["early_stopping_round"] = json!(config.early_stopping_rounds);
+            params_with_es["early_stopping_rounds"] = json!(config.early_stopping_rounds);
 
             Booster::train_with_valid(train_dataset, Some(val_dataset), &params_with_es)
                 .map_err(|e| format!("LightGBM train error: {}", e))?

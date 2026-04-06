@@ -22,6 +22,12 @@ struct AssetAccuracy {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Limit Rayon to 6 cores — leaves 2 free for OS and running services
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(6)
+        .build_global()
+        .unwrap();
+
     let args: Vec<String> = std::env::args().collect();
     let test_lstm = args.iter().any(|a| a == "--test-lstm");
 
