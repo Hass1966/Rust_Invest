@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { TrendingUp, TrendingDown, Minus, Activity, RefreshCw, Gauge, ChevronDown, ChevronUp } from 'lucide-react'
-import { fetchSignals, fetchMorningBriefing, fetchHints, comparePortfolio, fetchUserHoldings } from '../lib/api'
+import { fetchSignals, fetchMorningBriefing, fetchHints, comparePortfolio, fetchUserHoldings, fetchSectorOverview, fetchSectorBacktest } from '../lib/api'
 import type { EnrichedSignal, Hint } from '../lib/types'
-import type { PortfolioComparison } from '../lib/api'
+import type { PortfolioComparison, SectorOverview, SectorBacktest } from '../lib/api'
 import { translateSignalSummary, confidenceLabel, convictionInfo } from '../lib/plain-english'
 
 type Filter = 'All' | 'Stocks' | 'FX' | 'Crypto'
@@ -19,6 +19,8 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<Filter>('All')
   const [comparison, setComparison] = useState<PortfolioComparison | null>(null)
   const [hasHoldings, setHasHoldings] = useState(false)
+  const [sectors, setSectors] = useState<SectorOverview | null>(null)
+  const [sectorBacktest, setSectorBacktest] = useState<SectorBacktest | null>(null)
 
   const loadBriefing = useCallback(() => {
     setBriefingLoading(true)
@@ -39,6 +41,8 @@ export default function Dashboard() {
       .finally(() => setLoading(false))
     loadBriefing()
     fetchHints().then(setHints).catch(() => {})
+    fetchSectorOverview().then(setSectors).catch(() => {})
+    fetchSectorBacktest().then(setSectorBacktest).catch(() => {})
     // Load portfolio quick-view
     fetchUserHoldings().then(h => {
       if (h.length > 0) {
@@ -104,6 +108,9 @@ export default function Dashboard() {
 
       {/* Hints panel */}
       {hints.length > 0 && <HintsPanel hints={hints} />}
+
+      {/* Sector Overview */}
+      {sectors && sectors.sectors.length > 0 && <SectorPanel overview={sectors} backtest={sectorBacktest} />}
 
       {/* Portfolio quick-view */}
       {hasHoldings && comparison?.has_data && (
@@ -395,6 +402,95 @@ function SummaryCard({ icon: Icon, label, value, color, bg, loading }: {
           <div className="text-gray-500 text-xs">{label}</div>
           <div className="text-white text-2xl font-bold">{loading ? '-' : value}</div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Sector Overview Panel ──
+
+function SectorPanel({ overview, backtest }: { overview: SectorOverview; backtest: SectorBacktest | null }) {
+  const maxMomentum = Math.max(...overview.sectors.map(s => Math.abs(s.momentum_score)), 1)
+
+  return (
+    <div className="bg-[#111827] border border-[#1f2937] rounded-lg p-6 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-white font-semibold">Sector Rotation</h3>
+        <div className="flex gap-3 text-xs">
+          <span className="text-gray-500">{overview.total_assets} assets</span>
+          <span className="text-emerald-400">Strongest: {overview.strongest_sector}</span>
+          <span className="text-red-400">Weakest: {overview.weakest_sector}</span>
+        </div>
+      </div>
+      <div className="space-y-2">
+        {overview.sectors.map(s => {
+          const barPct = Math.abs(s.momentum_score) / maxMomentum * 100
+          const isPositive = s.momentum_score >= 0
+          const barColor = isPositive ? 'bg-emerald-500/60' : 'bg-red-500/60'
+          const scoreColor = isPositive ? 'text-emerald-400' : 'text-red-400'
+          const weightColor = s.weight_multiplier >= 1.1 ? 'text-emerald-400' : s.weight_multiplier <= 0.9 ? 'text-red-400' : 'text-gray-400'
+
+          return (
+            <div key={s.sector} className="flex items-center gap-3 bg-[#0a0e17] rounded px-3 py-2">
+              <span className="text-gray-300 text-sm w-24 flex-shrink-0 font-medium">{s.label}</span>
+              <div className="flex-1 h-4 bg-[#1f2937] rounded overflow-hidden relative">
+                <div
+                  className={`h-full ${barColor} rounded transition-all duration-500`}
+                  style={{ width: `${Math.max(barPct, 2)}%`, marginLeft: isPositive ? '0' : 'auto' }}
+                />
+              </div>
+              <span className={`text-xs font-mono w-14 text-right flex-shrink-0 ${scoreColor}`}>
+                {s.momentum_score > 0 ? '+' : ''}{s.momentum_score.toFixed(0)}
+              </span>
+              <div className="flex gap-1 flex-shrink-0">
+                <span className="text-emerald-500 text-[10px] font-mono">{s.buy_count}B</span>
+                <span className="text-red-500 text-[10px] font-mono">{s.sell_count}S</span>
+                <span className="text-amber-500 text-[10px] font-mono">{s.hold_count}H</span>
+              </div>
+              <span className={`text-xs font-mono w-12 text-right flex-shrink-0 ${weightColor}`}>
+                {s.weight_multiplier.toFixed(2)}x
+              </span>
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex justify-between mt-3 text-[10px] text-gray-600">
+        <span>Momentum: confidence-weighted signal direction (-100 to +100)</span>
+        <span>Weight: allocation multiplier (0.50x-1.50x)</span>
+      </div>
+
+      {/* Backtest Results */}
+      {backtest && (
+        <div className="mt-4 pt-4 border-t border-[#1f2937]">
+          <h4 className="text-gray-400 text-xs uppercase tracking-wider mb-3">Walk-Forward Backtest: Sector Rotation Impact (Q1 2022 - Q4 2025)</h4>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-3">
+            <BacktestMetric label="CAGR" baseline={backtest.baseline.cagr_pct} weighted={backtest.sector_weighted.cagr_pct} suffix="%" />
+            <BacktestMetric label="Sharpe" baseline={backtest.baseline.sharpe_ratio} weighted={backtest.sector_weighted.sharpe_ratio} />
+            <BacktestMetric label="Max DD" baseline={backtest.baseline.max_drawdown_pct} weighted={backtest.sector_weighted.max_drawdown_pct} suffix="%" invert />
+            <BacktestMetric label="Win Rate" baseline={backtest.baseline.win_rate_pct} weighted={backtest.sector_weighted.win_rate_pct} suffix="%" />
+            <BacktestMetric label="Profit Factor" baseline={backtest.baseline.profit_factor} weighted={backtest.sector_weighted.profit_factor} />
+            <BacktestMetric label="Total Return" baseline={backtest.baseline.total_return_pct} weighted={backtest.sector_weighted.total_return_pct} suffix="%" />
+          </div>
+          <p className="text-[10px] text-gray-500">{backtest.improvement.verdict}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BacktestMetric({ label, baseline, weighted, suffix = '', invert = false }: {
+  label: string; baseline: number; weighted: number; suffix?: string; invert?: boolean
+}) {
+  const delta = weighted - baseline
+  const improved = invert ? delta < 0 : delta > 0
+  return (
+    <div className="bg-[#0a0e17] rounded p-2">
+      <div className="text-[10px] text-gray-500 mb-1">{label}</div>
+      <div className="flex items-baseline gap-1">
+        <span className="text-gray-600 text-[10px] line-through">{baseline.toFixed(2)}{suffix}</span>
+        <span className={`text-xs font-mono font-bold ${improved ? 'text-emerald-400' : 'text-red-400'}`}>
+          {weighted.toFixed(2)}{suffix}
+        </span>
       </div>
     </div>
   )

@@ -59,6 +59,43 @@ const DEFAULT_BH_WEIGHTS: { asset: string; weight: number }[] = [
 ]
 const MAX_CUSTOM = 5
 
+// ─── FTSE 100 Config ───
+const FTSE_AVAILABLE_ASSETS = [
+  'SHEL.L', 'AZN.L', 'HSBA.L', 'BP.L', 'GSK.L', 'ULVR.L', 'RIO.L',
+  'DGE.L', 'BARC.L', 'LLOY.L', 'NWG.L', 'VOD.L', 'BT-A.L', 'REL.L',
+  'NG.L', 'SSE.L', 'CNA.L', 'IMB.L', 'BATS.L', 'PSON.L', 'LGEN.L',
+  'III.L', 'EXPN.L', 'GLEN.L', 'AAL.L', 'ANTO.L', 'WPP.L', 'QQ.L',
+  'MNG.L', 'MNDI.L', 'TSCO.L', 'SBRY.L', 'DCC.L', 'STAN.L', 'AV.L',
+  'JD.L', 'JMAT.L', 'WEIR.L', 'AUTO.L', 'CRDA.L', 'RS1.L', 'RR.L',
+  'PSN.L', 'FRAS.L', 'BRBY.L', 'LAND.L', 'SGRO.L', 'TW.L', 'CPG.L',
+]
+const DEFAULT_FTSE_WEIGHTS: { asset: string; weight: number }[] = [
+  // Large caps (~60%)
+  { asset: 'SHEL.L', weight: 0.10 },
+  { asset: 'AZN.L', weight: 0.10 },
+  { asset: 'HSBA.L', weight: 0.08 },
+  { asset: 'BP.L', weight: 0.06 },
+  { asset: 'GSK.L', weight: 0.06 },
+  { asset: 'ULVR.L', weight: 0.05 },
+  { asset: 'RIO.L', weight: 0.05 },
+  { asset: 'DGE.L', weight: 0.05 },
+  { asset: 'BARC.L', weight: 0.05 },
+  // Mid caps (~30%)
+  { asset: 'LLOY.L', weight: 0.04 },
+  { asset: 'NWG.L', weight: 0.04 },
+  { asset: 'NG.L', weight: 0.04 },
+  { asset: 'REL.L', weight: 0.04 },
+  { asset: 'SSE.L', weight: 0.03 },
+  { asset: 'GLEN.L', weight: 0.03 },
+  { asset: 'EXPN.L', weight: 0.03 },
+  { asset: 'BATS.L', weight: 0.03 },
+  // Small caps + diversifiers (~10%)
+  { asset: 'TSCO.L', weight: 0.02 },
+  { asset: 'VOD.L', weight: 0.02 },
+  { asset: 'RR.L', weight: 0.02 },
+  // Cash: ~6%
+]
+
 interface Allocation { asset: string; pct: number }
 
 // ─── Portfolio Allocation Types ───
@@ -311,7 +348,10 @@ function applyCorrelationPenalty(
 
 function txCostBps(asset: string): number {
   const cryptoAssets = new Set(['bitcoin', 'ethereum', 'solana', 'dogecoin', 'cardano', 'xrp', 'polkadot', 'chainlink', 'avalanche', 'polygon', 'uniswap', 'litecoin', 'stellar', 'cosmos', 'algorand'])
-  return cryptoAssets.has(asset.toLowerCase()) ? 0.0025 : 0.001
+  if (cryptoAssets.has(asset.toLowerCase())) return 0.0025  // 25bps crypto
+  if (asset.endsWith('.L') || asset.endsWith('.DE') || asset.endsWith('.PA'))
+    return 0.003  // 30bps avg (50bps SDRT on buy + 10bps on sell) / 2
+  return 0.001    // 10bps US stocks/ETFs
 }
 
 function rebalancePortfolio(
@@ -406,6 +446,7 @@ function runSimulation(
   bhAssets: { asset: string; amount: number }[],
   capital: number,
   fromDate?: string,
+  benchmarkAsset: string = 'SPY',
 ): SimResult | null {
   const dates = getAllDates(data.price_history, fromDate)
   if (dates.length < 2) return null
@@ -544,9 +585,9 @@ function runSimulation(
       bhValue += price ? bhShares[asset] * price : 0
     }
 
-    // 5. SPY benchmark (normalised to same starting capital)
-    const spyPrice = getPrice(priceMaps['SPY'], date)
-    const spyStartPrice = getPrice(priceMaps['SPY'], startDate)
+    // 5. Benchmark (normalised to same starting capital)
+    const spyPrice = getPrice(priceMaps[benchmarkAsset], date)
+    const spyStartPrice = getPrice(priceMaps[benchmarkAsset], startDate)
     const spyValue = spyStartPrice && spyPrice ? capital * (spyPrice / spyStartPrice) : capital
 
     chartData.push({ date, buyHold: Math.round(bhValue), alphaSignal: Math.round(asValue), spy: Math.round(spyValue) })
@@ -935,7 +976,7 @@ function runManagedSimulation(
 // Main Component
 // ═══════════════════════════════════════
 
-type TopTab = 'backtest' | 'live' | 'whatif'
+type TopTab = 'backtest' | 'live' | 'whatif' | 'ftse'
 
 export default function Simulator() {
   const [data, setData] = useState<SimulatorData | null>(null)
@@ -1005,6 +1046,18 @@ export default function Simulator() {
   const backtestResult = useMemo(() => data ? runSimulation(data, bhAssets, startingCapital) : null, [data, bhAssets, startingCapital])
   const liveResult = useMemo(() => data ? runSimulation(data, bhAssets, startingCapital, LIVE_START) : null, [data, bhAssets, startingCapital])
 
+  // FTSE 100 simulation: UK stocks only, ISF.L as benchmark
+  const ftseBhAssets = useMemo(() => {
+    return DEFAULT_FTSE_WEIGHTS.map(w => ({
+      asset: w.asset,
+      amount: Math.round(w.weight * startingCapital),
+    }))
+  }, [startingCapital])
+  const ftseResult = useMemo(() => {
+    if (!data) return null
+    return runSimulation(data, ftseBhAssets, startingCapital, LIVE_START, 'ISF.L')
+  }, [data, ftseBhAssets, startingCapital])
+
   // When walk-forward data is available, override backtest signals for honest equity curve
   const wfBacktestResult = useMemo(() => {
     if (!wfData || !data) return null
@@ -1028,7 +1081,7 @@ export default function Simulator() {
     return runSimulation(wfSimData, bhAssets, startingCapital)
   }, [wfData, data, bhAssets, startingCapital])
 
-  const result = tab === 'backtest' ? (wfBacktestResult ?? backtestResult) : tab === 'live' ? liveResult : null
+  const result = tab === 'backtest' ? (wfBacktestResult ?? backtestResult) : tab === 'live' ? liveResult : tab === 'ftse' ? ftseResult : null
   const isWalkForward = tab === 'backtest' && wfBacktestResult !== null
   const daysSinceLive = Math.floor((Date.now() - new Date(LIVE_START).getTime()) / 86400000)
 
@@ -1157,12 +1210,47 @@ export default function Simulator() {
         >
           What-If Simulator
         </button>
+        <button
+          onClick={() => setTab('ftse')}
+          className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer flex items-center gap-2 ${
+            tab === 'ftse'
+              ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+              : 'text-gray-400 hover:text-gray-200 bg-[#111827] border border-[#1f2937]'
+          }`}
+        >
+          FTSE 100
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">UK</span>
+        </button>
       </div>
 
       {/* What-If tab */}
       {tab === 'whatif' && <WhatIfSimulator />}
 
-      {/* Backtest / Live tabs */}
+      {/* FTSE 100 tab */}
+      {tab === 'ftse' && (
+        <>
+          <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg px-5 py-4 text-sm">
+            <div className="flex items-start gap-3">
+              <span className="text-xl leading-none flex-shrink-0 inline-flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500" />
+              </span>
+              <div>
+                <div className="font-semibold text-blue-300 mb-1">FTSE 100 — UK Stock Portfolio</div>
+                <p className="text-blue-200/70">Performance of Alpha Signal recommendations across {FTSE_AVAILABLE_ASSETS.length} UK-listed stocks, benchmarked against ISF.L (iShares FTSE 100 ETF). Buy &amp; hold uses a market-cap-weighted allocation of 20 FTSE constituents.</p>
+              </div>
+            </div>
+          </div>
+          {ftseResult && ftseResult.chartData.length >= 2 ? (
+            <InvestmentResults result={ftseResult} benchmarkLabel="ISF.L (FTSE 100)" />
+          ) : (
+            <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-8 text-center text-gray-500">
+              Not enough UK stock price data available yet. Ensure the backend has historical prices for .L assets.
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Backtest / Live / FTSE tabs (allocation modes not shown on FTSE) */}
       {(tab === 'backtest' || tab === 'live') && (
         <>
           {/* Warning banners */}
@@ -1456,7 +1544,7 @@ function SplitResults({ data }: { data: SplitData }) {
   )
 }
 
-function InvestmentResults({ result }: { result: SimResult }) {
+function InvestmentResults({ result, benchmarkLabel = 'S&P 500' }: { result: SimResult; benchmarkLabel?: string }) {
   const cap = result.startingCapital
 
   return (
@@ -1478,7 +1566,7 @@ function InvestmentResults({ result }: { result: SimResult }) {
           valueColor="text-cyan-400"
         />
         <SummaryCard
-          label={`S&P 500 Benchmark ${fmtGBP(cap)}`}
+          label={`${benchmarkLabel} Benchmark ${fmtGBP(cap)}`}
           value={fmtGBP(result.spyTotal)}
           returnPct={result.spyReturn}
           borderColor="border-gray-700"
@@ -1510,7 +1598,7 @@ function InvestmentResults({ result }: { result: SimResult }) {
             <Legend wrapperStyle={{ fontSize: 12, color: '#9ca3af' }} />
             <Line type="monotone" dataKey="alphaSignal" name="Alpha Signal" stroke="#06b6d4" strokeWidth={2.5} dot={false} />
             <Line type="monotone" dataKey="buyHold" name="Buy & Hold" stroke="#e5e7eb" strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="spy" name="S&P 500" stroke="#6b7280" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+            <Line type="monotone" dataKey="spy" name={benchmarkLabel} stroke="#6b7280" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>

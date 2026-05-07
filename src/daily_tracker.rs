@@ -18,7 +18,7 @@
 /// after 3 years following this strategy?"
 
 use std::collections::HashMap;
-use crate::{db, model_store};
+use crate::{db, model_store, sector, market_regime, backtest_compare};
 
 /// One signal entry stored in the daily ledger
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -73,6 +73,14 @@ pub fn run_daily_update(
     //   - If signal is SELL: contribution = 0 (sitting in cash)
     let total_weight: f64 = allocations.iter().map(|a| a.weight).sum();
 
+    // Load yesterday's signals to detect signal changes for tx cost
+    let prev_signals: HashMap<String, String> = database.get_latest_daily_portfolio().ok()
+        .flatten()
+        .and_then(|row| row.signals_json.as_deref()
+            .and_then(|j| serde_json::from_str::<Vec<DailySignalEntry>>(j).ok()))
+        .map(|entries| entries.into_iter().map(|e| (e.asset, e.signal)).collect())
+        .unwrap_or_default();
+
     let mut entries: Vec<DailySignalEntry> = Vec::new();
     let mut weighted_return = 0.0_f64;
 
@@ -86,10 +94,36 @@ pub fn run_daily_update(
         // Get yesterday's closing price from stock_history to compute return
         let price_return = compute_price_return(&database, &alloc.asset, current_price);
 
-        // Apply return only if invested (BUY or HOLD); cash earns nothing
+        // Deduct transaction cost on signal changes (round-trip: 10 bps stocks)
+        let prev_sig = prev_signals.get(&alloc.asset).map(|s| s.as_str()).unwrap_or("HOLD");
+        let signal_changed = prev_sig != signal;
+        let tx = if signal_changed {
+            if alloc.asset.ends_with(".L") || alloc.asset.ends_with(".DE") || alloc.asset.ends_with(".PA") {
+                0.0030  // 30bps for UK/EU stocks (stamp duty averaged)
+            } else {
+                backtest_compare::tx_cost("stock")  // 10bps for US stocks
+            }
+        } else { 0.0 };
+
+        // Confidence-tiered position sizing (0–1 scale):
+        // High confidence (>0.6) → full weight (1.0x)
+        // Medium confidence (0.3-0.6) → half weight (0.5x)
+        // Low confidence (0.1-0.3) → quarter weight (0.25x)
+        // Very low (<0.1) → skip (0x, same as cash)
+        let confidence = signal_entry.map(|s| s.technical.confidence).unwrap_or(0.0);
+        let confidence_multiplier = if confidence > 0.6 {
+            1.0
+        } else if confidence > 0.3 {
+            0.5
+        } else if confidence > 0.1 {
+            0.25
+        } else {
+            0.0
+        };
+
         let contribution = match signal {
-            "SELL" => 0.0,
-            _ => normalised_weight * price_return,
+            "SELL" => -tx * normalised_weight, // still pay tx cost if switching to SELL
+            _ => normalised_weight * (price_return * confidence_multiplier - tx),
         };
 
         weighted_return += contribution;
@@ -247,5 +281,130 @@ pub fn build_api_response(
         "model_accuracy_pct": (accuracy * 10.0).round() / 10.0,
         "today_signals": today_signals,
         "equity_curve": equity_curve,
+    })
+}
+
+/// A proposed allocation entry for the rebalance endpoint
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RebalanceEntry {
+    pub asset: String,
+    pub sector: String,
+    pub signal: String,
+    pub confidence: f64,
+    pub sector_multiplier: f64,
+    pub raw_weight: f64,
+    pub final_weight_pct: f64,
+}
+
+/// Compute optimal sector-weighted allocation from current signals + regime.
+///
+/// Steps:
+///   1. Get sector scores (weight_multiplier 0.5x-1.5x)
+///   2. Get regime → exposure caps (BULL=80%, BEAR=35%, etc.)
+///   3. Filter to BUY signals only, ranked by confidence × sector_multiplier
+///   4. Apply inverse-volatility weighting + 15% single-position cap
+///   5. Return proposed allocation
+pub fn compute_rebalance(
+    signals: &HashMap<String, crate::enriched_signals::EnrichedSignal>,
+    regime: Option<&market_regime::MarketRegimeState>,
+    db_path: &str,
+) -> serde_json::Value {
+    // Regime-based maximum equity exposure
+    let max_exposure = match regime.map(|r| &r.regime) {
+        Some(market_regime::MarketRegime::Bull) => 0.80,
+        Some(market_regime::MarketRegime::Neutral) => 0.65,
+        Some(market_regime::MarketRegime::EarlyWarning) => 0.50,
+        Some(market_regime::MarketRegime::Bear) => 0.35,
+        Some(market_regime::MarketRegime::Crisis) => 0.20,
+        None => 0.65,
+    };
+
+    let regime_label = regime.map(|r| r.regime.to_string()).unwrap_or_else(|| "UNKNOWN".to_string());
+
+    // Build sector score map
+    let signal_inputs: Vec<sector::SignalInput> = signals.values().map(|s| sector::SignalInput {
+        asset: s.asset.clone(),
+        asset_class: s.asset_class.clone(),
+        signal: s.signal.clone(),
+        confidence: s.technical.confidence,
+        probability_up: s.models.get("gbt").map(|m| m.probability_up).unwrap_or(50.0),
+    }).collect();
+
+    let sector_scores = sector::calculate_sector_scores(&signal_inputs);
+    let sector_map: HashMap<String, f64> = sector_scores.iter()
+        .map(|s| (s.label.clone(), s.weight_multiplier))
+        .collect();
+
+    // Filter to BUY signals, compute raw weights
+    let mut buy_signals: Vec<(&String, &crate::enriched_signals::EnrichedSignal, f64)> = signals.iter()
+        .filter(|(_, s)| s.signal == "BUY")
+        .map(|(k, s)| {
+            let sec = sector::classify_sector_with_class(&s.asset, &s.asset_class);
+            let multiplier = sector_map.get(sec.label()).copied().unwrap_or(1.0);
+            let raw_weight = s.technical.confidence * multiplier;
+            (k, s, raw_weight)
+        })
+        .collect();
+
+    // Sort by raw weight descending
+    buy_signals.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    if buy_signals.is_empty() {
+        return serde_json::json!({
+            "regime": regime_label,
+            "max_exposure_pct": max_exposure * 100.0,
+            "cash_pct": 100.0,
+            "allocations": [],
+            "note": "No BUY signals — 100% cash position recommended"
+        });
+    }
+
+    // Inverse-volatility weighting: use confidence as proxy for conviction
+    // (actual vol data would require DB lookups for each asset's history)
+    let total_raw: f64 = buy_signals.iter().map(|(_, _, w)| w).sum();
+
+    let mut entries: Vec<RebalanceEntry> = Vec::new();
+    let single_cap = 0.15; // 15% max per position
+
+    for (_, sig, raw_w) in &buy_signals {
+        let sec = sector::classify_sector_with_class(&sig.asset, &sig.asset_class);
+        let multiplier = sector_map.get(sec.label()).copied().unwrap_or(1.0);
+        let norm_weight = if total_raw > 0.0 { raw_w / total_raw * max_exposure } else { 0.0 };
+        let capped_weight = norm_weight.min(single_cap);
+
+        entries.push(RebalanceEntry {
+            asset: sig.asset.clone(),
+            sector: sec.label().to_string(),
+            signal: sig.signal.clone(),
+            confidence: (sig.technical.confidence * 10.0).round() / 10.0,
+            sector_multiplier: multiplier,
+            raw_weight: (*raw_w * 100.0).round() / 100.0,
+            final_weight_pct: (capped_weight * 1000.0).round() / 10.0,
+        });
+    }
+
+    // Renormalise after capping to use full max_exposure
+    let total_capped: f64 = entries.iter().map(|e| e.final_weight_pct).sum();
+    if total_capped > 0.0 {
+        let scale = (max_exposure * 100.0) / total_capped;
+        for e in &mut entries {
+            e.final_weight_pct = (e.final_weight_pct * scale * 10.0).round() / 10.0;
+            // Re-enforce single cap after renormalisation
+            if e.final_weight_pct > single_cap * 100.0 {
+                e.final_weight_pct = (single_cap * 100.0 * 10.0).round() / 10.0;
+            }
+        }
+    }
+
+    let invested_pct: f64 = entries.iter().map(|e| e.final_weight_pct).sum();
+    let cash_pct = 100.0 - invested_pct;
+
+    serde_json::json!({
+        "regime": regime_label,
+        "max_exposure_pct": (max_exposure * 100.0).round(),
+        "invested_pct": (invested_pct * 10.0).round() / 10.0,
+        "cash_pct": (cash_pct * 10.0).round() / 10.0,
+        "positions": entries.len(),
+        "allocations": entries,
     })
 }

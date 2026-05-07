@@ -1,6 +1,6 @@
 import { Routes, Route, NavLink, useLocation, Navigate, Link } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X, LogOut, LogIn, Menu, Home as HomeIcon, FlaskConical, Activity } from 'lucide-react'
+import { BarChart3, TrendingUp, Wallet, Target, Compass, Settings as SettingsIcon, MessageSquare, X, LogOut, LogIn, Menu, Home as HomeIcon, FlaskConical, Activity, HeartPulse } from 'lucide-react'
 import Home from './pages/Home'
 import Dashboard from './pages/Dashboard'
 import MyPortfolio from './pages/MyPortfolio'
@@ -8,6 +8,7 @@ import TrackRecord from './pages/TrackRecord'
 import Simulator from './pages/Simulator'
 import Explore from './pages/Explore'
 import DeepDive from './pages/DeepDive'
+import SystemHealth from './pages/SystemHealth'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
 import AuthCallback from './pages/AuthCallback'
@@ -23,6 +24,7 @@ const tabs = [
   { path: '/my-portfolio', label: 'My Portfolio', icon: Wallet, protected: true },
   { path: '/track-record', label: 'Track Record', icon: Target },
   { path: '/simulator', label: 'Simulator', icon: FlaskConical },
+  { path: '/system-health', label: 'System Health', icon: HeartPulse },
   { path: '/explore', label: 'Explore', icon: Compass },
 ]
 
@@ -206,6 +208,7 @@ export default function App() {
             <Route path="/my-portfolio" element={<ProtectedRoute><MyPortfolio /></ProtectedRoute>} />
             <Route path="/track-record" element={<TrackRecord />} />
             <Route path="/simulator" element={<Simulator />} />
+            <Route path="/system-health" element={<SystemHealth />} />
             <Route path="/explore" element={<Explore />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/privacy" element={<Privacy />} />

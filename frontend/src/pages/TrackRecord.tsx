@@ -80,6 +80,25 @@ export default function TrackRecord() {
     const losers = returns.filter(r => r < 0).reduce((s, r) => s + Math.abs(r), 0)
     const profitFactor = losers > 0 ? winners / losers : winners > 0 ? Infinity : 0
 
+    // Sharpe ratio (annualised from per-signal returns)
+    const dailyReturns = returns.map(r => r / 100) // pct to decimal
+    const meanReturn = dailyReturns.length > 0 ? dailyReturns.reduce((s, r) => s + r, 0) / dailyReturns.length : 0
+    const variance = dailyReturns.length > 1 ? dailyReturns.reduce((s, r) => s + (r - meanReturn) ** 2, 0) / (dailyReturns.length - 1) : 0
+    const std = Math.sqrt(variance)
+    const rfDaily = 0.045 / 252
+    const sharpeRatio = std > 1e-10 ? ((meanReturn - rfDaily) / std) * Math.sqrt(252) : 0
+
+    // Max drawdown from cumulative equity curve
+    let equity = 100
+    let peak = 100
+    let maxDD = 0
+    for (const r of dailyReturns) {
+      equity *= (1 + r)
+      if (equity > peak) peak = equity
+      const dd = (peak - equity) / peak * 100
+      if (dd > maxDD) maxDD = dd
+    }
+
     return {
       actionableAccuracy,
       actionableCount: actionable.length,
@@ -95,6 +114,8 @@ export default function TrackRecord() {
       holdCorrect,
       expectedValueBps,
       profitFactor,
+      sharpeRatio,
+      maxDrawdown: maxDD,
     }
   }, [data])
 
@@ -281,11 +302,13 @@ export default function TrackRecord() {
         const holdC = data.hold_correct ?? metrics?.holdCorrect ?? 0
         const evBps = data.expected_value_bps ?? metrics?.expectedValueBps ?? 0
         const pf = data.profit_factor ?? metrics?.profitFactor ?? 0
+        const sr = metrics?.sharpeRatio ?? 0
+        const mdd = metrics?.maxDrawdown ?? 0
         const totalActionable = buyN + sellN
 
         if (totalActionable === 0) return null
         return (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             <div className="bg-[#111827] rounded-xl border border-green-500/20 p-4">
               <div className="text-xs text-gray-500 mb-1">BUY Accuracy</div>
               <div className={`text-2xl font-bold ${accColor(buyAcc, buyN)}`}>
@@ -314,6 +337,20 @@ export default function TrackRecord() {
               </div>
               <div className="text-xs text-gray-600 mt-1">winners / losers</div>
             </div>
+            <div className="bg-[#111827] rounded-xl border border-yellow-500/20 p-4">
+              <div className="text-xs text-gray-500 mb-1">Sharpe Ratio</div>
+              <div className={`text-2xl font-bold ${sr >= 1 ? 'text-green-400' : sr >= 0.5 ? 'text-yellow-400' : 'text-red-400'}`}>
+                {totalActionable >= 10 ? sr.toFixed(2) : '--'}
+              </div>
+              <div className="text-xs text-gray-600 mt-1">annualised</div>
+            </div>
+            <div className="bg-[#111827] rounded-xl border border-orange-500/20 p-4">
+              <div className="text-xs text-gray-500 mb-1">Max Drawdown</div>
+              <div className={`text-2xl font-bold ${mdd < 10 ? 'text-green-400' : mdd < 20 ? 'text-yellow-400' : 'text-red-400'}`}>
+                {totalActionable >= 10 ? `${mdd.toFixed(1)}%` : '--'}
+              </div>
+              <div className="text-xs text-gray-600 mt-1">worst peak-to-trough</div>
+            </div>
             <div className="bg-[#111827] rounded-xl border border-[#1f2937] p-4 opacity-60">
               <div className="text-xs text-gray-500 mb-1">HOLD Accuracy</div>
               <div className="text-2xl font-bold text-gray-500">
@@ -341,6 +378,8 @@ export default function TrackRecord() {
             <p><span className="text-amber-400 font-medium">HOLD</span> is correct if the price moved less than the threshold. HOLD signals are excluded from the headline accuracy because they&apos;re trivially easy to get right in low-volatility markets.</p>
             <p><span className="text-cyan-400 font-medium">Expected Value</span> is the average directional return (in basis points) per actionable signal. Positive = the model is profitable on average.</p>
             <p><span className="text-purple-400 font-medium">Profit Factor</span> = sum of all winner returns / sum of all loser returns. Above 1.0x means winners outweigh losers.</p>
+            <p><span className="text-yellow-400 font-medium">Sharpe Ratio</span> = annualised risk-adjusted return. Measures return per unit of volatility. Above 1.0 is good, above 2.0 is excellent.</p>
+            <p><span className="text-orange-400 font-medium">Max Drawdown</span> = the largest peak-to-trough decline in cumulative returns. Shows the worst losing streak. Lower is better.</p>
           </div>
         )}
       </div>

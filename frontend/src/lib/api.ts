@@ -188,7 +188,7 @@ export interface SignalTruthRecord {
 }
 
 export async function fetchSignalTruth(): Promise<SignalTruthData> {
-  const res = await fetch(`${BASE}/api/v1/signals/truth?limit=5000`)
+  const res = await fetch(`${BASE}/api/v1/signals/truth?limit=5000&resolved=true`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
@@ -471,6 +471,53 @@ export async function fetchManagedSimulation(): Promise<ManagedSimData | null> {
   }
 }
 
+// ── Sector Overview ──
+
+export interface SectorScore {
+  sector: string
+  label: string
+  asset_count: number
+  buy_count: number
+  sell_count: number
+  hold_count: number
+  momentum_score: number
+  avg_probability_up: number
+  avg_confidence: number
+  weight_multiplier: number
+}
+
+export interface SectorOverview {
+  sectors: SectorScore[]
+  strongest_sector: string
+  weakest_sector: string
+  total_assets: number
+}
+
+export interface SectorBacktest {
+  generated_at: string
+  methodology: string
+  baseline: { name: string; total_return_pct: number; cagr_pct: number; sharpe_ratio: number; max_drawdown_pct: number; win_rate_pct: number; profit_factor: number; avg_positions_per_day: number; days_fully_in_cash: number }
+  sector_weighted: { name: string; total_return_pct: number; cagr_pct: number; sharpe_ratio: number; max_drawdown_pct: number; win_rate_pct: number; profit_factor: number; avg_positions_per_day: number; days_fully_in_cash: number }
+  improvement: { cagr_delta_pct: number; sharpe_delta: number; drawdown_delta_pct: number; verdict: string }
+  quarterly: { quarter: string; baseline_return_pct: number; sector_return_pct: number; delta_pct: number; strongest_sector: string; weakest_sector: string }[]
+}
+
+export async function fetchSectorBacktest(): Promise<SectorBacktest | null> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/sectors/backtest`)
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
+  }
+}
+
+export async function fetchSectorOverview(): Promise<SectorOverview> {
+  const res = await fetch(`${BASE}/api/v1/sectors`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 export async function sendChat(message: string, tabContext: string): Promise<string> {
   const res = await fetch(`${BASE}/api/v1/chat`, {
     method: 'POST',
@@ -480,4 +527,77 @@ export async function sendChat(message: string, tabContext: string): Promise<str
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
   return data.response
+}
+
+// ── Agent / System Health API ──
+
+const AGENT_BASE = '' // Agent runs on same host, proxied through main server
+
+export interface AgentStatus {
+  status: 'online' | 'offline'
+  last_cycle: string | null
+  decisions_today: number
+  current_regime: string
+  uptime_hours: number
+}
+
+export interface AgentAction {
+  id: number
+  action_type: string
+  status: string
+  asset: string | null
+  reason: string
+  accuracy_before: number | null
+  accuracy_after: number | null
+  created_at: string
+}
+
+export interface AgentMetrics {
+  dates: string[]
+  buy_accuracy: number[]
+  sell_accuracy: number[]
+  overall_accuracy: number[]
+}
+
+export interface Reflection {
+  id: number
+  content: string
+  created_at: string
+  reflection_type: string
+}
+
+export interface PaperPortfolioData {
+  dates: string[]
+  values: number[]
+  daily_returns: number[]
+}
+
+export async function fetchAgentStatus(): Promise<AgentStatus> {
+  const res = await fetch(`${AGENT_BASE}/api/agent/status`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchAgentActions(limit: number = 50): Promise<AgentAction[]> {
+  const res = await fetch(`${AGENT_BASE}/api/agent/actions?limit=${limit}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchAgentMetrics(): Promise<AgentMetrics> {
+  const res = await fetch(`${AGENT_BASE}/api/agent/metrics`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchReflections(limit: number = 5): Promise<Reflection[]> {
+  const res = await fetch(`${AGENT_BASE}/api/reflections?limit=${limit}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchPaperPortfolio(): Promise<PaperPortfolioData> {
+  const res = await fetch(`${AGENT_BASE}/api/paper/portfolio`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }

@@ -49,6 +49,8 @@ pub struct EnrichedSignal {
     pub timestamp: String,
     pub llm_sentiment: f64,
     pub llm_analysis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_regime: Option<String>,
 }
 
 /// Build an enriched signal from a raw TradingSignal
@@ -179,23 +181,49 @@ pub fn enrich_signal(
         risk_factors.push("short positions carry unlimited theoretical risk");
     }
 
-    // Model details
+    // Model details — use regression keys when available, fall back to classification
+    // Regression signal has logistic_weight=0 and gbt_weight=0 (only ridge/lgbm/gru)
     let mut models = std::collections::HashMap::new();
-    models.insert("linreg".to_string(), ModelDetail {
-        probability_up: (signal.linear_prob * 100.0 * 10.0).round() / 10.0,
-        weight: (signal.linear_weight * 100.0).round() as u32,
-        vote: if signal.linear_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
-    });
-    models.insert("logreg".to_string(), ModelDetail {
-        probability_up: (signal.logistic_prob * 100.0 * 10.0).round() / 10.0,
-        weight: (signal.logistic_weight * 100.0).round() as u32,
-        vote: if signal.logistic_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
-    });
-    models.insert("gbt".to_string(), ModelDetail {
-        probability_up: (signal.gbt_prob * 100.0 * 10.0).round() / 10.0,
-        weight: (signal.gbt_weight * 100.0).round() as u32,
-        vote: if signal.gbt_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
-    });
+    let is_classification = signal.logistic_weight > 0.0 || signal.gbt_weight > 0.0;
+    if is_classification {
+        // Classification models (legacy fallback)
+        models.insert("linreg".to_string(), ModelDetail {
+            probability_up: (signal.linear_prob * 100.0 * 10.0).round() / 10.0,
+            weight: (signal.linear_weight * 100.0).round() as u32,
+            vote: if signal.linear_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
+        });
+        models.insert("logreg".to_string(), ModelDetail {
+            probability_up: (signal.logistic_prob * 100.0 * 10.0).round() / 10.0,
+            weight: (signal.logistic_weight * 100.0).round() as u32,
+            vote: if signal.logistic_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
+        });
+        models.insert("gbt".to_string(), ModelDetail {
+            probability_up: (signal.gbt_prob * 100.0 * 10.0).round() / 10.0,
+            weight: (signal.gbt_weight * 100.0).round() as u32,
+            vote: if signal.gbt_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
+        });
+    } else {
+        // Regression models (v6) — use per-model mapped probabilities
+        models.insert("ridge".to_string(), ModelDetail {
+            probability_up: (signal.linear_prob * 100.0 * 10.0).round() / 10.0,
+            weight: (signal.linear_weight * 100.0).round() as u32,
+            vote: if signal.linear_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
+        });
+        if signal.lgbm_weight > 0.0 {
+            models.insert("lgbm".to_string(), ModelDetail {
+                probability_up: (signal.lgbm_prob * 100.0 * 10.0).round() / 10.0,
+                weight: (signal.lgbm_weight * 100.0).round() as u32,
+                vote: if signal.lgbm_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
+            });
+        }
+        if signal.gru_weight > 0.0 {
+            models.insert("gru".to_string(), ModelDetail {
+                probability_up: (signal.gru_prob * 100.0 * 10.0).round() / 10.0,
+                weight: (signal.gru_weight * 100.0).round() as u32,
+                vote: if signal.gru_prob > 0.5 { "UP".to_string() } else { "DOWN".to_string() },
+            });
+        }
+    }
 
     // Build explanation line
     let explanation = build_explanation(
@@ -236,6 +264,7 @@ pub fn enrich_signal(
         timestamp: chrono::Utc::now().to_rfc3339(),
         llm_sentiment: signal.llm_sentiment,
         llm_analysis: signal.llm_analysis.clone(),
+        market_regime: None,
     }
 }
 

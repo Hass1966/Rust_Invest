@@ -6,7 +6,7 @@
 //!
 //! Output: reports/walkforward_backtest.json
 
-use rust_invest::{analysis, db, features, ml, gbt, lgbm, ensemble, stocks, lstm, regime};
+use rust_invest::{analysis, db, features, ml, gbt, lgbm, ensemble, stocks, lstm, ridge, gru, backtest_compare};
 use std::collections::HashMap;
 use chrono::NaiveDate;
 
@@ -31,6 +31,11 @@ struct WFSignal {
     train_window_end: String,
     buy_probability: f64,
     confidence: f64,
+    ridge_return: f64,
+    lgbm_return: f64,
+    gru_return: f64,
+    ensemble_return: f64,
+    // Legacy fields for backward compat with dashboard
     linreg_prob: f64,
     logreg_prob: f64,
     gbt_prob: f64,
@@ -73,8 +78,16 @@ struct WalkForwardOutput {
 
 fn define_test_windows() -> Vec<TestWindow> {
     let mut windows = Vec::new();
-    // Q1 2022 through Q4 2025: 16 quarterly windows
+    // Q1 2020 through Q4 2025: 24 quarterly windows (extended for COVID crash + recovery)
     let quarters = [
+        ("2020-01-02", "2020-03-31"),  // Q1 2020 (COVID crash)
+        ("2020-04-01", "2020-06-30"),  // Q2 2020 (V-recovery)
+        ("2020-07-01", "2020-09-30"),
+        ("2020-10-01", "2020-12-31"),
+        ("2021-01-04", "2021-03-31"),
+        ("2021-04-01", "2021-06-30"),
+        ("2021-07-01", "2021-09-30"),
+        ("2021-10-01", "2021-12-31"),
         ("2022-01-03", "2022-03-31"),
         ("2022-04-01", "2022-06-30"),
         ("2022-07-01", "2022-09-30"),
@@ -112,79 +125,32 @@ fn find_date_index(timestamps: &[String], target_date: &NaiveDate) -> Option<usi
     })
 }
 
-/// Compute binary cross-entropy (log-loss) for a single prediction
-fn log_loss_single(predicted: f64, actual_up: bool) -> f64 {
-    let p = predicted.clamp(1e-7, 1.0 - 1e-7);
-    let y = if actual_up { 1.0 } else { 0.0 };
-    -(y * p.ln() + (1.0 - y) * (1.0 - p).ln())
-}
-
-/// Generate a signal from 6 model probabilities using inverse-loss weighted voting
-/// Now includes quality gating, dead zone, tighter SHORT rules, and consensus adjustment
-fn signal_from_probs(
-    symbol: &str,
-    probs: &[f64; 6], // [lin, log, gbt, lgbm, lstm, regime]
-    weights: &[f64; 6], // normalised to sum to 1
-    accuracies: &[f64; 6], // per-model validation accuracy (0-100 scale)
-) -> (String, f64) {
-    let ensemble_prob: f64 = probs.iter().zip(weights.iter())
-        .map(|(p, w)| p * w)
-        .sum();
-
-    // ── Quality gating: skip signals when models have no edge ──
-    let active_accuracies: Vec<f64> = accuracies.iter().zip(weights)
-        .filter(|(_, &w)| w > 0.0)
-        .map(|(&a, _)| a)
-        .collect();
-    let best = active_accuracies.iter().cloned().fold(0.0_f64, f64::max);
-    let avg = if !active_accuracies.is_empty() {
-        active_accuracies.iter().sum::<f64>() / active_accuracies.len() as f64
-    } else { 0.0 };
-
-    if best < 52.0 || (best < 55.0 && avg < 50.0) {
-        return ("HOLD".to_string(), ensemble_prob);
-    }
-
-    // ── Dead zone: marginal probabilities → HOLD ──
-    if ensemble_prob > 0.47 && ensemble_prob < 0.53 {
-        return ("HOLD".to_string(), ensemble_prob);
-    }
-
-    let n_models = probs.iter().zip(weights.iter())
-        .filter(|(_, &w)| w > 0.0)
-        .count();
-    let ups = probs.iter().zip(weights.iter())
-        .filter(|(&p, &w)| w > 0.0 && p > 0.5)
-        .count();
-    let downs = n_models - ups;
-    let majority = (n_models + 1) / 2;
-
-    // ── Consensus threshold adjustment: relax when all models agree ──
-    let (base_buy, base_sell) = ensemble::get_signal_threshold(symbol);
-    let (buy_thresh, sell_thresh) = if ups == n_models && n_models >= 3 {
-        (base_buy - 0.02, base_sell + 0.02)
-    } else if downs == n_models && n_models >= 3 {
-        (base_buy - 0.02, base_sell + 0.02)
-    } else {
-        (base_buy, base_sell)
+/// Generate a signal from regression model return predictions.
+/// Uses asset-class-specific return thresholds.
+fn signal_from_returns(
+    _symbol: &str,
+    ensemble_return: f64,
+    asset_class: &str,
+) -> (String, f64, f64) {
+    let threshold = match asset_class {
+        "crypto" => 1.0,
+        "fx" => 0.2,
+        _ => 0.5,
     };
 
-    // ── SHORT: require very strong conviction (supermajority + tighter threshold) ──
-    let short_thresh = 1.0 - buy_thresh - 0.03; // 0.42 instead of 0.45
-    let supermajority = ((n_models as f64 * 2.0 / 3.0).ceil() as usize).max(majority);
-
-    let signal = if ensemble_prob > buy_thresh && ups >= majority {
+    let signal = if ensemble_return > threshold {
         "BUY"
-    } else if ensemble_prob < short_thresh && downs >= supermajority
-        && (ensemble_prob - 0.5).abs() > (buy_thresh - 0.5) {
-        "SHORT"
-    } else if ensemble_prob < sell_thresh && downs >= majority {
+    } else if ensemble_return < -threshold {
         "SELL"
     } else {
         "HOLD"
     };
 
-    (signal.to_string(), ensemble_prob)
+    let signal_strength = (ensemble_return.abs() / 2.0).min(1.0);
+    // Backward-compatible probability mapping
+    let ensemble_prob = 0.5 + ensemble_return.clamp(-5.0, 5.0) / 10.0;
+
+    (signal.to_string(), ensemble_prob, signal_strength)
 }
 
 /// Minimum move threshold for "correct" classification
@@ -196,17 +162,18 @@ fn min_threshold(asset_class: &str) -> f64 {
     }
 }
 
-/// Train 6 models on a slice of samples and generate predictions for test samples.
-/// Models: LinReg, LogReg, GBT, LightGBM, LSTM, RegimeEnsemble
-/// Uses inverse validation log-loss weighting for ensemble combination.
-/// Returns (Vec<(signal, ensemble_prob, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)>, model_accuracies)
+/// Train 3 regression models on a slice of samples and generate predictions for test samples.
+/// Models: Ridge, LightGBM Regressor, GRU Regression
+/// Uses inverse-MAE weighting for ensemble combination.
+/// Returns Vec<(signal, ensemble_prob, confidence, ridge_ret, lgbm_ret, gru_ret, ensemble_ret)>
 fn train_and_predict(
     symbol: &str,
+    asset_class: &str,
     train_samples: &[ml::Sample],
     test_samples: &[ml::Sample],
-) -> (Vec<(String, f64, f64, f64, f64, f64, f64, f64)>, [f64; 6]) {
+) -> Vec<(String, f64, f64, f64, f64, f64, f64)> {
     if train_samples.len() < 50 || test_samples.is_empty() {
-        return (Vec::new(), [0.0; 6]);
+        return Vec::new();
     }
 
     let n_feat = train_samples[0].features.len();
@@ -215,188 +182,116 @@ fn train_and_predict(
     let mut train_data = train_samples.to_vec();
     let (means, stds) = ml::normalise(&mut train_data);
 
-    // Class weights
-    let vol_threshold = features::compute_volatility_threshold(&train_data);
-    let (w_down, w_up) = features::compute_class_weights(&train_data, vol_threshold);
-
-    // Recency weights with class adjustment
+    // Recency weights
     let recency = ensemble::compute_recency_weights(train_data.len());
-    let weights: Vec<f64> = train_data.iter().zip(recency.iter()).map(|(s, &rw)| {
-        let cw = if s.label > 0.0 { w_up } else { w_down };
-        rw * cw
-    }).collect();
 
-    // Split: train on first 85%, validate on last 15% for model weighting
+    // Split: train on first 85%, validate on last 15%
     let val_start = (train_data.len() as f64 * 0.85) as usize;
 
-    // ── Model 1: LinReg ──
-    let mut lin = ml::LinearRegression::new(n_feat);
-    lin.train_weighted(&train_data[..val_start], Some(&weights[..val_start]), 0.005, 3000);
-
-    // ── Model 2: LogReg ──
-    let mut log = ml::LogisticRegression::new(n_feat);
-    log.train_weighted(&train_data[..val_start], Some(&weights[..val_start]), 0.01, 3000);
-
-    // ── Model 3: GBT ──
     let x_train: Vec<Vec<f64>> = train_data.iter().map(|s| s.features.clone()).collect();
-    let y_train: Vec<f64> = train_data.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+    let y_train: Vec<f64> = train_data.iter().map(|s| s.label).collect();
     let (x_t, x_v) = x_train.split_at(val_start);
     let (y_t, y_v) = y_train.split_at(val_start);
-    let gbt_recency = &weights[..x_t.len()];
-    let gbt_config = gbt::GBTConfig::default();
-    let gbt_model = gbt::GradientBoostedClassifier::train_weighted(
-        x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config
-    );
 
-    // ── Model 4: LightGBM ──
-    let lgbm_config = lgbm::LGBMConfig::default();
-    let lgbm_model = lgbm::LightGBMClassifier::train(
-        x_t, y_t, Some(&weights[..x_t.len()]),
+    // ── Model 1: Ridge Regression ──
+    let ridge_model = match ridge::RidgeRegression::train(x_t, y_t, 10.0) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+
+    // ── Model 2: LightGBM Regressor ──
+    let lgbm_config = lgbm::LGBMRegressorConfig::default();
+    let lgbm_model = lgbm::LightGBMRegressor::train(
+        x_t, y_t, Some(&recency[..x_t.len()]),
         Some(x_v), Some(y_v), &lgbm_config,
     ).ok();
 
-    // ── Model 5: LSTM (top 30 features, reduced epochs for speed) ──
+    // ── Model 3: GRU Regression (top 30 features) ──
     let feature_names_list = features::active_feature_names();
     let feature_name_refs: Vec<&str> = feature_names_list.iter().map(|s| s.as_str()).collect();
-    // Use LightGBM importance if available, fall back to GBT importance
-    let gbt_importance = if let Some(ref lgbm) = lgbm_model {
+    let importance = if let Some(ref lgbm) = lgbm_model {
         lgbm.feature_importance(&feature_name_refs)
     } else {
-        gbt_model.feature_importance(&feature_name_refs)
+        // Use a dummy GBT for feature importance if no LGBM
+        let y_binary: Vec<f64> = y_t.iter().map(|&y| if y > 0.0 { 1.0 } else { 0.0 }).collect();
+        let gbt_config = gbt::GBTConfig::default();
+        let gbt_tmp = gbt::GradientBoostedClassifier::train_weighted(
+            x_t, &y_binary, None, None, None, gbt_config
+        );
+        gbt_tmp.feature_importance(&feature_name_refs)
     };
-    let top_feature_indices: Vec<usize> = gbt_importance.iter()
-        .take(30.min(gbt_importance.len()))
+    let top_feature_indices: Vec<usize> = importance.iter()
+        .take(30.min(importance.len()))
         .filter_map(|(name, _)| feature_names_list.iter().position(|n| n == name))
         .collect();
-    let lstm_indices = if top_feature_indices.len() >= 20 { Some(top_feature_indices.as_slice()) } else { None };
-    let lstm_input_size = lstm_indices.map_or(n_feat, |idx| idx.len());
+    let gru_indices = if top_feature_indices.len() >= 20 { Some(top_feature_indices.as_slice()) } else { None };
+    let gru_input_size = gru_indices.map_or(n_feat, |idx| idx.len());
 
-    let lstm_model = lstm::LSTMModel::new(lstm::LSTMModelConfig {
-        input_size: lstm_input_size,
-        hidden_size: 64,
+    let gru_config = gru::GRURegressionConfig {
+        input_size: gru_input_size,
+        hidden_size: 48,
         seq_length: 10,
-        learning_rate: 0.0005,
-        epochs: 20, // reduced from 50 for walk-forward speed
-        batch_size: 32,
-    }).ok().and_then(|mut model| {
-        let lstm_val_start = val_start.saturating_sub(10); // need seq_length buffer
-        if lstm_val_start < 50 { return None; }
-        match model.train(&train_data[..lstm_val_start], &train_data[lstm_val_start..], lstm_indices) {
-            Ok(result) if result.final_val_loss.is_finite() => Some(model),
-            _ => None,
+        learning_rate: 0.001,
+        epochs: 30, // reduced for walk-forward speed
+        batch_size: 64,
+        weight_decay: 0.03,
+        ..gru::GRURegressionConfig::default()
+    };
+    let gru_model = gru::GRURegressionModel::new(gru_config).ok().and_then(|mut model| {
+        let gru_val_start = val_start.saturating_sub(gru_config.seq_length * 5);
+        if gru_val_start < 50 { return None; }
+        match model.train_regression(&train_data[..gru_val_start], &train_data[gru_val_start..val_start], gru_indices) {
+            Ok(_) => Some(model),
+            Err(_) => None,
         }
     });
 
-    // ── Model 6: RegimeEnsemble ──
-    let regime_model = if train_data.len() >= 100 {
-        Some(regime::RegimeEnsemble::train(&train_data[..val_start]))
-    } else {
-        None
-    };
-
-    // ── Compute inverse validation log-loss weights for all 6 models ──
+    // ── Evaluate on validation set to get MAE weights ──
     let val_data = &train_data[val_start..];
-    let mut losses = [0.0_f64; 6]; // [lin, log, gbt, lgbm, lstm, regime]
-    let mut correct_counts = [0usize; 6];
-    let mut total_counts = [0usize; 6];
-    let mut lstm_correct = 0usize;
-    let mut lstm_total = 0usize;
+    let mut ridge_mae_sum = 0.0_f64;
+    let mut lgbm_mae_sum = 0.0_f64;
+    let mut gru_mae_sum = 0.0_f64;
+    let mut ridge_count = 0usize;
+    let mut lgbm_count = 0usize;
+    let mut gru_count = 0usize;
 
-    // Build LSTM sequences from validation data for batch evaluation
-    let val_seqs = lstm::build_sequences_with_subset(val_data, 10, lstm_indices);
+    // Build GRU sequences for validation
+    let val_seqs = lstm::build_sequences_regression(val_data, 10, gru_indices);
 
     for (vi, sample) in val_data.iter().enumerate() {
-        let actual_up = sample.label > 0.0;
-        let lin_pred = lin.predict(&sample.features);
-        let lin_prob = (1.0 / (1.0 + (-lin_pred).exp())).clamp(0.01, 0.99);
-        let log_prob = log.predict_probability(&sample.features).clamp(0.01, 0.99);
-        let gbt_prob = gbt_model.predict_proba(&sample.features).clamp(0.01, 0.99);
+        let actual = sample.label;
 
-        losses[0] += log_loss_single(lin_prob, actual_up);
-        losses[1] += log_loss_single(log_prob, actual_up);
-        losses[2] += log_loss_single(gbt_prob, actual_up);
-        // Track per-model accuracy
-        if (lin_prob > 0.5) == actual_up { correct_counts[0] += 1; }
-        total_counts[0] += 1;
-        if (log_prob > 0.5) == actual_up { correct_counts[1] += 1; }
-        total_counts[1] += 1;
-        if (gbt_prob > 0.5) == actual_up { correct_counts[2] += 1; }
-        total_counts[2] += 1;
+        let ridge_pred = ridge_model.predict(&sample.features);
+        ridge_mae_sum += (ridge_pred - actual).abs();
+        ridge_count += 1;
 
-        // LightGBM
         if let Some(ref model) = lgbm_model {
-            let lgbm_prob = model.predict_proba(&sample.features).clamp(0.01, 0.99);
-            losses[3] += log_loss_single(lgbm_prob, actual_up);
-            if (lgbm_prob > 0.5) == actual_up { correct_counts[3] += 1; }
-            total_counts[3] += 1;
+            let lgbm_pred = model.predict_return(&sample.features);
+            lgbm_mae_sum += (lgbm_pred - actual).abs();
+            lgbm_count += 1;
         }
 
-        // LSTM: only evaluate if we have a matching sequence
-        if let Some(ref model) = lstm_model {
+        if let Some(ref model) = gru_model {
             if vi < val_seqs.len() {
-                if let Ok(lstm_p) = model.predict_proba(&val_seqs[vi].features) {
-                    let lstm_prob = lstm_p.clamp(0.01, 0.99);
-                    losses[4] += log_loss_single(lstm_prob, actual_up);
-                    if (lstm_prob > 0.5) == actual_up { lstm_correct += 1; correct_counts[4] += 1; }
-                    lstm_total += 1;
-                    total_counts[4] += 1;
+                if let Ok(gru_pred) = model.predict_return(&val_seqs[vi].features) {
+                    gru_mae_sum += (gru_pred - actual).abs();
+                    gru_count += 1;
                 }
             }
         }
-
-        // RegimeEnsemble
-        if let Some(ref model) = regime_model {
-            let regime_prob = model.predict_proba(&sample.features).clamp(0.01, 0.99);
-            losses[5] += log_loss_single(regime_prob, actual_up);
-            if (regime_prob > 0.5) == actual_up { correct_counts[5] += 1; }
-            total_counts[5] += 1;
-        }
     }
 
-    let n_val = val_data.len().max(1) as f64;
-    let lstm_accuracy = if lstm_total > 0 { lstm_correct as f64 / lstm_total as f64 * 100.0 } else { 0.0 };
+    let ridge_mae = if ridge_count > 0 { ridge_mae_sum / ridge_count as f64 } else { f64::MAX };
+    let lgbm_mae = if lgbm_count > 0 { lgbm_mae_sum / lgbm_count as f64 } else { f64::MAX };
+    let gru_mae = if gru_count > 0 { gru_mae_sum / gru_count as f64 } else { f64::MAX };
 
-    // Compute per-model validation accuracies (0-100 scale)
-    let model_accuracies: [f64; 6] = std::array::from_fn(|i| {
-        if total_counts[i] > 0 { correct_counts[i] as f64 / total_counts[i] as f64 * 100.0 } else { 0.0 }
-    });
-    // Gate LSTM: only include if accuracy >= 54%
-    let lstm_useful = lstm_model.is_some() && lstm_accuracy >= 54.0;
-
-    // Compute inverse-loss weights for all active models
-    let mut inv_weights = [0.0_f64; 6];
-    for i in 0..3 {
-        inv_weights[i] = 1.0 / (losses[i] / n_val).max(0.01);
-    }
-    // LightGBM
-    if lgbm_model.is_some() {
-        inv_weights[3] = 1.0 / (losses[3] / n_val).max(0.01);
-    }
-    if lstm_useful {
-        let lstm_n = lstm_total.max(1) as f64;
-        inv_weights[4] = 1.0 / (losses[4] / lstm_n).max(0.01);
-        // Bonus if accuracy >= 58%
-        if lstm_accuracy >= 58.0 { inv_weights[4] *= 1.5; }
-    }
-    if regime_model.is_some() {
-        inv_weights[5] = 1.0 / (losses[5] / n_val).max(0.01);
-    }
-    let inv_total: f64 = inv_weights.iter().sum();
-    let model_weights: [f64; 6] = if inv_total > 0.0 {
-        [
-            inv_weights[0] / inv_total,
-            inv_weights[1] / inv_total,
-            inv_weights[2] / inv_total,
-            inv_weights[3] / inv_total,
-            inv_weights[4] / inv_total,
-            inv_weights[5] / inv_total,
-        ]
-    } else {
-        [1.0/4.0, 1.0/4.0, 1.0/4.0, 1.0/4.0, 0.0, 0.0]
-    };
+    // Inverse-MAE weights
+    let ridge_w = if ridge_mae < f64::MAX { 1.0 / ridge_mae.max(0.01) } else { 0.0 };
+    let lgbm_w = if lgbm_mae < f64::MAX { 1.0 / lgbm_mae.max(0.01) } else { 0.0 };
+    let gru_w = if gru_mae < f64::MAX { 1.0 / gru_mae.max(0.01) } else { 0.0 };
+    let total_w = ridge_w + lgbm_w + gru_w;
 
     // ── Generate predictions for test samples ──
-    // Pre-build LSTM sequences from test samples
     let mut test_norm: Vec<ml::Sample> = Vec::with_capacity(test_samples.len());
     for sample in test_samples {
         let mut features = sample.features.clone();
@@ -407,40 +302,63 @@ fn train_and_predict(
         }
         test_norm.push(ml::Sample { features, label: sample.label });
     }
-    let test_seqs = lstm::build_sequences_with_subset(&test_norm, 10, lstm_indices);
+    let test_seqs = lstm::build_sequences_regression(&test_norm, 10, gru_indices);
 
     let mut results = Vec::with_capacity(test_samples.len());
     for (ti, sample) in test_norm.iter().enumerate() {
-        let lin_pred = lin.predict(&sample.features);
-        let lin_prob = (1.0 / (1.0 + (-lin_pred).exp())).clamp(0.15, 0.85);
-        let log_prob = log.predict_probability(&sample.features).clamp(0.15, 0.85);
-        let gbt_prob = gbt_model.predict_proba(&sample.features).clamp(0.15, 0.85);
+        let ridge_ret = ridge_model.predict(&sample.features);
 
-        let lgbm_prob = if let Some(ref model) = lgbm_model {
-            model.predict_proba(&sample.features).clamp(0.15, 0.85)
-        } else { 0.5 };
+        let lgbm_ret = if let Some(ref model) = lgbm_model {
+            model.predict_return(&sample.features)
+        } else { 0.0 };
 
-        let lstm_prob = if lstm_useful {
-            if let Some(ref model) = lstm_model {
-                if ti < test_seqs.len() {
-                    model.predict_proba(&test_seqs[ti].features).unwrap_or(0.5).clamp(0.15, 0.85)
-                } else { 0.5 }
-            } else { 0.5 }
-        } else { 0.5 };
+        let gru_ret = if let Some(ref model) = gru_model {
+            if ti < test_seqs.len() {
+                model.predict_return(&test_seqs[ti].features).unwrap_or(0.0)
+            } else { 0.0 }
+        } else { 0.0 };
 
-        let regime_prob = if let Some(ref model) = regime_model {
-            model.predict_proba(&sample.features).clamp(0.15, 0.85)
-        } else { 0.5 };
+        let ensemble_return = if total_w > 0.0 {
+            (ridge_w * ridge_ret + lgbm_w * lgbm_ret + gru_w * gru_ret) / total_w
+        } else {
+            ridge_ret // fallback to ridge only
+        };
 
-        let probs = [lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob];
-        let (signal, ensemble_prob) = signal_from_probs(symbol, &probs, &model_weights, &model_accuracies);
-        results.push((signal, ensemble_prob, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob));
+        let (signal, ensemble_prob, confidence) = signal_from_returns(symbol, ensemble_return, asset_class);
+        results.push((signal, ensemble_prob, confidence, ridge_ret, lgbm_ret, gru_ret, ensemble_return));
     }
 
-    (results, model_accuracies)
+    results
 }
 
 fn main() {
+    // Lock file to prevent duplicate runs
+    let lockfile = "/tmp/walkforward.lock";
+    if std::path::Path::new(lockfile).exists() {
+        // Check if the PID in the lockfile is still running
+        if let Ok(pid_str) = std::fs::read_to_string(lockfile) {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                let proc_path = format!("/proc/{}", pid);
+                if std::path::Path::new(&proc_path).exists() {
+                    eprintln!("ERROR: Another walk-forward backtest is already running (PID {})", pid);
+                    std::process::exit(1);
+                }
+            }
+        }
+        // Stale lock file — remove it
+        let _ = std::fs::remove_file(lockfile);
+    }
+    std::fs::write(lockfile, std::process::id().to_string()).expect("Failed to create lock file");
+
+    // Ensure lock file is cleaned up on exit
+    struct LockGuard;
+    impl Drop for LockGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file("/tmp/walkforward.lock");
+        }
+    }
+    let _lock = LockGuard;
+
     println!("\n══════════════════════════════════════");
     println!("  Walk-Forward Backtester");
     println!("  Zero Lookahead Bias");
@@ -458,6 +376,8 @@ fn main() {
             market_histories.insert(ticker.to_string(), prices);
         }
     }
+    market_histories.insert("HY_SPREAD".to_string(), database.get_market_prices("HY_SPREAD").unwrap_or_default());
+    market_histories.insert("BREAKEVEN_5Y".to_string(), database.get_market_prices("BREAKEVEN_5Y").unwrap_or_default());
     let market_context = features::build_market_context(&market_histories);
 
     let windows = define_test_windows();
@@ -478,35 +398,8 @@ fn main() {
         );
     }
 
-    // ── Process FX ──
-    println!("\n━━━ FX ━━━\n");
-    for fx in stocks::FX_LIST {
-        let points = match database.get_fx_history(fx.symbol) {
-            Ok(p) if p.len() >= 300 => p,
-            _ => continue,
-        };
-        process_asset(
-            fx.symbol, "fx", &points, &market_context,
-            Some(fx.symbol),
-            &windows, &mut all_signals, &mut window_summaries,
-        );
-    }
-
-    // ── Process crypto ──
-    println!("\n━━━ CRYPTO ━━━\n");
-    if let Ok(coin_ids) = database.get_all_coin_ids() {
-        for coin_id in &coin_ids {
-            let points = match database.get_coin_history(coin_id) {
-                Ok(p) if p.len() >= 300 => p,
-                _ => continue,
-            };
-            process_asset(
-                coin_id, "crypto", &points, &market_context,
-                None,
-                &windows, &mut all_signals, &mut window_summaries,
-            );
-        }
-    }
+    // ── FX and Crypto descoped (separate project) ──
+    println!("\n━━━ FX/CRYPTO SKIPPED (descoped) ━━━\n");
 
     // ── Deduplicate window summaries (aggregate across assets) ──
     let mut agg_windows: Vec<WindowSummary> = Vec::new();
@@ -619,6 +512,9 @@ fn process_asset(
     );
     if samples.len() < 100 { return; }
 
+    // samples[j] corresponds to prices[260+j] because features.rs:619 starts at index 260
+    let sample_offset = 260_usize;
+
     // Build a date → price map for exit price lookup
     let date_prices: HashMap<String, f64> = timestamps.iter().zip(prices.iter())
         .map(|(ts, p)| (ts[..10.min(ts.len())].to_string(), *p))
@@ -631,41 +527,51 @@ fn process_asset(
     let mut asset_signals = 0;
 
     for window in windows {
-        // Find sample indices for train/test split
-        let train_end_idx = match find_date_index(&timestamps, &window.test_start) {
+        // Find timestamp indices for train/test split
+        let train_end_ts = match find_date_index(&timestamps, &window.test_start) {
             Some(idx) => idx,
             None => continue,
         };
-        let test_end_idx = match find_date_index(&timestamps, &(window.test_end + chrono::Duration::days(1))) {
+        let test_end_ts = match find_date_index(&timestamps, &(window.test_end + chrono::Duration::days(1))) {
             Some(idx) => idx,
             None => timestamps.len(),
         };
 
-        // Minimum 252 trading days of training data
-        if train_end_idx < 252 { continue; }
-        if train_end_idx >= samples.len() { continue; }
-        let test_end_capped = test_end_idx.min(samples.len());
-        if train_end_idx >= test_end_capped { continue; }
+        // Convert timestamp indices to sample indices (samples start at offset 260)
+        let train_end_si = train_end_ts.saturating_sub(sample_offset);
+        let test_end_si = test_end_ts.saturating_sub(sample_offset).min(samples.len());
 
-        let train_samples = &samples[..train_end_idx];
-        let test_samples = &samples[train_end_idx..test_end_capped];
+        // Minimum 252 trading days of training data
+        if train_end_si < 252 { continue; }
+        if train_end_si >= samples.len() { continue; }
+
+        // Embargo: skip 5 samples between train and test to prevent autocorrelation leakage
+        const EMBARGO: usize = 5;
+        let test_start_si = (train_end_si + EMBARGO).min(samples.len());
+        if test_start_si >= test_end_si { continue; }
+
+        let train_samples = &samples[..train_end_si];
+        let test_samples = &samples[test_start_si..test_end_si];
 
         if test_samples.is_empty() { continue; }
 
-        let (predictions, _model_accuracies) = train_and_predict(symbol, train_samples, test_samples);
+        let predictions = train_and_predict(symbol, asset_class, train_samples, test_samples);
 
-        for (i, (signal, ensemble_prob, lin_prob, log_prob, gbt_prob, lgbm_prob, lstm_prob, regime_prob)) in predictions.iter().enumerate() {
-            let sample_idx = train_end_idx + i;
-            if sample_idx >= timestamps.len() { break; }
-            let date = timestamps[sample_idx][..10.min(timestamps[sample_idx].len())].to_string();
-            let entry_price = prices[sample_idx];
+        for (i, (signal, ensemble_prob, confidence, ridge_ret, lgbm_ret, gru_ret, ensemble_ret)) in predictions.iter().enumerate() {
+            let ts_idx = sample_offset + test_start_si + i;
+            if ts_idx >= timestamps.len() { break; }
+            let date = timestamps[ts_idx][..10.min(timestamps[ts_idx].len())].to_string();
+            let entry_price = prices[ts_idx];
 
             // Find next trading day's price for exit
             let next_day_idx = sorted_dates.iter().position(|d| d > &date);
             let exit_price = next_day_idx.and_then(|idx| date_prices.get(&sorted_dates[idx]).copied());
 
             let (pct_return, was_correct) = if let Some(exit) = exit_price {
-                let pct = (exit - entry_price) / entry_price * 100.0;
+                // Deduct round-trip transaction cost (10 bps for stocks)
+                let tx_cost_pct = backtest_compare::tx_cost(asset_class) * 100.0;
+                let raw_pct = (exit - entry_price) / entry_price * 100.0;
+                let pct = if signal.as_str() != "HOLD" { raw_pct - tx_cost_pct } else { raw_pct };
                 let threshold = min_threshold(asset_class);
                 let correct = match signal.as_str() {
                     "BUY" => pct > threshold,
@@ -678,8 +584,8 @@ fn process_asset(
                 (None, None)
             };
 
-            // Confidence: distance from 0.5, capped at 1.0
-            let confidence = ((*ensemble_prob - 0.5).abs() * 2.0).min(1.0);
+            // Backward-compatible prob mapping for dashboard
+            let mapped_prob = 0.5 + ensemble_ret.clamp(-5.0, 5.0) / 10.0;
 
             all_signals.push(WFSignal {
                 date,
@@ -692,13 +598,18 @@ fn process_asset(
                 was_correct,
                 train_window_end: window.train_end.format("%Y-%m-%d").to_string(),
                 buy_probability: *ensemble_prob,
-                confidence,
-                linreg_prob: *lin_prob,
-                logreg_prob: *log_prob,
-                gbt_prob: *gbt_prob,
-                lgbm_prob: *lgbm_prob,
-                lstm_prob: *lstm_prob,
-                regime_prob: *regime_prob,
+                confidence: *confidence,
+                ridge_return: *ridge_ret,
+                lgbm_return: *lgbm_ret,
+                gru_return: *gru_ret,
+                ensemble_return: *ensemble_ret,
+                // Legacy fields — mapped from ensemble return for dashboard compat
+                linreg_prob: mapped_prob,
+                logreg_prob: mapped_prob,
+                gbt_prob: mapped_prob,
+                lgbm_prob: mapped_prob,
+                lstm_prob: mapped_prob,
+                regime_prob: mapped_prob,
             });
             asset_signals += 1;
         }

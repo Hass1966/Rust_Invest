@@ -15,6 +15,8 @@ pub struct AssetEntry {
     pub symbol: String,
     pub name: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +56,23 @@ impl AssetConfig {
     /// Get only enabled crypto assets
     pub fn enabled_crypto(&self) -> Vec<&AssetEntry> {
         self.crypto.iter().filter(|a| a.enabled).collect()
+    }
+
+    /// Get symbols tagged as "defensive". Falls back to hardcoded defaults.
+    pub fn defensive_symbols(&self) -> Vec<String> {
+        let tagged: Vec<String> = self.stocks.iter()
+            .filter(|a| a.tags.contains(&"defensive".to_string()))
+            .map(|a| a.symbol.clone())
+            .collect();
+
+        if tagged.is_empty() {
+            crate::market_regime::DEFAULT_DEFENSIVE
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            tagged
+        }
     }
 
     /// Get all enabled assets across all classes

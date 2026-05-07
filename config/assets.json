@@ -1,213 +1,2073 @@
 {
   "stocks": [
-    {"symbol": "SPY", "name": "S&P 500 ETF", "enabled": true},
-    {"symbol": "QQQ", "name": "Nasdaq 100 ETF", "enabled": true},
-    {"symbol": "DIA", "name": "Dow Jones ETF", "enabled": true},
-    {"symbol": "XLF", "name": "Financial Select ETF", "enabled": true},
-    {"symbol": "XLE", "name": "Energy Select ETF", "enabled": true},
-    {"symbol": "XLV", "name": "Healthcare Select ETF", "enabled": true},
-    {"symbol": "XLI", "name": "Industrial Select ETF", "enabled": true},
-    {"symbol": "XLK", "name": "Technology ETF", "enabled": true},
-    {"symbol": "XLY", "name": "Consumer Discretionary ETF", "enabled": true},
-    {"symbol": "XLP", "name": "Consumer Staples ETF", "enabled": true},
-    {"symbol": "XLU", "name": "Utilities ETF", "enabled": true},
-    {"symbol": "XLRE", "name": "Real Estate ETF", "enabled": true},
-    {"symbol": "XLB", "name": "Materials ETF", "enabled": true},
-    {"symbol": "XLC", "name": "Communication ETF", "enabled": true},
-    {"symbol": "AAPL", "name": "Apple", "enabled": true},
-    {"symbol": "MSFT", "name": "Microsoft", "enabled": true},
-    {"symbol": "GOOGL", "name": "Alphabet", "enabled": true},
-    {"symbol": "AMZN", "name": "Amazon", "enabled": true},
-    {"symbol": "NVDA", "name": "NVIDIA", "enabled": true},
-    {"symbol": "META", "name": "Meta", "enabled": true},
-    {"symbol": "TSLA", "name": "Tesla", "enabled": true},
-    {"symbol": "AMD", "name": "AMD", "enabled": true},
-    {"symbol": "AVGO", "name": "Broadcom", "enabled": true},
-    {"symbol": "NFLX", "name": "Netflix", "enabled": true},
-    {"symbol": "CRM", "name": "Salesforce", "enabled": true},
-    {"symbol": "ARM", "name": "ARM Holdings", "enabled": true},
-    {"symbol": "INTC", "name": "Intel", "enabled": true},
-    {"symbol": "QCOM", "name": "Qualcomm", "enabled": true},
-    {"symbol": "TSM", "name": "Taiwan Semiconductor", "enabled": true},
-    {"symbol": "JPM", "name": "JPMorgan Chase", "enabled": true},
-    {"symbol": "GS", "name": "Goldman Sachs", "enabled": true},
-    {"symbol": "BAC", "name": "Bank of America", "enabled": true},
-    {"symbol": "WFC", "name": "Wells Fargo", "enabled": true},
-    {"symbol": "V", "name": "Visa", "enabled": true},
-    {"symbol": "MA", "name": "Mastercard", "enabled": true},
-    {"symbol": "JNJ", "name": "Johnson & Johnson", "enabled": true},
-    {"symbol": "UNH", "name": "UnitedHealth", "enabled": true},
-    {"symbol": "LLY", "name": "Eli Lilly", "enabled": true},
-    {"symbol": "PFE", "name": "Pfizer", "enabled": true},
-    {"symbol": "MRNA", "name": "Moderna", "enabled": true},
-    {"symbol": "ABBV", "name": "AbbVie", "enabled": true},
-    {"symbol": "LMT", "name": "Lockheed Martin", "enabled": true},
-    {"symbol": "RTX", "name": "Raytheon", "enabled": true},
-    {"symbol": "NOC", "name": "Northrop Grumman", "enabled": true},
-    {"symbol": "BA", "name": "Boeing", "enabled": true},
-    {"symbol": "GD", "name": "General Dynamics", "enabled": true},
-    {"symbol": "CAT", "name": "Caterpillar", "enabled": true},
-    {"symbol": "DE", "name": "John Deere", "enabled": true},
-    {"symbol": "MMM", "name": "3M", "enabled": true},
-    {"symbol": "HON", "name": "Honeywell", "enabled": true},
-    {"symbol": "GE", "name": "GE Aerospace", "enabled": true},
-    {"symbol": "EMR", "name": "Emerson Electric", "enabled": true},
-    {"symbol": "WMT", "name": "Walmart", "enabled": true},
-    {"symbol": "TGT", "name": "Target", "enabled": true},
-    {"symbol": "COST", "name": "Costco", "enabled": true},
-    {"symbol": "HD", "name": "Home Depot", "enabled": true},
-    {"symbol": "NKE", "name": "Nike", "enabled": true},
-    {"symbol": "MCD", "name": "McDonald's", "enabled": true},
-    {"symbol": "XOM", "name": "ExxonMobil", "enabled": true},
-    {"symbol": "CVX", "name": "Chevron", "enabled": true},
-    {"symbol": "COP", "name": "ConocoPhillips", "enabled": true},
-    {"symbol": "GLD", "name": "SPDR Gold Trust", "enabled": true},
-    {"symbol": "CL=F", "name": "Oil (WTI Crude)", "enabled": true},
-    {"symbol": "USO", "name": "US Oil Fund", "enabled": true},
-    {"symbol": "SLV", "name": "iShares Silver Trust", "enabled": true},
-    {"symbol": "CPER", "name": "US Copper Index Fund", "enabled": true},
-    {"symbol": "HSBA.L", "name": "HSBC Holdings", "enabled": true},
-    {"symbol": "BP.L", "name": "BP plc", "enabled": true},
-    {"symbol": "SHEL.L", "name": "Shell plc", "enabled": true},
-    {"symbol": "RR.L", "name": "Rolls-Royce", "enabled": true},
-    {"symbol": "AZN.L", "name": "AstraZeneca", "enabled": true},
-    {"symbol": "SHOP", "name": "Shopify", "enabled": true},
-    {"symbol": "UBER", "name": "Uber", "enabled": true},
-    {"symbol": "COIN", "name": "Coinbase", "enabled": true},
-    {"symbol": "PLTR", "name": "Palantir", "enabled": true},
-    {"symbol": "ISF.L", "name": "iShares FTSE 100 ETF", "enabled": true},
-    {"symbol": "GSK.L", "name": "GSK", "enabled": true},
-    {"symbol": "ULVR.L", "name": "Unilever", "enabled": true},
-    {"symbol": "DGE.L", "name": "Diageo", "enabled": true},
-    {"symbol": "VOD.L", "name": "Vodafone", "enabled": true},
-    {"symbol": "BT-A.L", "name": "BT Group", "enabled": true},
-    {"symbol": "LLOY.L", "name": "Lloyds Banking Group", "enabled": true},
-    {"symbol": "BARC.L", "name": "Barclays", "enabled": true},
-    {"symbol": "NWG.L", "name": "NatWest Group", "enabled": true},
-    {"symbol": "REL.L", "name": "RELX", "enabled": true},
-    {"symbol": "CPG.L", "name": "Compass Group", "enabled": true},
-
-    {"symbol": "TLT", "name": "iShares 20yr Treasury Bond ETF", "enabled": true},
-    {"symbol": "AGG", "name": "iShares Core US Aggregate Bond ETF", "enabled": true},
-    {"symbol": "BND", "name": "Vanguard Total Bond Market ETF", "enabled": true},
-    {"symbol": "IBTL.L", "name": "iShares UK Index-Linked Gilts ETF", "enabled": true},
-    {"symbol": "VGLT", "name": "Vanguard Long-Term Treasury ETF", "enabled": true},
-    {"symbol": "SHY", "name": "iShares 1-3yr Treasury Bond ETF", "enabled": true},
-
-    {"symbol": "NG.L", "name": "National Grid", "enabled": true},
-    {"symbol": "SSE.L", "name": "SSE", "enabled": true},
-    {"symbol": "CNA.L", "name": "Centrica", "enabled": true},
-    {"symbol": "IMB.L", "name": "Imperial Brands", "enabled": true},
-    {"symbol": "BATS.L", "name": "British American Tobacco", "enabled": true},
-    {"symbol": "PSON.L", "name": "Pearson", "enabled": true},
-    {"symbol": "LGEN.L", "name": "Legal and General", "enabled": true},
-    {"symbol": "III.L", "name": "3i Group", "enabled": true},
-    {"symbol": "EXPN.L", "name": "Experian", "enabled": true},
-    {"symbol": "GLEN.L", "name": "Glencore", "enabled": true},
-    {"symbol": "AAL.L", "name": "Anglo American", "enabled": true},
-    {"symbol": "ANTO.L", "name": "Antofagasta", "enabled": true},
-    {"symbol": "WPP.L", "name": "WPP", "enabled": true},
-    {"symbol": "QQ.L", "name": "QinetiQ", "enabled": true},
-    {"symbol": "MNG.L", "name": "M&G", "enabled": true},
-    {"symbol": "SMDS.L", "name": "DS Smith", "enabled": true},
-    {"symbol": "MNDI.L", "name": "Mondi", "enabled": true},
-    {"symbol": "TSCO.L", "name": "Tesco", "enabled": true},
-    {"symbol": "SBRY.L", "name": "Sainsbury", "enabled": true},
-    {"symbol": "DCC.L", "name": "DCC", "enabled": true},
-
-    {"symbol": "AIR.PA", "name": "Airbus", "enabled": true},
-    {"symbol": "SAF.PA", "name": "Safran", "enabled": true},
-    {"symbol": "SAN.PA", "name": "Sanofi", "enabled": true},
-    {"symbol": "OR.PA", "name": "L'Oreal", "enabled": true},
-    {"symbol": "MC.PA", "name": "LVMH", "enabled": true},
-    {"symbol": "SIE.DE", "name": "Siemens", "enabled": true},
-    {"symbol": "ALV.DE", "name": "Allianz", "enabled": true},
-    {"symbol": "BAS.DE", "name": "BASF", "enabled": true},
-    {"symbol": "MBG.DE", "name": "Mercedes-Benz", "enabled": true},
-    {"symbol": "SAP.DE", "name": "SAP", "enabled": true},
-
-    {"symbol": "KO", "name": "Coca-Cola", "enabled": true},
-    {"symbol": "PEP", "name": "PepsiCo", "enabled": true},
-    {"symbol": "PG", "name": "Procter & Gamble", "enabled": true},
-    {"symbol": "GIS", "name": "General Mills", "enabled": true},
-    {"symbol": "CL", "name": "Colgate-Palmolive", "enabled": true},
-    {"symbol": "MO", "name": "Altria", "enabled": true},
-    {"symbol": "T", "name": "AT&T", "enabled": true},
-    {"symbol": "VZ", "name": "Verizon", "enabled": true},
-    {"symbol": "DUK", "name": "Duke Energy", "enabled": true},
-    {"symbol": "NEE", "name": "NextEra Energy", "enabled": true},
-    {"symbol": "SO", "name": "Southern Company", "enabled": true},
-    {"symbol": "AMT", "name": "American Tower", "enabled": true},
-    {"symbol": "BRK-B", "name": "Berkshire Hathaway", "enabled": true},
-    {"symbol": "MRK", "name": "Merck", "enabled": true},
-    {"symbol": "BMY", "name": "Bristol Myers Squibb", "enabled": true},
-    {"symbol": "CVS", "name": "CVS Health", "enabled": true},
-    {"symbol": "CI", "name": "Cigna", "enabled": true},
-    {"symbol": "MMC", "name": "Marsh McLennan", "enabled": true},
-    {"symbol": "TRV", "name": "Travelers", "enabled": true},
-    {"symbol": "AFL", "name": "Aflac", "enabled": true},
-
-    {"symbol": "VDE", "name": "Vanguard Energy ETF", "enabled": true},
-    {"symbol": "PDBC", "name": "Invesco Commodity ETF", "enabled": true},
-    {"symbol": "DBC", "name": "Invesco DB Commodity Index", "enabled": true},
-
-    {"symbol": "VHT", "name": "Vanguard Health Care ETF", "enabled": true},
-    {"symbol": "IHI", "name": "iShares Medical Devices ETF", "enabled": true},
-
-    {"symbol": "VPU", "name": "Vanguard Utilities ETF", "enabled": true},
-    {"symbol": "IDU", "name": "iShares US Utilities ETF", "enabled": true},
-
-    {"symbol": "VNQ", "name": "Vanguard Real Estate ETF", "enabled": true}
+    {
+      "symbol": "SPY",
+      "name": "S&P 500 ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "QQQ",
+      "name": "Nasdaq 100 ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "DIA",
+      "name": "Dow Jones ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "XLF",
+      "name": "Financial Select ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "XLE",
+      "name": "Energy Select ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "XLV",
+      "name": "Healthcare Select ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "XLI",
+      "name": "Industrial Select ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "AAPL",
+      "name": "Apple",
+      "enabled": true
+    },
+    {
+      "symbol": "MSFT",
+      "name": "Microsoft",
+      "enabled": true
+    },
+    {
+      "symbol": "GOOGL",
+      "name": "Alphabet",
+      "enabled": true
+    },
+    {
+      "symbol": "AMZN",
+      "name": "Amazon",
+      "enabled": true
+    },
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA",
+      "enabled": true
+    },
+    {
+      "symbol": "META",
+      "name": "Meta",
+      "enabled": true
+    },
+    {
+      "symbol": "TSLA",
+      "name": "Tesla",
+      "enabled": true
+    },
+    {
+      "symbol": "AMD",
+      "name": "AMD",
+      "enabled": true
+    },
+    {
+      "symbol": "AVGO",
+      "name": "Broadcom",
+      "enabled": true
+    },
+    {
+      "symbol": "NFLX",
+      "name": "Netflix",
+      "enabled": true
+    },
+    {
+      "symbol": "CRM",
+      "name": "Salesforce",
+      "enabled": true
+    },
+    {
+      "symbol": "ARM",
+      "name": "ARM Holdings",
+      "enabled": true
+    },
+    {
+      "symbol": "INTC",
+      "name": "Intel",
+      "enabled": true
+    },
+    {
+      "symbol": "IBM",
+      "name": "IBM",
+      "enabled": true
+    },
+    {
+      "symbol": "QCOM",
+      "name": "Qualcomm",
+      "enabled": true
+    },
+    {
+      "symbol": "TSM",
+      "name": "Taiwan Semiconductor",
+      "enabled": true
+    },
+    {
+      "symbol": "JPM",
+      "name": "JPMorgan Chase",
+      "enabled": true
+    },
+    {
+      "symbol": "GS",
+      "name": "Goldman Sachs",
+      "enabled": true
+    },
+    {
+      "symbol": "BAC",
+      "name": "Bank of America",
+      "enabled": true
+    },
+    {
+      "symbol": "WFC",
+      "name": "Wells Fargo",
+      "enabled": true
+    },
+    {
+      "symbol": "V",
+      "name": "Visa",
+      "enabled": true
+    },
+    {
+      "symbol": "MA",
+      "name": "Mastercard",
+      "enabled": true
+    },
+    {
+      "symbol": "SNY",
+      "name": "Sanofi",
+      "enabled": true
+    },
+    {
+      "symbol": "JNJ",
+      "name": "Johnson & Johnson",
+      "enabled": true
+    },
+    {
+      "symbol": "UNH",
+      "name": "UnitedHealth",
+      "enabled": true
+    },
+    {
+      "symbol": "LLY",
+      "name": "Eli Lilly",
+      "enabled": true
+    },
+    {
+      "symbol": "PFE",
+      "name": "Pfizer",
+      "enabled": true
+    },
+    {
+      "symbol": "MRNA",
+      "name": "Moderna",
+      "enabled": true
+    },
+    {
+      "symbol": "ABBV",
+      "name": "AbbVie",
+      "enabled": true
+    },
+    {
+      "symbol": "LMT",
+      "name": "Lockheed Martin",
+      "enabled": true
+    },
+    {
+      "symbol": "RTX",
+      "name": "Raytheon",
+      "enabled": true
+    },
+    {
+      "symbol": "NOC",
+      "name": "Northrop Grumman",
+      "enabled": true
+    },
+    {
+      "symbol": "BA",
+      "name": "Boeing",
+      "enabled": true
+    },
+    {
+      "symbol": "GD",
+      "name": "General Dynamics",
+      "enabled": true
+    },
+    {
+      "symbol": "CAT",
+      "name": "Caterpillar",
+      "enabled": true
+    },
+    {
+      "symbol": "DE",
+      "name": "John Deere",
+      "enabled": true
+    },
+    {
+      "symbol": "MMM",
+      "name": "3M",
+      "enabled": true
+    },
+    {
+      "symbol": "HON",
+      "name": "Honeywell",
+      "enabled": true
+    },
+    {
+      "symbol": "GE",
+      "name": "GE Aerospace",
+      "enabled": true
+    },
+    {
+      "symbol": "EMR",
+      "name": "Emerson Electric",
+      "enabled": true
+    },
+    {
+      "symbol": "WMT",
+      "name": "Walmart",
+      "enabled": true
+    },
+    {
+      "symbol": "TGT",
+      "name": "Target",
+      "enabled": true
+    },
+    {
+      "symbol": "COST",
+      "name": "Costco",
+      "enabled": true
+    },
+    {
+      "symbol": "HD",
+      "name": "Home Depot",
+      "enabled": true
+    },
+    {
+      "symbol": "NKE",
+      "name": "Nike",
+      "enabled": true
+    },
+    {
+      "symbol": "MCD",
+      "name": "McDonald's",
+      "enabled": true
+    },
+    {
+      "symbol": "XOM",
+      "name": "ExxonMobil",
+      "enabled": true
+    },
+    {
+      "symbol": "CVX",
+      "name": "Chevron",
+      "enabled": true
+    },
+    {
+      "symbol": "COP",
+      "name": "ConocoPhillips",
+      "enabled": true
+    },
+    {
+      "symbol": "GLD",
+      "name": "SPDR Gold Trust",
+      "enabled": true
+    },
+    {
+      "symbol": "CL=F",
+      "name": "Oil (WTI Crude)",
+      "enabled": true
+    },
+    {
+      "symbol": "USO",
+      "name": "US Oil Fund",
+      "enabled": true
+    },
+    {
+      "symbol": "SLV",
+      "name": "iShares Silver Trust",
+      "enabled": true
+    },
+    {
+      "symbol": "CPER",
+      "name": "US Copper Index Fund",
+      "enabled": true
+    },
+    {
+      "symbol": "HSBA.L",
+      "name": "HSBC Holdings",
+      "enabled": true
+    },
+    {
+      "symbol": "BP.L",
+      "name": "BP plc",
+      "enabled": true
+    },
+    {
+      "symbol": "SHEL.L",
+      "name": "Shell plc",
+      "enabled": true
+    },
+    {
+      "symbol": "RR.L",
+      "name": "Rolls-Royce",
+      "enabled": true
+    },
+    {
+      "symbol": "AZN.L",
+      "name": "AstraZeneca",
+      "enabled": true
+    },
+    {
+      "symbol": "SHOP",
+      "name": "Shopify",
+      "enabled": true
+    },
+    {
+      "symbol": "UBER",
+      "name": "Uber",
+      "enabled": true
+    },
+    {
+      "symbol": "COIN",
+      "name": "Coinbase",
+      "enabled": true
+    },
+    {
+      "symbol": "PLTR",
+      "name": "Palantir",
+      "enabled": true
+    },
+    {
+      "symbol": "ISF.L",
+      "name": "iShares FTSE 100 ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "GSK.L",
+      "name": "GSK",
+      "enabled": true
+    },
+    {
+      "symbol": "ULVR.L",
+      "name": "Unilever",
+      "enabled": true
+    },
+    {
+      "symbol": "DGE.L",
+      "name": "Diageo",
+      "enabled": true
+    },
+    {
+      "symbol": "VOD.L",
+      "name": "Vodafone",
+      "enabled": true
+    },
+    {
+      "symbol": "BT-A.L",
+      "name": "BT Group",
+      "enabled": true
+    },
+    {
+      "symbol": "LLOY.L",
+      "name": "Lloyds Banking Group",
+      "enabled": true
+    },
+    {
+      "symbol": "BARC.L",
+      "name": "Barclays",
+      "enabled": true
+    },
+    {
+      "symbol": "NWG.L",
+      "name": "NatWest Group",
+      "enabled": true
+    },
+    {
+      "symbol": "REL.L",
+      "name": "RELX",
+      "enabled": true
+    },
+    {
+      "symbol": "CPG.L",
+      "name": "Compass Group",
+      "enabled": true
+    },
+    {
+      "symbol": "XLP",
+      "name": "Consumer Staples ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "XLU",
+      "name": "Utilities ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "XLRE",
+      "name": "Real Estate ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "XLK",
+      "name": "Technology ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "TLT",
+      "name": "iShares 20yr Treasury Bond ETF",
+      "enabled": false
+    },
+    {
+      "symbol": "AGG",
+      "name": "iShares Core US Aggregate Bond ETF",
+      "enabled": false
+    },
+    {
+      "symbol": "BND",
+      "name": "Vanguard Total Bond Market ETF",
+      "enabled": false
+    },
+    {
+      "symbol": "IBTL.L",
+      "name": "iShares UK Index-Linked Gilts ETF",
+      "enabled": false
+    },
+    {
+      "symbol": "VGLT",
+      "name": "Vanguard Long-Term Treasury ETF",
+      "enabled": false
+    },
+    {
+      "symbol": "SHY",
+      "name": "iShares 1-3yr Treasury Bond ETF",
+      "enabled": false
+    },
+    {
+      "symbol": "NG.L",
+      "name": "National Grid",
+      "enabled": true
+    },
+    {
+      "symbol": "SSE.L",
+      "name": "SSE",
+      "enabled": true
+    },
+    {
+      "symbol": "CNA.L",
+      "name": "Centrica",
+      "enabled": true
+    },
+    {
+      "symbol": "IMB.L",
+      "name": "Imperial Brands",
+      "enabled": true
+    },
+    {
+      "symbol": "BATS.L",
+      "name": "British American Tobacco",
+      "enabled": true
+    },
+    {
+      "symbol": "PSON.L",
+      "name": "Pearson",
+      "enabled": true
+    },
+    {
+      "symbol": "LGEN.L",
+      "name": "Legal and General",
+      "enabled": true
+    },
+    {
+      "symbol": "III.L",
+      "name": "3i Group",
+      "enabled": true
+    },
+    {
+      "symbol": "EXPN.L",
+      "name": "Experian",
+      "enabled": true
+    },
+    {
+      "symbol": "GLEN.L",
+      "name": "Glencore",
+      "enabled": true
+    },
+    {
+      "symbol": "AAL.L",
+      "name": "Anglo American",
+      "enabled": true
+    },
+    {
+      "symbol": "ANTO.L",
+      "name": "Antofagasta",
+      "enabled": true
+    },
+    {
+      "symbol": "WPP.L",
+      "name": "WPP",
+      "enabled": true
+    },
+    {
+      "symbol": "QQ.L",
+      "name": "QinetiQ",
+      "enabled": true
+    },
+    {
+      "symbol": "MNG.L",
+      "name": "M&G",
+      "enabled": true
+    },
+    {
+      "symbol": "SMDS.L",
+      "name": "DS Smith",
+      "enabled": true
+    },
+    {
+      "symbol": "MNDI.L",
+      "name": "Mondi",
+      "enabled": true
+    },
+    {
+      "symbol": "TSCO.L",
+      "name": "Tesco",
+      "enabled": true
+    },
+    {
+      "symbol": "SBRY.L",
+      "name": "Sainsbury",
+      "enabled": true
+    },
+    {
+      "symbol": "DCC.L",
+      "name": "DCC",
+      "enabled": true
+    },
+    {
+      "symbol": "AIR.PA",
+      "name": "Airbus",
+      "enabled": true
+    },
+    {
+      "symbol": "SAF.PA",
+      "name": "Safran",
+      "enabled": true
+    },
+    {
+      "symbol": "SAN.PA",
+      "name": "Sanofi",
+      "enabled": true
+    },
+    {
+      "symbol": "OR.PA",
+      "name": "L'Oreal",
+      "enabled": true
+    },
+    {
+      "symbol": "MC.PA",
+      "name": "LVMH",
+      "enabled": true
+    },
+    {
+      "symbol": "SIE.DE",
+      "name": "Siemens",
+      "enabled": true
+    },
+    {
+      "symbol": "ALV.DE",
+      "name": "Allianz",
+      "enabled": true
+    },
+    {
+      "symbol": "BAS.DE",
+      "name": "BASF",
+      "enabled": true
+    },
+    {
+      "symbol": "MBG.DE",
+      "name": "Mercedes-Benz",
+      "enabled": true
+    },
+    {
+      "symbol": "SAP.DE",
+      "name": "SAP",
+      "enabled": true
+    },
+    {
+      "symbol": "KO",
+      "name": "Coca-Cola",
+      "enabled": true
+    },
+    {
+      "symbol": "PEP",
+      "name": "PepsiCo",
+      "enabled": true
+    },
+    {
+      "symbol": "PG",
+      "name": "Procter & Gamble",
+      "enabled": true
+    },
+    {
+      "symbol": "GIS",
+      "name": "General Mills",
+      "enabled": true
+    },
+    {
+      "symbol": "CL",
+      "name": "Colgate-Palmolive",
+      "enabled": true
+    },
+    {
+      "symbol": "MO",
+      "name": "Altria",
+      "enabled": true
+    },
+    {
+      "symbol": "T",
+      "name": "AT&T",
+      "enabled": true
+    },
+    {
+      "symbol": "VZ",
+      "name": "Verizon",
+      "enabled": true
+    },
+    {
+      "symbol": "DUK",
+      "name": "Duke Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "NEE",
+      "name": "NextEra Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "SO",
+      "name": "Southern Company",
+      "enabled": true
+    },
+    {
+      "symbol": "AMT",
+      "name": "American Tower",
+      "enabled": true
+    },
+    {
+      "symbol": "BRK-B",
+      "name": "Berkshire Hathaway",
+      "enabled": true
+    },
+    {
+      "symbol": "MRK",
+      "name": "Merck",
+      "enabled": true
+    },
+    {
+      "symbol": "BMY",
+      "name": "Bristol Myers Squibb",
+      "enabled": true
+    },
+    {
+      "symbol": "CVS",
+      "name": "CVS Health",
+      "enabled": true
+    },
+    {
+      "symbol": "CI",
+      "name": "Cigna",
+      "enabled": true
+    },
+    {
+      "symbol": "MMC",
+      "name": "Marsh McLennan",
+      "enabled": true
+    },
+    {
+      "symbol": "TRV",
+      "name": "Travelers",
+      "enabled": true
+    },
+    {
+      "symbol": "AFL",
+      "name": "Aflac",
+      "enabled": true
+    },
+    {
+      "symbol": "VDE",
+      "name": "Vanguard Energy ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "PDBC",
+      "name": "Invesco Commodity ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "DBC",
+      "name": "Invesco DB Commodity Index",
+      "enabled": true
+    },
+    {
+      "symbol": "VHT",
+      "name": "Vanguard Health Care ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "IHI",
+      "name": "iShares Medical Devices ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "VPU",
+      "name": "Vanguard Utilities ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "IDU",
+      "name": "iShares US Utilities ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "VNQ",
+      "name": "Vanguard Real Estate ETF",
+      "enabled": true
+    },
+    {
+      "symbol": "ADBE",
+      "name": "Adobe",
+      "enabled": true
+    },
+    {
+      "symbol": "NOW",
+      "name": "ServiceNow",
+      "enabled": true
+    },
+    {
+      "symbol": "INTU",
+      "name": "Intuit",
+      "enabled": true
+    },
+    {
+      "symbol": "AMAT",
+      "name": "Applied Materials",
+      "enabled": true
+    },
+    {
+      "symbol": "MU",
+      "name": "Micron Technology",
+      "enabled": true
+    },
+    {
+      "symbol": "LRCX",
+      "name": "Lam Research",
+      "enabled": true
+    },
+    {
+      "symbol": "KLAC",
+      "name": "KLA Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "SNPS",
+      "name": "Synopsys",
+      "enabled": true
+    },
+    {
+      "symbol": "CDNS",
+      "name": "Cadence Design",
+      "enabled": true
+    },
+    {
+      "symbol": "FTNT",
+      "name": "Fortinet",
+      "enabled": true
+    },
+    {
+      "symbol": "PANW",
+      "name": "Palo Alto Networks",
+      "enabled": true
+    },
+    {
+      "symbol": "CRWD",
+      "name": "CrowdStrike",
+      "enabled": true
+    },
+    {
+      "symbol": "TEAM",
+      "name": "Atlassian",
+      "enabled": true
+    },
+    {
+      "symbol": "ZS",
+      "name": "Zscaler",
+      "enabled": true
+    },
+    {
+      "symbol": "DDOG",
+      "name": "Datadog",
+      "enabled": true
+    },
+    {
+      "symbol": "NET",
+      "name": "Cloudflare",
+      "enabled": true
+    },
+    {
+      "symbol": "MDB",
+      "name": "MongoDB",
+      "enabled": true
+    },
+    {
+      "symbol": "SNOW",
+      "name": "Snowflake",
+      "enabled": true
+    },
+    {
+      "symbol": "ORCL",
+      "name": "Oracle",
+      "enabled": true
+    },
+    {
+      "symbol": "ELV",
+      "name": "Elevance Health",
+      "enabled": true
+    },
+    {
+      "symbol": "HUM",
+      "name": "Humana",
+      "enabled": true
+    },
+    {
+      "symbol": "MOH",
+      "name": "Molina Healthcare",
+      "enabled": true
+    },
+    {
+      "symbol": "ISRG",
+      "name": "Intuitive Surgical",
+      "enabled": true
+    },
+    {
+      "symbol": "BSX",
+      "name": "Boston Scientific",
+      "enabled": true
+    },
+    {
+      "symbol": "SYK",
+      "name": "Stryker",
+      "enabled": true
+    },
+    {
+      "symbol": "MDT",
+      "name": "Medtronic",
+      "enabled": true
+    },
+    {
+      "symbol": "EW",
+      "name": "Edwards Lifesciences",
+      "enabled": true
+    },
+    {
+      "symbol": "REGN",
+      "name": "Regeneron",
+      "enabled": true
+    },
+    {
+      "symbol": "VRTX",
+      "name": "Vertex Pharmaceuticals",
+      "enabled": true
+    },
+    {
+      "symbol": "BIIB",
+      "name": "Biogen",
+      "enabled": true
+    },
+    {
+      "symbol": "GILD",
+      "name": "Gilead Sciences",
+      "enabled": true
+    },
+    {
+      "symbol": "MS",
+      "name": "Morgan Stanley",
+      "enabled": true
+    },
+    {
+      "symbol": "BLK",
+      "name": "BlackRock",
+      "enabled": true
+    },
+    {
+      "symbol": "SCHW",
+      "name": "Charles Schwab",
+      "enabled": true
+    },
+    {
+      "symbol": "AXP",
+      "name": "American Express",
+      "enabled": true
+    },
+    {
+      "symbol": "COF",
+      "name": "Capital One",
+      "enabled": true
+    },
+    {
+      "symbol": "USB",
+      "name": "US Bancorp",
+      "enabled": true
+    },
+    {
+      "symbol": "PNC",
+      "name": "PNC Financial",
+      "enabled": true
+    },
+    {
+      "symbol": "TFC",
+      "name": "Truist Financial",
+      "enabled": true
+    },
+    {
+      "symbol": "SPGI",
+      "name": "S&P Global",
+      "enabled": true
+    },
+    {
+      "symbol": "MCO",
+      "name": "Moody's",
+      "enabled": true
+    },
+    {
+      "symbol": "ICE",
+      "name": "Intercontinental Exchange",
+      "enabled": true
+    },
+    {
+      "symbol": "CME",
+      "name": "CME Group",
+      "enabled": true
+    },
+    {
+      "symbol": "CB",
+      "name": "Chubb",
+      "enabled": true
+    },
+    {
+      "symbol": "SBUX",
+      "name": "Starbucks",
+      "enabled": true
+    },
+    {
+      "symbol": "TJX",
+      "name": "TJX Companies",
+      "enabled": true
+    },
+    {
+      "symbol": "ORLY",
+      "name": "O'Reilly Automotive",
+      "enabled": true
+    },
+    {
+      "symbol": "AZO",
+      "name": "AutoZone",
+      "enabled": true
+    },
+    {
+      "symbol": "DLTR",
+      "name": "Dollar Tree",
+      "enabled": true
+    },
+    {
+      "symbol": "DG",
+      "name": "Dollar General",
+      "enabled": true
+    },
+    {
+      "symbol": "YUM",
+      "name": "Yum! Brands",
+      "enabled": true
+    },
+    {
+      "symbol": "CMG",
+      "name": "Chipotle",
+      "enabled": true
+    },
+    {
+      "symbol": "ABNB",
+      "name": "Airbnb",
+      "enabled": true
+    },
+    {
+      "symbol": "BKNG",
+      "name": "Booking Holdings",
+      "enabled": true
+    },
+    {
+      "symbol": "MAR",
+      "name": "Marriott",
+      "enabled": true
+    },
+    {
+      "symbol": "HLT",
+      "name": "Hilton",
+      "enabled": true
+    },
+    {
+      "symbol": "UPS",
+      "name": "United Parcel Service",
+      "enabled": true
+    },
+    {
+      "symbol": "FDX",
+      "name": "FedEx",
+      "enabled": true
+    },
+    {
+      "symbol": "CSX",
+      "name": "CSX Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "NSC",
+      "name": "Norfolk Southern",
+      "enabled": true
+    },
+    {
+      "symbol": "UNP",
+      "name": "Union Pacific",
+      "enabled": true
+    },
+    {
+      "symbol": "ETN",
+      "name": "Eaton",
+      "enabled": true
+    },
+    {
+      "symbol": "PH",
+      "name": "Parker-Hannifin",
+      "enabled": true
+    },
+    {
+      "symbol": "ROK",
+      "name": "Rockwell Automation",
+      "enabled": true
+    },
+    {
+      "symbol": "IR",
+      "name": "Ingersoll Rand",
+      "enabled": true
+    },
+    {
+      "symbol": "CARR",
+      "name": "Carrier Global",
+      "enabled": true
+    },
+    {
+      "symbol": "OTIS",
+      "name": "Otis Worldwide",
+      "enabled": true
+    },
+    {
+      "symbol": "SLB",
+      "name": "Schlumberger",
+      "enabled": true
+    },
+    {
+      "symbol": "HAL",
+      "name": "Halliburton",
+      "enabled": true
+    },
+    {
+      "symbol": "BKR",
+      "name": "Baker Hughes",
+      "enabled": true
+    },
+    {
+      "symbol": "DVN",
+      "name": "Devon Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "FANG",
+      "name": "Diamondback Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "MPC",
+      "name": "Marathon Petroleum",
+      "enabled": true
+    },
+    {
+      "symbol": "PSX",
+      "name": "Phillips 66",
+      "enabled": true
+    },
+    {
+      "symbol": "VLO",
+      "name": "Valero Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "LIN",
+      "name": "Linde",
+      "enabled": true
+    },
+    {
+      "symbol": "APD",
+      "name": "Air Products",
+      "enabled": true
+    },
+    {
+      "symbol": "ECL",
+      "name": "Ecolab",
+      "enabled": true
+    },
+    {
+      "symbol": "NEM",
+      "name": "Newmont",
+      "enabled": true
+    },
+    {
+      "symbol": "FCX",
+      "name": "Freeport-McMoRan",
+      "enabled": true
+    },
+    {
+      "symbol": "NUE",
+      "name": "Nucor",
+      "enabled": true
+    },
+    {
+      "symbol": "ALB",
+      "name": "Albemarle",
+      "enabled": true
+    },
+    {
+      "symbol": "PLD",
+      "name": "Prologis",
+      "enabled": true
+    },
+    {
+      "symbol": "EQIX",
+      "name": "Equinix",
+      "enabled": true
+    },
+    {
+      "symbol": "PSA",
+      "name": "Public Storage",
+      "enabled": true
+    },
+    {
+      "symbol": "EXR",
+      "name": "Extra Space Storage",
+      "enabled": true
+    },
+    {
+      "symbol": "AVB",
+      "name": "AvalonBay",
+      "enabled": true
+    },
+    {
+      "symbol": "EQR",
+      "name": "Equity Residential",
+      "enabled": true
+    },
+    {
+      "symbol": "O",
+      "name": "Realty Income",
+      "enabled": true
+    },
+    {
+      "symbol": "FICO",
+      "name": "Fair Isaac",
+      "enabled": true
+    },
+    {
+      "symbol": "MSTR",
+      "name": "MicroStrategy",
+      "enabled": true
+    },
+    {
+      "symbol": "DELL",
+      "name": "Dell Technologies",
+      "enabled": true
+    },
+    {
+      "symbol": "HPQ",
+      "name": "HP Inc",
+      "enabled": true
+    },
+    {
+      "symbol": "MSCI",
+      "name": "MSCI Inc",
+      "enabled": true
+    },
+    {
+      "symbol": "MKTX",
+      "name": "MarketAxess",
+      "enabled": true
+    },
+    {
+      "symbol": "CPRT",
+      "name": "Copart",
+      "enabled": true
+    },
+    {
+      "symbol": "POOL",
+      "name": "Pool Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "IDXX",
+      "name": "IDEXX Laboratories",
+      "enabled": true
+    },
+    {
+      "symbol": "WST",
+      "name": "West Pharmaceutical",
+      "enabled": true
+    },
+    {
+      "symbol": "ANSS",
+      "name": "Ansys",
+      "enabled": true
+    },
+    {
+      "symbol": "TYL",
+      "name": "Tyler Technologies",
+      "enabled": true
+    },
+    {
+      "symbol": "KEYS",
+      "name": "Keysight Technologies",
+      "enabled": true
+    },
+    {
+      "symbol": "TRMB",
+      "name": "Trimble",
+      "enabled": true
+    },
+    {
+      "symbol": "STE",
+      "name": "STERIS",
+      "enabled": true
+    },
+    {
+      "symbol": "WAT",
+      "name": "Waters Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "A",
+      "name": "Agilent Technologies",
+      "enabled": true
+    },
+    {
+      "symbol": "DHR",
+      "name": "Danaher",
+      "enabled": true
+    },
+    {
+      "symbol": "ZBH",
+      "name": "Zimmer Biomet",
+      "enabled": true
+    },
+    {
+      "symbol": "HOLX",
+      "name": "Hologic",
+      "enabled": true
+    },
+    {
+      "symbol": "DXCM",
+      "name": "DexCom",
+      "enabled": true
+    },
+    {
+      "symbol": "ALGN",
+      "name": "Align Technology",
+      "enabled": true
+    },
+    {
+      "symbol": "TECH",
+      "name": "Bio-Techne",
+      "enabled": true
+    },
+    {
+      "symbol": "BIO",
+      "name": "Bio-Rad Laboratories",
+      "enabled": true
+    },
+    {
+      "symbol": "RJF",
+      "name": "Raymond James",
+      "enabled": true
+    },
+    {
+      "symbol": "FITB",
+      "name": "Fifth Third Bancorp",
+      "enabled": true
+    },
+    {
+      "symbol": "HBAN",
+      "name": "Huntington Bancshares",
+      "enabled": true
+    },
+    {
+      "symbol": "CFG",
+      "name": "Citizens Financial",
+      "enabled": true
+    },
+    {
+      "symbol": "MTB",
+      "name": "M&T Bank",
+      "enabled": true
+    },
+    {
+      "symbol": "ZION",
+      "name": "Zions Bancorporation",
+      "enabled": true
+    },
+    {
+      "symbol": "KEY",
+      "name": "KeyCorp",
+      "enabled": true
+    },
+    {
+      "symbol": "SIVB",
+      "name": "SVB Financial",
+      "enabled": true
+    },
+    {
+      "symbol": "NDAQ",
+      "name": "Nasdaq Inc",
+      "enabled": true
+    },
+    {
+      "symbol": "CBOE",
+      "name": "Cboe Global Markets",
+      "enabled": true
+    },
+    {
+      "symbol": "ROST",
+      "name": "Ross Stores",
+      "enabled": true
+    },
+    {
+      "symbol": "BBWI",
+      "name": "Bath & Body Works",
+      "enabled": true
+    },
+    {
+      "symbol": "ETSY",
+      "name": "Etsy",
+      "enabled": true
+    },
+    {
+      "symbol": "W",
+      "name": "Wayfair",
+      "enabled": true
+    },
+    {
+      "symbol": "LULU",
+      "name": "Lululemon",
+      "enabled": true
+    },
+    {
+      "symbol": "DPZ",
+      "name": "Domino's Pizza",
+      "enabled": true
+    },
+    {
+      "symbol": "WYNN",
+      "name": "Wynn Resorts",
+      "enabled": true
+    },
+    {
+      "symbol": "LVS",
+      "name": "Las Vegas Sands",
+      "enabled": true
+    },
+    {
+      "symbol": "NCLH",
+      "name": "Norwegian Cruise Line",
+      "enabled": true
+    },
+    {
+      "symbol": "RCL",
+      "name": "Royal Caribbean",
+      "enabled": true
+    },
+    {
+      "symbol": "CCL",
+      "name": "Carnival Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "PCAR",
+      "name": "PACCAR",
+      "enabled": true
+    },
+    {
+      "symbol": "GNRC",
+      "name": "Generac",
+      "enabled": true
+    },
+    {
+      "symbol": "SWK",
+      "name": "Stanley Black & Decker",
+      "enabled": true
+    },
+    {
+      "symbol": "TT",
+      "name": "Trane Technologies",
+      "enabled": true
+    },
+    {
+      "symbol": "DOV",
+      "name": "Dover Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "NDSN",
+      "name": "Nordson",
+      "enabled": true
+    },
+    {
+      "symbol": "GWW",
+      "name": "W.W. Grainger",
+      "enabled": true
+    },
+    {
+      "symbol": "FAST",
+      "name": "Fastenal",
+      "enabled": true
+    },
+    {
+      "symbol": "MSM",
+      "name": "MSC Industrial",
+      "enabled": true
+    },
+    {
+      "symbol": "OXY",
+      "name": "Occidental Petroleum",
+      "enabled": true
+    },
+    {
+      "symbol": "EOG",
+      "name": "EOG Resources",
+      "enabled": true
+    },
+    {
+      "symbol": "PXD",
+      "name": "Pioneer Natural Resources",
+      "enabled": true
+    },
+    {
+      "symbol": "CTRA",
+      "name": "Coterra Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "MRO",
+      "name": "Marathon Oil",
+      "enabled": true
+    },
+    {
+      "symbol": "APA",
+      "name": "APA Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "HES",
+      "name": "Hess Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "SHW",
+      "name": "Sherwin-Williams",
+      "enabled": true
+    },
+    {
+      "symbol": "DD",
+      "name": "DuPont",
+      "enabled": true
+    },
+    {
+      "symbol": "PPG",
+      "name": "PPG Industries",
+      "enabled": true
+    },
+    {
+      "symbol": "VMC",
+      "name": "Vulcan Materials",
+      "enabled": true
+    },
+    {
+      "symbol": "MLM",
+      "name": "Martin Marietta",
+      "enabled": true
+    },
+    {
+      "symbol": "CF",
+      "name": "CF Industries",
+      "enabled": true
+    },
+    {
+      "symbol": "MOS",
+      "name": "Mosaic Company",
+      "enabled": true
+    },
+    {
+      "symbol": "BALL",
+      "name": "Ball Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "PKG",
+      "name": "Packaging Corp",
+      "enabled": true
+    },
+    {
+      "symbol": "IP",
+      "name": "International Paper",
+      "enabled": true
+    },
+    {
+      "symbol": "CCI",
+      "name": "Crown Castle",
+      "enabled": true
+    },
+    {
+      "symbol": "DLR",
+      "name": "Digital Realty",
+      "enabled": true
+    },
+    {
+      "symbol": "WELL",
+      "name": "Welltower",
+      "enabled": true
+    },
+    {
+      "symbol": "SPG",
+      "name": "Simon Property Group",
+      "enabled": true
+    },
+    {
+      "symbol": "ARE",
+      "name": "Alexandria Real Estate",
+      "enabled": true
+    },
+    {
+      "symbol": "MAA",
+      "name": "Mid-America Apartment",
+      "enabled": true
+    },
+    {
+      "symbol": "UDR",
+      "name": "UDR Inc",
+      "enabled": true
+    },
+    {
+      "symbol": "KIM",
+      "name": "Kimco Realty",
+      "enabled": true
+    },
+    {
+      "symbol": "AIG",
+      "name": "American International Group",
+      "enabled": true
+    },
+    {
+      "symbol": "ALL",
+      "name": "Allstate",
+      "enabled": true
+    },
+    {
+      "symbol": "MET",
+      "name": "MetLife",
+      "enabled": true
+    },
+    {
+      "symbol": "PRU",
+      "name": "Prudential Financial",
+      "enabled": true
+    },
+    {
+      "symbol": "HIG",
+      "name": "Hartford Financial",
+      "enabled": true
+    },
+    {
+      "symbol": "GL",
+      "name": "Globe Life",
+      "enabled": true
+    },
+    {
+      "symbol": "FNF",
+      "name": "Fidelity National Financial",
+      "enabled": true
+    },
+    {
+      "symbol": "WRB",
+      "name": "W.R. Berkley",
+      "enabled": true
+    },
+    {
+      "symbol": "CHTR",
+      "name": "Charter Communications",
+      "enabled": true
+    },
+    {
+      "symbol": "TMUS",
+      "name": "T-Mobile US",
+      "enabled": true
+    },
+    {
+      "symbol": "EA",
+      "name": "Electronic Arts",
+      "enabled": true
+    },
+    {
+      "symbol": "TTWO",
+      "name": "Take-Two Interactive",
+      "enabled": true
+    },
+    {
+      "symbol": "PARA",
+      "name": "Paramount Global",
+      "enabled": true
+    },
+    {
+      "symbol": "FOXA",
+      "name": "Fox Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "DISC",
+      "name": "Warner Bros Discovery",
+      "enabled": true
+    },
+    {
+      "symbol": "WM",
+      "name": "Waste Management",
+      "enabled": true
+    },
+    {
+      "symbol": "RSG",
+      "name": "Republic Services",
+      "enabled": true
+    },
+    {
+      "symbol": "AWK",
+      "name": "American Water Works",
+      "enabled": true
+    },
+    {
+      "symbol": "ED",
+      "name": "Consolidated Edison",
+      "enabled": true
+    },
+    {
+      "symbol": "AES",
+      "name": "AES Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "WEC",
+      "name": "WEC Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "ES",
+      "name": "Eversource Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "CMS",
+      "name": "CMS Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "DTE",
+      "name": "DTE Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "EIX",
+      "name": "Edison International",
+      "enabled": true
+    },
+    {
+      "symbol": "FE",
+      "name": "FirstEnergy",
+      "enabled": true
+    },
+    {
+      "symbol": "PEG",
+      "name": "Public Service Enterprise",
+      "enabled": true
+    },
+    {
+      "symbol": "PPL",
+      "name": "PPL Corporation",
+      "enabled": true
+    },
+    {
+      "symbol": "AEP",
+      "name": "American Electric Power",
+      "enabled": true
+    },
+    {
+      "symbol": "XEL",
+      "name": "Xcel Energy",
+      "enabled": true
+    },
+    {
+      "symbol": "EVRG",
+      "name": "Evergy",
+      "enabled": true
+    },
+    {
+      "symbol": "RIO.L",
+      "name": "Rio Tinto",
+      "enabled": true
+    },
+    {
+      "symbol": "STAN.L",
+      "name": "Standard Chartered",
+      "enabled": true
+    },
+    {
+      "symbol": "LAND.L",
+      "name": "Land Securities",
+      "enabled": true
+    },
+    {
+      "symbol": "SGRO.L",
+      "name": "Segro",
+      "enabled": true
+    },
+    {
+      "symbol": "FRAS.L",
+      "name": "Frasers Group",
+      "enabled": true
+    },
+    {
+      "symbol": "BRBY.L",
+      "name": "Burberry",
+      "enabled": true
+    },
+    {
+      "symbol": "PSN.L",
+      "name": "Persimmon",
+      "enabled": true
+    },
+    {
+      "symbol": "AV.L",
+      "name": "Aviva",
+      "enabled": true
+    },
+    {
+      "symbol": "BDEV.L",
+      "name": "Barratt Developments",
+      "enabled": true
+    },
+    {
+      "symbol": "TW.L",
+      "name": "Taylor Wimpey",
+      "enabled": true
+    },
+    {
+      "symbol": "JMAT.L",
+      "name": "Johnson Matthey",
+      "enabled": true
+    },
+    {
+      "symbol": "WEIR.L",
+      "name": "Weir Group",
+      "enabled": true
+    },
+    {
+      "symbol": "DARK.L",
+      "name": "Darktrace",
+      "enabled": true
+    },
+    {
+      "symbol": "AUTO.L",
+      "name": "Auto Trader",
+      "enabled": true
+    },
+    {
+      "symbol": "CRDA.L",
+      "name": "Croda International",
+      "enabled": true
+    },
+    {
+      "symbol": "RS1.L",
+      "name": "RS Group",
+      "enabled": true
+    },
+    {
+      "symbol": "JD.L",
+      "name": "JD Sports",
+      "enabled": true
+    },
+    {
+      "symbol": "EVR.L",
+      "name": "Endeavour Mining",
+      "enabled": true
+    }
   ],
   "fx": [
-    {"symbol": "EURUSD=X", "name": "EUR/USD", "enabled": true},
-    {"symbol": "GBPUSD=X", "name": "GBP/USD", "enabled": true},
-    {"symbol": "USDJPY=X", "name": "USD/JPY", "enabled": true},
-    {"symbol": "AUDUSD=X", "name": "AUD/USD", "enabled": true},
-    {"symbol": "USDCHF=X", "name": "USD/CHF", "enabled": true},
-    {"symbol": "USDCAD=X", "name": "USD/CAD", "enabled": true},
-    {"symbol": "NZDUSD=X", "name": "NZD/USD", "enabled": true},
-    {"symbol": "EURGBP=X", "name": "EUR/GBP", "enabled": true},
-    {"symbol": "USDSGD=X", "name": "USD/SGD", "enabled": true},
-    {"symbol": "USDMXN=X", "name": "USD/MXN", "enabled": true},
-    {"symbol": "USDCNH=X", "name": "USD/CNH", "enabled": true},
-    {"symbol": "USDKRW=X", "name": "USD/KRW", "enabled": true},
-    {"symbol": "USDHKD=X", "name": "USD/HKD", "enabled": true},
-    {"symbol": "USDTWD=X", "name": "USD/TWD", "enabled": true},
-    {"symbol": "USDTHB=X", "name": "USD/THB", "enabled": true},
-    {"symbol": "USDIDR=X", "name": "USD/IDR", "enabled": true},
-    {"symbol": "USDMYR=X", "name": "USD/MYR", "enabled": true},
-    {"symbol": "USDPHP=X", "name": "USD/PHP", "enabled": true},
-    {"symbol": "USDINR=X", "name": "USD/INR", "enabled": true},
-    {"symbol": "XAUUSD=X", "name": "Gold/USD", "enabled": true},
-    {"symbol": "EURJPY=X", "name": "EUR/JPY", "enabled": true},
-    {"symbol": "GBPJPY=X", "name": "GBP/JPY", "enabled": true},
-    {"symbol": "USDNOK=X", "name": "USD/NOK", "enabled": true},
-    {"symbol": "USDSEK=X", "name": "USD/SEK", "enabled": true},
-    {"symbol": "USDZAR=X", "name": "USD/ZAR", "enabled": true},
-    {"symbol": "EURCHF=X", "name": "EUR/CHF", "enabled": true},
-    {"symbol": "GBPCHF=X", "name": "GBP/CHF", "enabled": true},
-    {"symbol": "AUDJPY=X", "name": "AUD/JPY", "enabled": true},
-    {"symbol": "NZDJPY=X", "name": "NZD/JPY", "enabled": true},
-    {"symbol": "CADUSD=X", "name": "CAD/USD", "enabled": true}
+    {
+      "symbol": "EURUSD=X",
+      "name": "EUR/USD",
+      "enabled": false
+    },
+    {
+      "symbol": "GBPUSD=X",
+      "name": "GBP/USD",
+      "enabled": false
+    },
+    {
+      "symbol": "USDJPY=X",
+      "name": "USD/JPY",
+      "enabled": false
+    },
+    {
+      "symbol": "AUDUSD=X",
+      "name": "AUD/USD",
+      "enabled": false
+    },
+    {
+      "symbol": "USDCHF=X",
+      "name": "USD/CHF",
+      "enabled": false
+    },
+    {
+      "symbol": "USDCAD=X",
+      "name": "USD/CAD",
+      "enabled": false
+    },
+    {
+      "symbol": "NZDUSD=X",
+      "name": "NZD/USD",
+      "enabled": false
+    },
+    {
+      "symbol": "EURGBP=X",
+      "name": "EUR/GBP",
+      "enabled": false
+    },
+    {
+      "symbol": "USDSGD=X",
+      "name": "USD/SGD",
+      "enabled": false
+    },
+    {
+      "symbol": "USDMXN=X",
+      "name": "USD/MXN",
+      "enabled": false
+    },
+    {
+      "symbol": "USDCNH=X",
+      "name": "USD/CNH",
+      "enabled": false
+    },
+    {
+      "symbol": "USDKRW=X",
+      "name": "USD/KRW",
+      "enabled": false
+    },
+    {
+      "symbol": "USDHKD=X",
+      "name": "USD/HKD",
+      "enabled": false
+    },
+    {
+      "symbol": "USDTWD=X",
+      "name": "USD/TWD",
+      "enabled": false
+    },
+    {
+      "symbol": "USDTHB=X",
+      "name": "USD/THB",
+      "enabled": false
+    },
+    {
+      "symbol": "USDIDR=X",
+      "name": "USD/IDR",
+      "enabled": false
+    },
+    {
+      "symbol": "USDMYR=X",
+      "name": "USD/MYR",
+      "enabled": false
+    },
+    {
+      "symbol": "USDPHP=X",
+      "name": "USD/PHP",
+      "enabled": false
+    },
+    {
+      "symbol": "USDINR=X",
+      "name": "USD/INR",
+      "enabled": false
+    },
+    {
+      "symbol": "XAUUSD=X",
+      "name": "Gold/USD",
+      "enabled": false
+    },
+    {
+      "symbol": "EURJPY=X",
+      "name": "EUR/JPY",
+      "enabled": false
+    },
+    {
+      "symbol": "GBPJPY=X",
+      "name": "GBP/JPY",
+      "enabled": false
+    },
+    {
+      "symbol": "USDNOK=X",
+      "name": "USD/NOK",
+      "enabled": false
+    },
+    {
+      "symbol": "USDSEK=X",
+      "name": "USD/SEK",
+      "enabled": false
+    },
+    {
+      "symbol": "USDZAR=X",
+      "name": "USD/ZAR",
+      "enabled": false
+    },
+    {
+      "symbol": "EURCHF=X",
+      "name": "EUR/CHF",
+      "enabled": false
+    },
+    {
+      "symbol": "GBPCHF=X",
+      "name": "GBP/CHF",
+      "enabled": false
+    },
+    {
+      "symbol": "AUDJPY=X",
+      "name": "AUD/JPY",
+      "enabled": false
+    },
+    {
+      "symbol": "NZDJPY=X",
+      "name": "NZD/JPY",
+      "enabled": false
+    },
+    {
+      "symbol": "CADUSD=X",
+      "name": "CAD/USD",
+      "enabled": false
+    }
   ],
   "crypto": [
-    {"symbol": "bitcoin", "name": "Bitcoin", "enabled": true},
-    {"symbol": "ethereum", "name": "Ethereum", "enabled": true},
-    {"symbol": "solana", "name": "Solana", "enabled": true},
-    {"symbol": "ripple", "name": "XRP", "enabled": false},
-    {"symbol": "dogecoin", "name": "Dogecoin", "enabled": true},
-    {"symbol": "cardano", "name": "Cardano", "enabled": true},
-    {"symbol": "binancecoin", "name": "Binance Coin", "enabled": true},
-    {"symbol": "matic-network", "name": "Polygon", "enabled": true},
-    {"symbol": "avalanche-2", "name": "Avalanche", "enabled": true},
-    {"symbol": "chainlink", "name": "Chainlink", "enabled": true},
-    {"symbol": "polkadot", "name": "Polkadot", "enabled": true},
-    {"symbol": "near", "name": "NEAR Protocol", "enabled": true},
-    {"symbol": "sui", "name": "Sui", "enabled": true},
-    {"symbol": "aptos", "name": "Aptos", "enabled": true},
-    {"symbol": "arbitrum", "name": "Arbitrum", "enabled": true},
-    {"symbol": "the-open-network", "name": "TON", "enabled": true},
-    {"symbol": "uniswap", "name": "Uniswap", "enabled": true}
+    {
+      "symbol": "bitcoin",
+      "name": "Bitcoin",
+      "enabled": false
+    },
+    {
+      "symbol": "ethereum",
+      "name": "Ethereum",
+      "enabled": false
+    },
+    {
+      "symbol": "solana",
+      "name": "Solana",
+      "enabled": false
+    },
+    {
+      "symbol": "ripple",
+      "name": "XRP",
+      "enabled": false
+    },
+    {
+      "symbol": "dogecoin",
+      "name": "Dogecoin",
+      "enabled": false
+    },
+    {
+      "symbol": "cardano",
+      "name": "Cardano",
+      "enabled": false
+    },
+    {
+      "symbol": "binancecoin",
+      "name": "Binance Coin",
+      "enabled": false
+    },
+    {
+      "symbol": "matic-network",
+      "name": "Polygon",
+      "enabled": false
+    },
+    {
+      "symbol": "avalanche-2",
+      "name": "Avalanche",
+      "enabled": false
+    },
+    {
+      "symbol": "chainlink",
+      "name": "Chainlink",
+      "enabled": false
+    },
+    {
+      "symbol": "polkadot",
+      "name": "Polkadot",
+      "enabled": false
+    },
+    {
+      "symbol": "near",
+      "name": "NEAR Protocol",
+      "enabled": false
+    },
+    {
+      "symbol": "sui",
+      "name": "Sui",
+      "enabled": false
+    },
+    {
+      "symbol": "aptos",
+      "name": "Aptos",
+      "enabled": false
+    },
+    {
+      "symbol": "arbitrum",
+      "name": "Arbitrum",
+      "enabled": false
+    },
+    {
+      "symbol": "the-open-network",
+      "name": "TON",
+      "enabled": false
+    },
+    {
+      "symbol": "uniswap",
+      "name": "Uniswap",
+      "enabled": false
+    }
   ]
 }

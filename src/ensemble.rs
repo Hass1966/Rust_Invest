@@ -14,9 +14,10 @@
 
 use crate::ml::{self, Sample};
 use crate::gbt::{self, GBTConfig, GradientBoostedClassifier};
-use crate::lgbm::{LGBMConfig, LightGBMClassifier};
+use crate::lgbm::{LGBMConfig, LightGBMClassifier, LGBMRegressorConfig, LightGBMRegressor};
 use crate::lstm::{self, LSTMModelConfig};
-use crate::gru::{self, GRUModelConfig};
+use crate::gru::{self, GRUModelConfig, GRURegressionConfig, GRURegressionModel};
+use crate::ridge::RidgeRegression;
 use crate::random_forest::{self, RandomForestConfig};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -74,6 +75,57 @@ pub fn get_override(overrides: &HashMap<String, EnsembleOverride>, symbol: &str)
 }
 
 // ════════════════════════════════════════
+// Threshold Overrides — agent-managed per-asset thresholds
+// ════════════════════════════════════════
+
+/// Per-asset threshold override set by the agent
+#[derive(Deserialize, Debug, Clone)]
+pub struct ThresholdOverrideEntry {
+    pub buy_threshold: Option<f64>,
+    pub sell_threshold: Option<f64>,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct ThresholdOverrides {
+    #[serde(default)]
+    pub overrides: HashMap<String, ThresholdOverrideEntry>,
+}
+
+/// Load threshold overrides from config/threshold_overrides.json
+pub fn load_threshold_overrides() -> ThresholdOverrides {
+    let path = "config/threshold_overrides.json";
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            match serde_json::from_str::<ThresholdOverrides>(&contents) {
+                Ok(t) => {
+                    if !t.overrides.is_empty() {
+                        println!("  [Ensemble] Loaded {} threshold overrides from {}", t.overrides.len(), path);
+                    }
+                    t
+                }
+                Err(e) => {
+                    println!("  [Ensemble] Failed to parse {}: {}", path, e);
+                    ThresholdOverrides::default()
+                }
+            }
+        }
+        Err(_) => ThresholdOverrides::default(),
+    }
+}
+
+/// Get the buy threshold for an asset (returns None if no override, meaning use default)
+pub fn get_buy_threshold(overrides: &ThresholdOverrides, symbol: &str) -> Option<f64> {
+    overrides.overrides.get(symbol).and_then(|o| o.buy_threshold)
+}
+
+/// Get the sell threshold for an asset (returns None if no override)
+pub fn get_sell_threshold(overrides: &ThresholdOverrides, symbol: &str) -> Option<f64> {
+    overrides.overrides.get(symbol).and_then(|o| o.sell_threshold)
+}
+
+// ════════════════════════════════════════
 // Walk-Forward on pre-built samples (RICH FEATURES)
 // ════════════════════════════════════════
 
@@ -117,6 +169,8 @@ pub struct WalkForwardResult {
     pub final_lgbm_prob: f64,
     pub has_lgbm: bool,
     pub lgbm_importance: Vec<(String, f64)>,
+    /// Platt scaling calibration for ensemble probability
+    pub platt_params: Option<PlattParams>,
 }
 
 /// A single out-of-fold prediction from all models (for stacking)
@@ -168,6 +222,87 @@ pub fn stacking_predict(weights: &[f64], model_probs: &[f64; 7]) -> f64 {
         .map(|(p, w)| p * w).sum::<f64>() + weights[7]; // weights[7] = bias
     // Sigmoid
     (1.0 / (1.0 + (-logit).exp())).clamp(0.15, 0.85)
+}
+
+/// Platt scaling parameters for probability calibration.
+/// Maps raw probability → calibrated probability via: P_cal = 1/(1+exp(A*logit(p) + B))
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlattParams {
+    pub a: f64,
+    pub b: f64,
+}
+
+/// Fit Platt scaling parameters from out-of-fold (predicted_prob, actual_label) pairs.
+/// Uses Newton's method to minimise negative log-likelihood.
+pub fn fit_platt_scaling(predictions: &[(f64, bool)]) -> Option<PlattParams> {
+    if predictions.len() < 20 { return None; }
+
+    // Target values with Platt's label smoothing
+    let n_pos = predictions.iter().filter(|(_, y)| *y).count() as f64;
+    let n_neg = predictions.len() as f64 - n_pos;
+    if n_pos < 5.0 || n_neg < 5.0 { return None; }
+
+    let t_pos = (n_pos + 1.0) / (n_pos + 2.0);
+    let t_neg = 1.0 / (n_neg + 2.0);
+
+    // Convert probabilities to logits for fitting
+    let logits: Vec<f64> = predictions.iter().map(|(p, _)| {
+        let clamped = p.clamp(0.01, 0.99);
+        (clamped / (1.0 - clamped)).ln()
+    }).collect();
+    let targets: Vec<f64> = predictions.iter().map(|(_, y)| {
+        if *y { t_pos } else { t_neg }
+    }).collect();
+
+    // Newton's method for A, B
+    let mut a = 0.0_f64;
+    let mut b = 0.0_f64;
+
+    for _ in 0..100 {
+        let mut grad_a = 0.0;
+        let mut grad_b = 0.0;
+        let mut hess_aa = 0.0;
+        let mut hess_ab = 0.0;
+        let mut hess_bb = 0.0;
+
+        for (i, f) in logits.iter().enumerate() {
+            let p = 1.0 / (1.0 + (-(a * f + b)).exp());
+            let t = targets[i];
+            let d = p - t;
+            let h = p * (1.0 - p);
+
+            grad_a += d * f;
+            grad_b += d;
+            hess_aa += h * f * f;
+            hess_ab += h * f;
+            hess_bb += h;
+        }
+
+        // Add small regularisation for numerical stability
+        hess_aa += 1e-6;
+        hess_bb += 1e-6;
+
+        let det = hess_aa * hess_bb - hess_ab * hess_ab;
+        if det.abs() < 1e-12 { break; }
+
+        let da = -(hess_bb * grad_a - hess_ab * grad_b) / det;
+        let db = -(hess_aa * grad_b - hess_ab * grad_a) / det;
+
+        a += da;
+        b += db;
+
+        if da.abs() < 1e-8 && db.abs() < 1e-8 { break; }
+    }
+
+    Some(PlattParams { a, b })
+}
+
+/// Apply Platt scaling to a raw probability.
+pub fn platt_calibrate(raw_prob: f64, params: &PlattParams) -> f64 {
+    let clamped = raw_prob.clamp(0.01, 0.99);
+    let logit = (clamped / (1.0 - clamped)).ln();
+    let calibrated = 1.0 / (1.0 + (-(params.a * logit + params.b)).exp());
+    calibrated.clamp(0.05, 0.95)
 }
 
 /// Compute binary cross-entropy (log-loss) for a single prediction
@@ -263,12 +398,19 @@ pub fn walk_forward_samples(
         // Recency weighting: last ~126 samples (6 months daily) get 3x weight
         let recency_weights: Vec<f64> = compute_recency_weights(train_data.len());
 
-        // Train all 3 pointwise models with recency weighting
+        // Class weights to fix bullish bias — combine with recency weights
+        let (w_down, w_up) = crate::features::compute_class_weights(train_data, 0.005);
+        let combined_weights: Vec<f64> = train_data.iter().enumerate().map(|(i, s)| {
+            let class_w = if s.label > 0.0 { w_up } else { w_down };
+            recency_weights[i] * class_w
+        }).collect();
+
+        // Train all 3 pointwise models with combined recency + class weighting
         let mut lin = ml::LinearRegression::new(n_features);
-        lin.train_weighted(train_data, Some(&recency_weights), 0.005, 3000);
+        lin.train_weighted(train_data, Some(&combined_weights), 0.005, 3000);
 
         let mut log = ml::LogisticRegression::new(n_features);
-        log.train_weighted(train_data, Some(&recency_weights), 0.01, 3000);
+        log.train_weighted(train_data, Some(&combined_weights), 0.01, 3000);
 
         let x_train: Vec<Vec<f64>> = train_data.iter().map(|s| s.features.clone()).collect();
         let y_train: Vec<f64> = train_data.iter()
@@ -277,7 +419,7 @@ pub fn walk_forward_samples(
         let val_start = (x_train.len() as f64 * 0.85) as usize;
         let (x_t, x_v) = x_train.split_at(val_start);
         let (y_t, y_v) = y_train.split_at(val_start);
-        let gbt_recency = &recency_weights[..x_t.len()]; // only training portion
+        let gbt_recency = &combined_weights[..x_t.len()]; // class + recency weights for training portion
 
         let gbt_config = GBTConfig::default();
 
@@ -287,7 +429,7 @@ pub fn walk_forward_samples(
 
         // Train LightGBM model #7
         let lgbm_config = LGBMConfig::default();
-        let lgbm_recency: Vec<f64> = recency_weights[..x_t.len()].to_vec();
+        let lgbm_recency: Vec<f64> = combined_weights[..x_t.len()].to_vec();
         let lgbm_model = LightGBMClassifier::train(
             x_t, y_t, Some(&lgbm_recency), Some(x_v), Some(y_v), &lgbm_config,
         );
@@ -487,6 +629,29 @@ pub fn walk_forward_samples(
         None
     };
 
+    // Fit Platt scaling on out-of-fold ensemble probabilities
+    let platt_params = if !stacking_data.is_empty() {
+        let ensemble_pairs: Vec<(f64, bool)> = stacking_data.iter().map(|s| {
+            // Compute ensemble prob from available model probs using inverse-loss weights or equal
+            let probs = &s.model_probs;
+            let avg_prob = if let Some(ref vll) = val_log_loss {
+                let inv: Vec<f64> = vll.iter().map(|l| 1.0 / l).collect();
+                let inv_sum: f64 = inv.iter().sum();
+                (inv[0] * probs[0] + inv[1] * probs[1] + inv[2] * probs[2] + inv[3] * probs[3]) / inv_sum
+            } else {
+                (probs[0] + probs[1] + probs[2] + probs[3]) / 4.0
+            };
+            (avg_prob, s.actual_up)
+        }).collect();
+        let params = fit_platt_scaling(&ensemble_pairs);
+        if let Some(ref p) = params {
+            println!("    [Platt] Calibration fitted: A={:.4}, B={:.4}", p.a, p.b);
+        }
+        params
+    } else {
+        None
+    };
+
     Some(WalkForwardResult {
         symbol: symbol.to_string(),
         linear_accuracy: linear_acc,
@@ -521,6 +686,7 @@ pub fn walk_forward_samples(
         has_lgbm,
         stacking_weights,
         val_log_loss,
+        platt_params,
     })
 }
 
@@ -735,6 +901,7 @@ fn walk_forward_samples_no_lstm(
         has_lgbm: false,
         stacking_weights: None,
         val_log_loss,
+        platt_params: None, // Platt scaling not fitted for basic crypto walk-forward
     })
 }
 
@@ -777,10 +944,79 @@ pub struct TradingSignal {
     pub llm_analysis: Option<String>,
 }
 
-/// Fixed global signal thresholds — simpler, less overfit.
-/// BUY when ensemble_prob > 0.55, SELL when < 0.45.
-pub fn get_signal_threshold(_symbol: &str) -> (f64, f64) {
-    (0.55, 0.45)
+/// Signal thresholds per asset. Uses agent overrides from config/threshold_overrides.json
+/// when available, falls back to default (0.55, 0.45).
+/// File is cached in a static and refreshed at most once per minute.
+/// Global market regime for threshold adjustment. Updated by the signal pipeline
+/// after regime detection. Encoded as atomic: 0=Bull, 1=Neutral, 2=EarlyWarning, 3=Bear, 4=Crisis.
+static CURRENT_REGIME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1); // default Neutral
+
+/// Call this after computing market regime to update the global state.
+pub fn set_market_regime(regime: &crate::market_regime::MarketRegime) {
+    use crate::market_regime::MarketRegime;
+    let val = match regime {
+        MarketRegime::Bull => 0,
+        MarketRegime::Neutral => 1,
+        MarketRegime::EarlyWarning => 2,
+        MarketRegime::Bear => 3,
+        MarketRegime::Crisis => 4,
+    };
+    CURRENT_REGIME.store(val, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn current_regime_sell_adjustment() -> f64 {
+    // Regime info is already encoded in model features (vix_regime, VIX_level, risk_on_off).
+    // Adjusting thresholds here double-counts regime and suppresses SELL in bull markets.
+    0.0
+}
+
+pub fn get_signal_threshold(symbol: &str) -> (f64, f64) {
+    use std::sync::Mutex;
+
+    static CACHE: std::sync::LazyLock<Mutex<(std::time::Instant, HashMap<String, (f64, f64)>)>> =
+        std::sync::LazyLock::new(|| Mutex::new((std::time::Instant::now(), HashMap::new())));
+
+    let default_buy = 0.55;
+    let default_sell = 0.45;
+
+    let regime_adj = current_regime_sell_adjustment();
+
+    let mut cache = match CACHE.lock() {
+        Ok(c) => c,
+        Err(_) => return (default_buy, (default_sell + regime_adj).clamp(0.20, 0.55)),
+    };
+
+    // Refresh cache every 60 seconds
+    if cache.0.elapsed() > std::time::Duration::from_secs(60) || cache.1.is_empty() {
+        if let Ok(contents) = std::fs::read_to_string("config/threshold_overrides.json") {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&contents) {
+                let mut map = HashMap::new();
+                if let Some(overrides) = parsed.get("overrides").and_then(|o| o.as_object()) {
+                    for (sym, entry) in overrides {
+                        // Skip expired overrides
+                        if let Some(expires) = entry.get("expires_at").and_then(|v| v.as_str()) {
+                            if let Ok(exp_time) = chrono::DateTime::parse_from_rfc3339(expires) {
+                                if exp_time < chrono::Utc::now() { continue; }
+                            }
+                        }
+                        let buy = entry.get("buy_threshold")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(default_buy);
+                        let sell = entry.get("sell_threshold")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(default_sell);
+                        map.insert(sym.clone(), (buy, sell));
+                    }
+                }
+                cache.1 = map;
+            }
+        }
+        cache.0 = std::time::Instant::now();
+    }
+
+    let (buy, sell) = cache.1.get(symbol).copied().unwrap_or((default_buy, default_sell));
+    // Apply regime adjustment to sell threshold
+    (buy, (sell + regime_adj).clamp(0.20, 0.55))
 }
 
 /// Compute adaptive thresholds from historical signal accuracy.
@@ -1003,6 +1239,13 @@ pub fn ensemble_signal_with_override(
             + rfw * wf.final_rf_prob
     };
 
+    // Apply Platt scaling calibration if available
+    let ensemble_prob = if let Some(ref pp) = wf.platt_params {
+        platt_calibrate(ensemble_prob, pp)
+    } else {
+        ensemble_prob
+    };
+
     // Count agreement (only from enabled models)
     let mut ups = 0_usize;
     let mut n_models = 0_usize;
@@ -1038,14 +1281,9 @@ pub fn ensemble_signal_with_override(
 
         if ensemble_prob > buy_thresh {
             "BUY"
-        } else if ensemble_prob < short_thresh && downs >= (n_models + 1) / 2 && (ensemble_prob - 0.5).abs() > (buy_thresh - 0.5) {
-            // SHORT: strong bearish conviction matching BUY-level confidence
-            "SHORT"
-        } else if ensemble_prob < sell_thresh && downs >= (n_models + 1) / 2 {
-            // SELL only when prob is low AND majority of models predict down
+        } else if ensemble_prob < sell_thresh {
             "SELL"
         } else {
-            // Default to HOLD — avoids false SELL signals from marginal BUY failure
             "HOLD"
         }
     };
@@ -1053,9 +1291,10 @@ pub fn ensemble_signal_with_override(
     let confidence = if !can_signal {
         0.0
     } else {
-        let raw = (ensemble_prob - 0.5).abs() * 200.0;
-        let accuracy_cap = (avg_accuracy - 50.0).max(0.0) * 2.0;
-        raw.min(accuracy_cap).min(best_overall - 50.0)
+        // Normalised to 0–1 range (matches backtest_walkforward.rs)
+        let raw = (ensemble_prob - 0.5).abs() * 2.0;
+        let accuracy_cap = ((avg_accuracy - 50.0).max(0.0) / 50.0).min(1.0);
+        raw.min(accuracy_cap).min(((best_overall - 50.0) / 50.0).min(1.0))
     };
 
     let wf_accuracy = wf.linear_accuracy * lw
@@ -1328,6 +1567,534 @@ pub fn signals_html(signals: &[TradingSignal]) -> String {
         Assets with NO EDGE are forced to HOLD. Not financial advice.</em></p>\n");
 
     html
+}
+
+// ════════════════════════════════════════
+// Regression Ensemble — Return Prediction
+// ════════════════════════════════════════
+
+/// Walk-forward regression results (Ridge + LightGBM + GRU)
+pub struct RegressionResult {
+    pub symbol: String,
+    pub ridge_mae: f64,
+    pub lgbm_mae: f64,
+    pub gru_mae: f64,
+    pub ridge_dir_acc: f64,
+    pub lgbm_dir_acc: f64,
+    pub gru_dir_acc: f64,
+    pub ridge_return: f64,
+    pub lgbm_return: f64,
+    pub gru_return: f64,
+    pub has_lgbm: bool,
+    pub has_gru: bool,
+    pub n_folds: usize,
+    pub total_test_samples: usize,
+    pub n_features: usize,
+    pub lgbm_importance: Vec<(String, f64)>,
+    pub norm_means: Vec<f64>,
+    pub norm_stds: Vec<f64>,
+    /// Platt calibration params for regression ensemble probability
+    pub platt_params: Option<PlattParams>,
+}
+
+/// Walk-forward regression evaluation with Ridge, LightGBM Regressor, and GRU.
+/// Labels are continuous percentage returns (not binary UP/DOWN).
+pub fn walk_forward_regression(
+    symbol: &str,
+    samples: &[Sample],
+    train_window: usize,
+    test_window: usize,
+    step: usize,
+) -> Option<RegressionResult> {
+    // Embargo: skip 5 samples between train and test to prevent autocorrelation leakage
+    const EMBARGO: usize = 5;
+
+    if samples.len() < train_window + EMBARGO + test_window + 10 {
+        println!("  {} — not enough samples for regression walk-forward ({}, need {})",
+            symbol, samples.len(), train_window + EMBARGO + test_window);
+        return None;
+    }
+
+    let n_features = samples[0].features.len();
+    println!("  {} — regression walk-forward on {} samples × {} features (embargo={})",
+        symbol, samples.len(), n_features, EMBARGO);
+
+    // Accumulators for Ridge + LightGBM (pointwise models)
+    let mut total_ridge_ae = 0.0_f64;
+    let mut total_lgbm_ae = 0.0_f64;
+    let mut total_ridge_dir = 0_usize;
+    let mut total_lgbm_dir = 0_usize;
+    let mut total_tested = 0_usize;
+    let mut n_folds = 0_usize;
+    let mut has_lgbm = false;
+
+    let mut last_ridge_pred = 0.0_f64;
+    let mut last_lgbm_pred = 0.0_f64;
+    let mut last_lgbm_importance = Vec::new();
+    let mut last_norm_means = Vec::new();
+    let mut last_norm_stds = Vec::new();
+    // Collect (ensemble_probability, actual_up) for Platt calibration
+    let mut platt_data: Vec<(f64, bool)> = Vec::new();
+
+    let mut start = 0;
+    while start + train_window + EMBARGO + test_window <= samples.len() {
+        let train_end = start + train_window;
+        let test_start = train_end + EMBARGO; // Skip embargo samples
+        let test_end = (test_start + test_window).min(samples.len());
+
+        // Build train from [start..train_end], test from [test_start..test_end]
+        let mut train_data: Vec<Sample> = samples[start..train_end].to_vec();
+        let mut test_data: Vec<Sample> = samples[test_start..test_end].to_vec();
+
+        let (means, stds) = ml::normalise(&mut train_data);
+        ml::apply_normalisation(&mut test_data, &means, &stds);
+
+        last_norm_means = means;
+        last_norm_stds = stds;
+
+        let recency_weights = compute_recency_weights(train_data.len());
+
+        // Extract features and continuous labels
+        let x_train: Vec<Vec<f64>> = train_data.iter().map(|s| s.features.clone()).collect();
+        let y_train: Vec<f64> = train_data.iter().map(|s| s.label).collect();
+
+        let val_start = (x_train.len() as f64 * 0.85) as usize;
+        let (x_t, x_v) = x_train.split_at(val_start);
+        let (y_t, y_v) = y_train.split_at(val_start);
+
+        // === Ridge ===
+        let ridge = RidgeRegression::train(x_t, y_t, 10.0);
+
+        // === LightGBM Regressor ===
+        let lgbm_recency: Vec<f64> = recency_weights[..x_t.len()].to_vec();
+        let lgbm_config = LGBMRegressorConfig::default();
+        let lgbm_model = LightGBMRegressor::train(
+            x_t, y_t, Some(&lgbm_recency), Some(x_v), Some(y_v), &lgbm_config,
+        );
+
+        // === Evaluate on test data ===
+        for s in test_data.iter() {
+            let actual = s.label;
+            let mut ridge_pred = 0.0_f64;
+            let mut lgbm_pred = 0.0_f64;
+
+            if let Ok(ref r) = ridge {
+                let pred = r.predict(&s.features);
+                total_ridge_ae += (pred - actual).abs();
+                if (pred > 0.0) == (actual > 0.0) { total_ridge_dir += 1; }
+                last_ridge_pred = pred;
+                ridge_pred = pred;
+            }
+
+            if let Ok(ref m) = lgbm_model {
+                let pred = m.predict_return(&s.features);
+                total_lgbm_ae += (pred - actual).abs();
+                if (pred > 0.0) == (actual > 0.0) { total_lgbm_dir += 1; }
+                last_lgbm_pred = pred;
+                has_lgbm = true;
+                lgbm_pred = pred;
+            }
+
+            // Collect calibration data: ensemble return → probability of UP
+            let ensemble_return = if has_lgbm {
+                (ridge_pred + lgbm_pred) / 2.0
+            } else {
+                ridge_pred
+            };
+            let ensemble_prob = 0.5 + ensemble_return.clamp(-5.0, 5.0) / 10.0;
+            platt_data.push((ensemble_prob, actual > 0.0));
+
+            total_tested += 1;
+        }
+
+        // Feature importance for GRU feature selection
+        if let Ok(ref m) = lgbm_model {
+            let feat_names: Vec<String> = {
+                let rich = crate::features::feature_names();
+                if n_features == rich.len() { rich }
+                else { (0..n_features).map(|i| format!("Feature_{}", i)).collect() }
+            };
+            let feat_refs: Vec<&str> = feat_names.iter().map(|s| s.as_str()).collect();
+            last_lgbm_importance = m.feature_importance(&feat_refs);
+        }
+
+        n_folds += 1;
+        start += step;
+    }
+
+    if n_folds == 0 || total_tested == 0 {
+        return None;
+    }
+
+    let ridge_mae = total_ridge_ae / total_tested as f64;
+    let lgbm_mae = if has_lgbm { total_lgbm_ae / total_tested as f64 } else { f64::NAN };
+    let ridge_dir_acc = total_ridge_dir as f64 / total_tested as f64;
+    let lgbm_dir_acc = if has_lgbm { total_lgbm_dir as f64 / total_tested as f64 } else { 0.0 };
+
+    println!("    Ridge:   MAE={:.4}, Dir Acc={:.1}%", ridge_mae, ridge_dir_acc * 100.0);
+    if has_lgbm {
+        println!("    LightGBM: MAE={:.4}, Dir Acc={:.1}%", lgbm_mae, lgbm_dir_acc * 100.0);
+    }
+
+    // === GRU Regression walk-forward ===
+    // Select top 30 features from LightGBM importance for GRU input
+    let top_feature_indices: Vec<usize> = if !last_lgbm_importance.is_empty() {
+        let mut indexed: Vec<(usize, f64)> = last_lgbm_importance.iter()
+            .enumerate()
+            .map(|(i, (_name, imp))| (i, *imp))
+            .collect();
+        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        indexed.iter().take(30).map(|(idx, _)| *idx).collect()
+    } else {
+        (0..n_features.min(30)).collect()
+    };
+
+    let gru_n_features = if top_feature_indices.len() >= 20 { top_feature_indices.len() } else { n_features };
+    let gru_feature_indices = if top_feature_indices.len() >= 20 { Some(top_feature_indices.as_slice()) } else { None };
+
+    println!("    [GRU-Reg] Using top {} features for GRU input", gru_n_features);
+
+    let gru_config = GRURegressionConfig {
+        input_size: gru_n_features,
+        ..GRURegressionConfig::default()
+    };
+
+    let (gru_mae, gru_dir_acc, last_gru_pred, has_gru) = walk_forward_gru_regression(
+        symbol, samples, &gru_config, train_window, test_window, step, gru_feature_indices,
+    );
+
+    // Fit Platt calibration on out-of-fold predictions
+    let platt_params = fit_platt_scaling(&platt_data);
+    if let Some(ref pp) = platt_params {
+        println!("    Platt calibration: A={:.4} B={:.4} ({} samples)", pp.a, pp.b, platt_data.len());
+    }
+
+    println!("    Regression walk-forward: {} folds, {} test samples", n_folds, total_tested);
+
+    Some(RegressionResult {
+        symbol: symbol.to_string(),
+        ridge_mae,
+        lgbm_mae,
+        gru_mae,
+        ridge_dir_acc,
+        lgbm_dir_acc,
+        gru_dir_acc,
+        ridge_return: last_ridge_pred,
+        lgbm_return: last_lgbm_pred,
+        gru_return: last_gru_pred,
+        has_lgbm,
+        has_gru,
+        n_folds,
+        total_test_samples: total_tested,
+        n_features,
+        lgbm_importance: last_lgbm_importance,
+        norm_means: last_norm_means,
+        norm_stds: last_norm_stds,
+        platt_params,
+    })
+}
+
+/// GRU regression walk-forward (separate due to sequence construction)
+fn walk_forward_gru_regression(
+    _symbol: &str,
+    samples: &[Sample],
+    config: &GRURegressionConfig,
+    train_window: usize,
+    test_window: usize,
+    step: usize,
+    feature_indices: Option<&[usize]>,
+) -> (f64, f64, f64, bool) {
+    // Returns (mae, dir_acc, last_pred, has_gru)
+    const EMBARGO: usize = 5;
+    let seq_len = config.seq_length;
+    if samples.len() < train_window + EMBARGO + test_window + seq_len {
+        println!("    [GRU-Reg] Not enough samples for walk-forward");
+        return (f64::NAN, 0.0, 0.0, false);
+    }
+
+    let mut total_ae = 0.0_f64;
+    let mut total_dir_correct = 0_usize;
+    let mut total_tested = 0_usize;
+    let mut n_folds = 0_usize;
+    let mut last_pred = 0.0_f64;
+
+    let mut start = 0;
+    while start + train_window + EMBARGO + test_window <= samples.len() {
+        let train_end = start + train_window;
+        let test_start = train_end + EMBARGO;
+        let test_end = (test_start + test_window).min(samples.len());
+
+        let mut train_data: Vec<Sample> = samples[start..train_end].to_vec();
+        let mut test_data: Vec<Sample> = samples[test_start..test_end].to_vec();
+        let (means, stds) = ml::normalise(&mut train_data);
+        ml::apply_normalisation(&mut test_data, &means, &stds);
+
+        let val_split = (train_data.len() as f64 * 0.85) as usize;
+        let (train_part, val_part) = train_data.split_at(val_split);
+
+        let fold_config = GRURegressionConfig {
+            input_size: config.input_size,
+            ..*config
+        };
+
+        let mut model = match GRURegressionModel::new(fold_config) {
+            Ok(m) => m,
+            Err(e) => {
+                println!("    [GRU-Reg] Failed to create model: {}", e);
+                start += step;
+                continue;
+            }
+        };
+
+        match model.train_regression(train_part, val_part, feature_indices) {
+            Ok(result) => {
+                if result.epochs_trained == 0 {
+                    start += step;
+                    continue;
+                }
+            }
+            Err(e) => {
+                println!("    [GRU-Reg] Training failed: {}", e);
+                start += step;
+                continue;
+            }
+        }
+
+        // Build test sequences with continuous labels
+        let test_seqs = crate::lstm::build_sequences_regression(&test_data, seq_len, feature_indices);
+        if test_seqs.is_empty() {
+            start += step;
+            continue;
+        }
+
+        for seq in &test_seqs {
+            let pred = model.predict_return(&seq.features).unwrap_or(0.0);
+            let pred = if pred.is_finite() { pred } else { 0.0 };
+            total_ae += (pred - seq.label).abs();
+            if (pred > 0.0) == (seq.label > 0.0) { total_dir_correct += 1; }
+            last_pred = pred;
+        }
+
+        total_tested += test_seqs.len();
+        n_folds += 1;
+
+        let fold_acc = if !test_seqs.is_empty() {
+            let correct: usize = test_seqs.iter().filter(|s| {
+                let p = model.predict_return(&s.features).unwrap_or(0.0);
+                (p > 0.0) == (s.label > 0.0)
+            }).count();
+            correct as f64 / test_seqs.len() as f64 * 100.0
+        } else { 0.0 };
+        println!("    [GRU-Reg] Fold {}: {} seqs, dir_acc={:.1}%", n_folds, test_seqs.len(), fold_acc);
+
+        start += step;
+    }
+
+    if n_folds == 0 || total_tested == 0 {
+        println!("    [GRU-Reg] No successful folds");
+        return (f64::NAN, 0.0, 0.0, false);
+    }
+
+    let mae = total_ae / total_tested as f64;
+    let dir_acc = total_dir_correct as f64 / total_tested as f64;
+    println!("    GRU-Reg:  MAE={:.4}, Dir Acc={:.1}% ({} folds, {} seqs)", mae, dir_acc * 100.0, n_folds, total_tested);
+
+    (mae, dir_acc, last_pred, true)
+}
+
+/// Generate a trading signal from regression predictions.
+/// `asset_class`: "stock", "crypto", or "fx" — determines thresholds.
+/// GRU is excluded from the ensemble (contributes noise at 45-48% regardless of outcome).
+pub fn regression_signal(
+    symbol: &str,
+    result: &RegressionResult,
+    current_price: f64,
+    rsi: f64,
+    sma_trend: &str,
+    asset_class: &str,
+) -> TradingSignal {
+    // Weight models by inverse MAE (lower error = higher weight)
+    // GRU excluded — contributes noise (Phase 1.4)
+    let ridge_w = if result.ridge_mae > 0.0 && result.ridge_mae.is_finite() {
+        1.0 / result.ridge_mae
+    } else { 0.0 };
+    let lgbm_w = if result.has_lgbm && result.lgbm_mae > 0.0 && result.lgbm_mae.is_finite() {
+        1.0 / result.lgbm_mae
+    } else { 0.0 };
+    // GRU weight forced to zero
+    let gru_w = 0.0_f64;
+
+    let total_w = ridge_w + lgbm_w + gru_w;
+    let (rw, lw, gw) = if total_w > 0.0 {
+        (ridge_w / total_w, lgbm_w / total_w, gru_w / total_w)
+    } else {
+        (1.0, 0.0, 0.0) // fallback to ridge only
+    };
+
+    let ensemble_return = rw * result.ridge_return
+        + lw * result.lgbm_return
+        + gw * result.gru_return;
+
+    // Asset-class-specific return thresholds
+    let threshold = match asset_class {
+        "crypto" => 1.0,
+        "fx" => 0.2,
+        _ => 0.5, // stocks, ETFs, commodities
+    };
+
+    // Phase 4.1: Require Ridge and LightGBM to agree on direction before signalling
+    let ridge_up = result.ridge_return > 0.0;
+    let lgbm_up = result.has_lgbm && result.lgbm_return > 0.0;
+    let models_disagree = result.has_lgbm && (ridge_up != lgbm_up);
+
+    let signal = if models_disagree {
+        "HOLD" // Ridge and LightGBM disagree → abstain
+    } else if ensemble_return > threshold {
+        "BUY"
+    } else if ensemble_return < -threshold {
+        "SELL"
+    } else {
+        "HOLD"
+    };
+
+    // Phase 4.4: Confidence-based signal filtering
+    // Only emit signal when confidence exceeds threshold
+    let raw_confidence = (ensemble_return.abs() / 2.0).min(1.0);
+    let signal = if signal != "HOLD" && raw_confidence < 0.25 {
+        "HOLD" // Insufficient confidence, abstain
+    } else {
+        signal
+    };
+
+    // Signal strength: 0-1 range based on predicted return magnitude
+    let signal_strength = raw_confidence;
+
+    // Map predicted return to probability-like value for backward compat
+    // 0.5 + return.clamp(-5, 5) / 10.0
+    let ensemble_prob = 0.5 + ensemble_return.clamp(-5.0, 5.0) / 10.0;
+
+    // Count directional agreement (only Ridge + LightGBM, GRU excluded)
+    let mut ups = 0_usize;
+    let mut n_models = 1; // Ridge always present
+    if result.ridge_return > 0.0 { ups += 1; }
+    if result.has_lgbm {
+        n_models += 1;
+        if result.lgbm_return > 0.0 { ups += 1; }
+    }
+    let models_agree = ups.max(n_models - ups);
+
+    // Weighted directional accuracy as walk-forward metric
+    let wf_accuracy = rw * result.ridge_dir_acc * 100.0
+        + lw * result.lgbm_dir_acc * 100.0
+        + gw * result.gru_dir_acc * 100.0;
+
+    let signal_quality = if wf_accuracy >= 55.0 {
+        "HIGH"
+    } else if wf_accuracy >= 52.0 {
+        "MEDIUM"
+    } else if wf_accuracy >= 50.0 {
+        "LOW"
+    } else {
+        "NO EDGE"
+    };
+
+    TradingSignal {
+        symbol: symbol.to_string(),
+        signal: signal.to_string(),
+        confidence: signal_strength,
+        ensemble_prob,
+        linear_prob: 0.5 + result.ridge_return.clamp(-5.0, 5.0) / 10.0,
+        logistic_prob: 0.0, // not used in regression ensemble
+        gbt_prob: 0.0,      // not used in regression ensemble
+        lgbm_prob: if result.has_lgbm { 0.5 + result.lgbm_return.clamp(-5.0, 5.0) / 10.0 } else { 0.5 },
+        lstm_prob: 0.0,      // not used in regression ensemble
+        gru_prob: if result.has_gru { 0.5 + result.gru_return.clamp(-5.0, 5.0) / 10.0 } else { 0.5 },
+        rf_prob: 0.0,        // not used in regression ensemble
+        linear_weight: rw,
+        logistic_weight: 0.0,
+        gbt_weight: 0.0,
+        lgbm_weight: lw,
+        lstm_weight: 0.0,
+        gru_weight: gw,
+        rf_weight: 0.0,
+        models_agree,
+        n_models,
+        walk_forward_accuracy: wf_accuracy,
+        signal_quality: signal_quality.to_string(),
+        current_price,
+        rsi,
+        sma_trend: sma_trend.to_string(),
+        has_lstm: false,
+        has_gru: result.has_gru,
+        has_rf: false,
+        has_lgbm: result.has_lgbm,
+        llm_sentiment: 0.0,
+        llm_analysis: None,
+    }
+}
+
+/// Multi-horizon confirmation: only emit BUY/SELL when both 1d and 5d models agree.
+/// Returns the confirmed signal (may be downgraded to HOLD if horizons disagree).
+pub fn multi_horizon_signal(
+    signal_1d: &str,
+    _result_1d: &RegressionResult,
+    result_5d: Option<&RegressionResult>,
+    asset_class: &str,
+) -> String {
+    // If no 5d model available, pass through the 1d signal
+    let result_5d = match result_5d {
+        Some(r) => r,
+        None => return signal_1d.to_string(),
+    };
+
+    // Only filter actionable signals
+    if signal_1d == "HOLD" {
+        return signal_1d.to_string();
+    }
+
+    // 5-day threshold (higher bar since longer horizon should show stronger moves)
+    let threshold_5d = match asset_class {
+        "crypto" => 2.0,   // 2.0% for 5-day crypto
+        "fx" => 0.4,       // 0.4% for 5-day FX
+        _ => 1.0,          // 1.0% for 5-day stocks
+    };
+
+    // Compute 5d ensemble return (Ridge + LGBM, GRU excluded)
+    let ridge_w = if result_5d.ridge_mae > 0.0 && result_5d.ridge_mae.is_finite() {
+        1.0 / result_5d.ridge_mae
+    } else { 0.0 };
+    let lgbm_w = if result_5d.has_lgbm && result_5d.lgbm_mae > 0.0 && result_5d.lgbm_mae.is_finite() {
+        1.0 / result_5d.lgbm_mae
+    } else { 0.0 };
+    let total_w = ridge_w + lgbm_w;
+    let ensemble_5d = if total_w > 0.0 {
+        (ridge_w * result_5d.ridge_return + lgbm_w * result_5d.lgbm_return) / total_w
+    } else {
+        result_5d.ridge_return
+    };
+
+    // Multi-horizon confirmation logic
+    match signal_1d {
+        "BUY" => {
+            if ensemble_5d > threshold_5d {
+                "BUY".to_string() // Both horizons agree: BUY
+            } else if ensemble_5d > 0.0 {
+                "BUY".to_string() // 5d positive but below threshold: still allow (weak confirmation)
+            } else {
+                "HOLD".to_string() // 5d says DOWN: override to HOLD
+            }
+        }
+        "SELL" | "SHORT" => {
+            if ensemble_5d < -threshold_5d {
+                signal_1d.to_string() // Both horizons agree: SELL
+            } else if ensemble_5d < 0.0 {
+                signal_1d.to_string() // 5d negative but above threshold: still allow
+            } else {
+                "HOLD".to_string() // 5d says UP: override to HOLD
+            }
+        }
+        _ => signal_1d.to_string(),
+    }
 }
 
 #[cfg(test)]

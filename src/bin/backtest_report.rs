@@ -21,6 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices = database.get_market_prices(ticker)?;
         market_histories.insert(ticker.to_string(), prices);
     }
+    market_histories.insert("HY_SPREAD".to_string(), database.get_market_prices("HY_SPREAD").unwrap_or_default());
+    market_histories.insert("BREAKEVEN_5Y".to_string(), database.get_market_prices("BREAKEVEN_5Y").unwrap_or_default());
     let market_context = features::build_market_context(&market_histories);
 
     let modes = [

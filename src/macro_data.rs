@@ -135,6 +135,22 @@ pub async fn fetch_fed_funds_rate(
     fetch_fred_series(client, "FEDFUNDS", api_key).await
 }
 
+/// Fetch ICE BofA High Yield credit spread (BAMLH0A0HYM2)
+pub async fn fetch_hy_spread(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
+    fetch_fred_series(client, "BAMLH0A0HYM2", api_key).await
+}
+
+/// Fetch 5-Year Breakeven Inflation Rate (T5YIE)
+pub async fn fetch_breakeven_inflation(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<Vec<(String, f64)>, Box<dyn std::error::Error>> {
+    fetch_fred_series(client, "T5YIE", api_key).await
+}
+
 /// Merged macro context with all macro indicators aligned by date
 #[derive(Debug, Clone, Default)]
 pub struct MacroIndicators {

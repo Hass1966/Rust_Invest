@@ -23,7 +23,7 @@ pub struct RandomForestConfig {
 impl Default for RandomForestConfig {
     fn default() -> Self {
         Self {
-            n_trees: 100,
+            n_trees: 300,
             max_depth: 5,
             min_samples_leaf: 5,
             min_samples_split: 10,
@@ -84,13 +84,31 @@ impl RandomForestClassifier {
             min_samples_split: config.min_samples_split,
         };
 
+        // Class-weighted sampling: over-sample minority class
+        let n_pos = y.iter().filter(|&&v| v > 0.5).count() as f64;
+        let n_neg = n_samples as f64 - n_pos;
+        let w_pos = if n_pos > 0.0 { n_samples as f64 / (2.0 * n_pos) } else { 1.0 };
+        let w_neg = if n_neg > 0.0 { n_samples as f64 / (2.0 * n_neg) } else { 1.0 };
+        let sample_weights: Vec<f64> = y.iter().map(|&label| {
+            if label > 0.5 { w_pos } else { w_neg }
+        }).collect();
+        // Build cumulative distribution for weighted sampling
+        let total_weight: f64 = sample_weights.iter().sum();
+        let cdf: Vec<f64> = sample_weights.iter().scan(0.0, |acc, &w| {
+            *acc += w / total_weight;
+            Some(*acc)
+        }).collect();
+
         let mut rng = SimpleRng::new(42);
         let mut trees = Vec::with_capacity(config.n_trees);
 
         for _t in 0..config.n_trees {
-            // Bootstrap sample (sample with replacement)
+            // Class-weighted bootstrap sample (sample with replacement)
             let bootstrap_indices: Vec<usize> = (0..n_samples)
-                .map(|_| rng.next_usize(n_samples))
+                .map(|_| {
+                    let r = rng.next_usize(10000) as f64 / 10000.0;
+                    cdf.partition_point(|&c| c < r).min(n_samples - 1)
+                })
                 .collect();
 
             // Random feature subset for this tree

@@ -40,6 +40,11 @@ pub const FEATURE_NAMES: &[&str] = &[
 // ── Feature engineering ──
 
 pub fn build_features(prices: &[f64], volumes: &[Option<f64>]) -> Vec<Sample> {
+    build_features_horizon(prices, volumes, 1)
+}
+
+/// Build features with a configurable prediction horizon (1 = next day, 5 = 5 days ahead).
+pub fn build_features_horizon(prices: &[f64], volumes: &[Option<f64>], horizon: usize) -> Vec<Sample> {
     if prices.len() < 35 {
         return vec![];
     }
@@ -47,7 +52,7 @@ pub fn build_features(prices: &[f64], volumes: &[Option<f64>]) -> Vec<Sample> {
     let mut samples = Vec::new();
     let start = 33; // need lookback for lagged features
 
-    for i in start..prices.len() - 1 {
+    for i in start..prices.len().saturating_sub(horizon) {
         let window = &prices[..=i];
 
         // Feature 1: RSI (14-day), normalised 0-1
@@ -115,8 +120,8 @@ pub fn build_features(prices: &[f64], volumes: &[Option<f64>]) -> Vec<Sample> {
             0.0
         };
 
-        // Label: tomorrow's return
-        let tomorrow_return = (prices[i + 1] - prices[i]) / prices[i] * 100.0;
+        // Label: return over the prediction horizon
+        let tomorrow_return = (prices[i + horizon] - prices[i]) / prices[i] * 100.0;
 
         samples.push(Sample {
             features: vec![
@@ -157,15 +162,24 @@ pub fn normalise(samples: &mut [Sample]) -> (Vec<f64>, Vec<f64>) {
             stds[j] += (f - means[j]).powi(2);
         }
     }
-    for s in stds.iter_mut() {
+    // Track which features are zero-variance (constant during training)
+    let mut zero_variance = vec![false; num_features];
+    for (j, s) in stds.iter_mut().enumerate() {
         *s = (*s / n).sqrt();
-        if *s == 0.0 { *s = 1.0; } // avoid division by zero
+        if *s < 1e-8 {
+            zero_variance[j] = true;
+            *s = 1.0; // avoid division by zero in normalisation formula
+        }
     }
 
-    // Apply normalisation
+    // Apply normalisation — zero out zero-variance features entirely
     for sample in samples.iter_mut() {
         for (j, f) in sample.features.iter_mut().enumerate() {
-            *f = (*f - means[j]) / stds[j];
+            if zero_variance[j] {
+                *f = 0.0; // constant feature → zero it out (no signal)
+            } else {
+                *f = (*f - means[j]) / stds[j];
+            }
         }
     }
 

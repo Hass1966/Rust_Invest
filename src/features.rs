@@ -1,6 +1,6 @@
 /// Comprehensive Feature Engineering Module
 /// ==========================================
-/// Expands from 14 features to 76 active features per sample (164 raw, 76 whitelisted).
+/// Expands from 14 features to 84 active features per sample (172 raw, 84 whitelisted).
 ///
 /// Feature categories:
 ///   A. Price-derived technical indicators (existing + new)
@@ -22,43 +22,29 @@ use std::collections::HashMap;
 // Feature selection — whitelist of features validated by Python comparison
 // ════════════════════════════════════════
 
+/// Top 30 features by LightGBM importance (2026-05-06 retrain, 351 assets).
+/// Excluded: autocorr_1d (#30, leaks at train/test boundary),
+///           consecutive_up_days (#81), consecutive_down_days (#83).
+/// Replaced with momentum_3d (#31).
 const KEPT_FEATURES: &[&str] = &[
-    // A: Price-derived technical (15)
-    "RSI_14", "RSI_7", "RSI_delta_3d", "MACD_hist", "MACD_hist_delta",
-    "BB_position", "BB_width", "SMA7_ratio", "SMA30_ratio", "SMA50_ratio",
-    "SMA200_ratio", "SMA_spread_50_200", "price_vs_52w_high", "price_vs_52w_low",
-    "daily_range_pct",
-    // B: Volume (3)
+    // Price-derived technical (5)
+    "BB_position", "BB_width", "daily_range_pct", "RSI_delta_3d", "price_vs_52w_high",
+    // Volume (3)
     "volume_ratio_20d", "volume_ratio_5d", "obv_slope_10d",
-    // C: Volatility (6)
-    "volatility_5d", "volatility_20d", "volatility_60d", "vol_ratio_5_20",
-    "atr_14d", "max_drawdown_20d",
-    // D: Momentum (5)
-    "momentum_1d", "momentum_3d", "momentum_5d", "momentum_10d", "momentum_20d",
-    // F: Market context (11) — includes VIX_above_30 and risk_on_off
-    "VIX_level", "VIX_above_20", "VIX_above_30", "treasury_10y",
-    "treasury_spread", "SPY_return_1d", "SPY_return_5d",
-    "SPY_momentum_10d", "gold_return_5d", "dollar_return_5d", "risk_on_off",
-    // G: Lagged (1)
-    "lag1_return",
-    // H: Statistical (2)
-    "skewness_20d", "hurst_exponent_est",
-    // I: Cross-asset relative (2)
-    "stock_vs_sector_5d", "stock_vs_spy_5d",
-    // K: Extended macro (3)
-    "yield_spread_10y2y", "fed_funds_rate", "yield_curve_slope",
-    // N: Additional (2)
-    "quarter", "days_since_52w_high",
-    // P: Python-validated (12) — includes day_of_week_raw and month_raw
-    "vix_change_1d", "vix_sma10_dist", "tnx_change_5d", "irx_level",
-    "spy_ret_21d", "rel_strength_vs_spy_1d", "ret_2d", "ret_21d", "ret_63d",
-    "vol_ratio_21_63", "day_of_week_raw", "month_raw",
-    // Q: External (4)
-    "boe_rate", "uk_gilt_10y", "ecb_rate", "eu_inflation",
-    // R: Python-alignment features (10)
-    "vix_regime", "logret_1d", "logret_5d", "logret_21d",
-    "zscore_20", "zscore_50", "stoch_k", "stoch_d",
-    "price_pos_20d", "price_pos_63d",
+    // Volatility (3)
+    "volatility_5d", "vol_ratio_5_20", "atr_14d",
+    // Momentum & returns (5)
+    "momentum_1d", "momentum_3d", "lag1_return", "ret_2d", "ret_63d",
+    // Market context — SPY & gold (5)
+    "SPY_return_1d", "SPY_return_5d", "spy_ret_21d", "gold_return_5d", "dollar_return_5d",
+    // VIX features (4)
+    "vix_change_1d", "vix_9d_ratio", "vix_term_spread", "vix_sma10_dist",
+    // Cross-asset relative (2)
+    "rel_strength_vs_spy_1d", "gold_spy_ratio_10d",
+    // Statistical (2)
+    "hurst_exponent_est", "skew_delta_5d",
+    // Macro (1)
+    "tnx_change_5d",
 ];
 
 /// Return indices of features to keep (those IN the kept list)
@@ -100,6 +86,12 @@ pub fn prune_features(samples: &[Sample]) -> Vec<Sample> {
 pub struct MarketContext {
     /// VIX daily close (fear index)
     pub vix: Vec<f64>,
+    /// 3-month VIX (^VIX3M) — term structure
+    pub vix_3m: Vec<f64>,
+    /// 9-day VIX (^VIX9D) — near-term fear
+    pub vix_9d: Vec<f64>,
+    /// CBOE SKEW index (^SKEW) — tail risk gauge
+    pub skew: Vec<f64>,
     /// 10-year treasury yield (^TNX)
     pub tnx: Vec<f64>,
     /// 2-year treasury yield (^IRX as proxy, actually 13-week)
@@ -112,11 +104,18 @@ pub struct MarketContext {
     pub gold_returns: Vec<f64>,
     /// USD index returns (DX-Y.NYB or UUP)
     pub dollar_returns: Vec<f64>,
+    /// ICE BofA HY credit spread (from FRED BAMLH0A0HYM2)
+    pub hy_spread: Vec<f64>,
+    /// 5-year breakeven inflation (from FRED T5YIE)
+    pub breakeven_5y: Vec<f64>,
 }
 
 /// Tickers we need to fetch for market context
 pub const MARKET_TICKERS: &[&str] = &[
     "^VIX",   // Volatility index
+    "^VIX3M", // 3-month VIX (term structure)
+    "^VIX9D", // 9-day VIX (near-term)
+    "^SKEW",  // CBOE SKEW index (tail risk)
     "^TNX",   // 10-year treasury yield
     "^IRX",   // 13-week treasury bill
     "XLK",    // Technology sector
@@ -139,44 +138,65 @@ pub fn sector_etf_for(symbol: &str) -> Option<&'static str> {
         "AAPL" | "MSFT" | "NVDA" | "AMD" | "QQQ" | "INTC" | "AVGO" | "CRM" | "ADBE" | "ORCL"
         | "SAP.DE" | "ARM" | "QCOM" | "TSM" | "IBM"
         | "NOW" | "INTU" | "AMAT" | "MU" | "LRCX" | "KLAC" | "SNPS" | "CDNS"
-        | "FTNT" | "PANW" | "CRWD" | "TEAM" | "ZS" | "DDOG" | "NET" | "MDB" | "SNOW" => Some("XLK"),
+        | "FTNT" | "PANW" | "CRWD" | "TEAM" | "ZS" | "DDOG" | "NET" | "MDB" | "SNOW"
+        | "FICO" | "DELL" | "HPQ" | "KEYS" | "TRMB" | "ANSS" | "TYL" | "MSTR" | "CPRT"
+        | "DARK.L" | "AUTO.L" => Some("XLK"),
         // Communication (XLC) — GOOGL/META per GICS classification
         "GOOGL" | "META" | "NFLX" | "DIS" | "CMCSA" | "VZ" | "T"
-        | "VOD.L" | "BT-A.L" | "WPP.L" => Some("XLC"),
+        | "VOD.L" | "BT-A.L" | "WPP.L"
+        | "CHTR" | "TMUS" | "EA" | "TTWO" => Some("XLC"),
         // Financials (XLF)
         "JPM" | "GS" | "BAC" | "WFC" | "MS" | "C" | "BLK" | "SCHW" | "DIA"
         | "HSBA.L" | "LLOY.L" | "BARC.L" | "NWG.L" | "LGEN.L" | "III.L" | "MNG.L"
         | "ALV.DE" | "V" | "MA" | "BRK-B" | "MMC" | "TRV" | "AFL"
-        | "AXP" | "COF" | "USB" | "PNC" | "TFC" | "SPGI" | "MCO" | "ICE" | "CME" | "CB" => Some("XLF"),
+        | "AXP" | "COF" | "USB" | "PNC" | "TFC" | "SPGI" | "MCO" | "ICE" | "CME" | "CB"
+        | "RJF" | "FITB" | "HBAN" | "CFG" | "MTB" | "ZION" | "KEY" | "NDAQ" | "CBOE"
+        | "AIG" | "ALL" | "MET" | "PRU" | "HIG" | "GL" | "FNF" | "WRB"
+        | "MSCI" | "MKTX"
+        | "STAN.L" | "AV.L" => Some("XLF"),
         // Energy (XLE)
         "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO"
         | "BP.L" | "SHEL.L" | "CNA.L" | "DCC.L" | "VDE" | "CL=F" | "USO"
-        | "HAL" | "BKR" | "DVN" | "FANG" => Some("XLE"),
+        | "HAL" | "BKR" | "DVN" | "FANG"
+        | "OXY" | "CTRA" | "MRO" | "APA" | "HES" => Some("XLE"),
         // Healthcare (XLV)
         "JNJ" | "UNH" | "LLY" | "PFE" | "MRNA" | "ABBV" | "TMO" | "ABT" | "BMY" | "AMGN"
         | "AZN.L" | "GSK.L" | "SAN.PA" | "MRK" | "CVS" | "CI" | "VHT" | "IHI" | "SNY"
         | "ELV" | "HUM" | "MOH" | "ISRG" | "BSX" | "SYK" | "MDT" | "EW"
-        | "REGN" | "VRTX" | "BIIB" | "GILD" => Some("XLV"),
+        | "REGN" | "VRTX" | "BIIB" | "GILD"
+        | "STE" | "WAT" | "A" | "DHR" | "ZBH" | "HOLX" | "DXCM" | "ALGN" | "TECH" | "BIO"
+        | "IDXX" | "WST" => Some("XLV"),
         // Industrials (XLI)
         "CAT" | "DE" | "MMM" | "HON" | "GE" | "EMR" | "LMT" | "RTX" | "NOC" | "BA" | "GD" | "UPS" | "FDX"
         | "RR.L" | "AIR.PA" | "SAF.PA" | "SIE.DE" | "MBG.DE" | "QQ.L" | "EXPN.L"
-        | "CSX" | "NSC" | "UNP" | "ETN" | "PH" | "ROK" | "IR" | "CARR" | "OTIS" => Some("XLI"),
+        | "CSX" | "NSC" | "UNP" | "ETN" | "PH" | "ROK" | "IR" | "CARR" | "OTIS"
+        | "PCAR" | "GNRC" | "SWK" | "TT" | "DOV" | "NDSN" | "GWW" | "FAST"
+        | "WM" | "RSG"
+        | "WEIR.L" | "RS1.L" => Some("XLI"),
         // Consumer Discretionary (XLY)
         "TSLA" | "AMZN" | "HD" | "NKE" | "SBUX" | "MCD" | "TGT" | "LOW"
         | "OR.PA" | "MC.PA" | "PSON.L"
         | "TJX" | "ORLY" | "AZO" | "DLTR" | "DG" | "YUM" | "CMG"
-        | "ABNB" | "BKNG" | "MAR" | "HLT" => Some("XLY"),
+        | "ABNB" | "BKNG" | "MAR" | "HLT"
+        | "ROST" | "ETSY" | "W" | "LULU" | "DPZ" | "WYNN" | "LVS" | "NCLH" | "RCL" | "CCL" | "POOL"
+        | "FRAS.L" | "BRBY.L" | "JD.L" | "PSN.L" | "BDEV.L" | "TW.L" => Some("XLY"),
         // Consumer Staples (XLP)
         "WMT" | "COST" | "PG" | "KO" | "PEP" | "PM" | "MO" | "CL"
         | "ULVR.L" | "IMB.L" | "BATS.L" | "DGE.L" | "TSCO.L" | "SBRY.L" | "CPG.L"
         | "GIS" => Some("XLP"),
         // Utilities (XLU)
-        "NG.L" | "SSE.L" | "DUK" | "NEE" | "SO" | "VPU" | "IDU" => Some("XLU"),
+        "NG.L" | "SSE.L" | "DUK" | "NEE" | "SO" | "VPU" | "IDU"
+        | "AWK" | "ED" | "AES" | "WEC" | "ES" | "CMS" | "DTE" | "EIX" | "FE"
+        | "PEG" | "PPL" | "AEP" | "XEL" | "EVRG" => Some("XLU"),
         // Materials (XLB)
         "GLEN.L" | "AAL.L" | "ANTO.L" | "BAS.DE" | "SMDS.L" | "MNDI.L"
-        | "LIN" | "APD" | "ECL" | "NEM" | "FCX" | "NUE" | "ALB" => Some("XLB"),
+        | "LIN" | "APD" | "ECL" | "NEM" | "FCX" | "NUE" | "ALB"
+        | "SHW" | "DD" | "PPG" | "VMC" | "MLM" | "CF" | "MOS" | "BALL" | "PKG" | "IP"
+        | "RIO.L" | "JMAT.L" | "CRDA.L" | "EVR.L" => Some("XLB"),
         // Real Estate (XLRE)
-        "AMT" | "VNQ" | "PLD" | "EQIX" | "PSA" | "EXR" | "AVB" | "EQR" | "O" => Some("XLRE"),
+        "AMT" | "VNQ" | "PLD" | "EQIX" | "PSA" | "EXR" | "AVB" | "EQR" | "O"
+        | "CCI" | "DLR" | "WELL" | "SPG" | "ARE" | "MAA" | "UDR" | "KIM"
+        | "LAND.L" | "SGRO.L" => Some("XLRE"),
         // SPY is the market itself
         "SPY" => Some("SPY"),
         _ => None,
@@ -388,6 +408,28 @@ pub fn feature_names() -> Vec<String> {
     names.push("price_pos_20d".into());          // Price position in 20-day range [0-1]
     names.push("price_pos_63d".into());          // Price position in 63-day range [0-1]
 
+    // S. Sector momentum & cross-asset features (8 features) — regime-aware rotation
+    names.push("sector_momentum_10d".into());    // 10-day return of asset's sector ETF (%)
+    names.push("sector_momentum_20d".into());    // 20-day return of asset's sector ETF (%)
+    names.push("sector_rank".into());            // Rank of sector among all sectors by 10d momentum (normalised 0-1)
+    names.push("sector_vs_spy_10d".into());      // Sector ETF 10d return minus SPY 10d return (%)
+    names.push("corr_with_sector_30d".into());   // 30-day rolling correlation with sector ETF
+    names.push("corr_with_spy_30d".into());      // 30-day rolling correlation with SPY
+    names.push("gold_spy_ratio_10d".into());     // 10-day change in GLD/SPY ratio (risk sentiment, %)
+    names.push("market_breadth".into());          // Fraction of sector ETFs with positive 10d momentum [0-1]
+
+    // T. VIX term structure, SKEW, VRP, FRED macro (10 features)
+    names.push("vix_term_slope".into());          // VIX3M/VIX - 1 (contango>0 = complacent, backwardation<0 = panic)
+    names.push("vix_9d_ratio".into());            // VIX9D/VIX (near-term skew)
+    names.push("vix_term_spread".into());         // VIX3M - VIX (absolute spread in vol points)
+    names.push("skew_level".into());              // CBOE SKEW index level (tail risk gauge)
+    names.push("skew_delta_5d".into());           // SKEW 5-day change
+    names.push("vrp".into());                     // Variance Risk Premium: VIX^2 - realised vol 20d^2
+    names.push("hy_spread".into());               // ICE BofA HY credit spread (FRED BAMLH0A0HYM2)
+    names.push("hy_spread_delta_5d".into());      // HY spread 5-day change
+    names.push("breakeven_5y".into());            // 5-year breakeven inflation (FRED T5YIE)
+    names.push("breakeven_delta_5d".into());      // Breakeven inflation 5-day change
+
     names
 }
 
@@ -560,6 +602,26 @@ pub fn build_rich_features_ext(
     ext_macro: Option<&ExtendedMacro>,
     crypto_enrich: Option<&CryptoEnrichmentFeatures>,
 ) -> Vec<Sample> {
+    build_rich_features_horizon(prices, volumes, timestamps, market, asset_type,
+        sector_etf, earnings_dates, fear_greed, ext_macro, crypto_enrich, 1)
+}
+
+/// Build features with configurable prediction horizon (in trading days).
+/// horizon=1: predict next-day return (default)
+/// horizon=5: predict 5-day forward return (smoother, more predictable)
+pub fn build_rich_features_horizon(
+    prices: &[f64],
+    volumes: &[Option<f64>],
+    timestamps: &[String],
+    market: Option<&MarketContext>,
+    asset_type: &str,
+    sector_etf: Option<&str>,
+    earnings_dates: Option<&[String]>,
+    fear_greed: Option<&[(String, f64)]>,
+    ext_macro: Option<&ExtendedMacro>,
+    crypto_enrich: Option<&CryptoEnrichmentFeatures>,
+    horizon: usize,
+) -> Vec<Sample> {
     let min_lookback = 260; // need 252 trading days + buffer for SMA200
     if prices.len() < min_lookback {
         // Fall back to shorter lookback if not enough data
@@ -586,7 +648,7 @@ pub fn build_rich_features_ext(
 
     let feat_count = feature_names().len();
 
-    for i in start..prices.len() - 1 {
+    for i in start..prices.len().saturating_sub(horizon) {
         let price = prices[i];
         let window = &prices[..=i];
 
@@ -790,8 +852,11 @@ pub fn build_rich_features_ext(
                 if idx < mkt.spy_returns.len() { mkt.spy_returns[idx] } else { 0.0 }
             };
             f.push(spy_r(mi) * 100.0);                             // SPY_return_1d (%)
-            let spy_5d_cum = mkt.spy_returns[mi.saturating_sub(4)..=mi.min(mkt.spy_returns.len().saturating_sub(1))]
-                .iter().sum::<f64>() * 100.0;
+            let spy_5d_cum = if mkt.spy_returns.is_empty() { 0.0 } else {
+                let end = mi.min(mkt.spy_returns.len() - 1);
+                let start = mi.saturating_sub(4).min(end);
+                mkt.spy_returns[start..=end].iter().sum::<f64>() * 100.0
+            };
             f.push(spy_5d_cum);                                      // SPY_return_5d (% cumulative)
 
             // SPY 10d momentum
@@ -1352,8 +1417,168 @@ pub fn build_rich_features_ext(
         f.push(price_pos(19));                                              // price_pos_20d [0,1]
         f.push(price_pos(62));                                              // price_pos_63d [0,1]
 
-        // ══ Label: next day return ══
-        let label = prices[i+1] - prices[i]; // positive = up
+        // ══ S. Sector momentum & cross-asset features (8) ══
+
+        // Compute all sector 10d cumulative returns for ranking
+        let all_sector_etfs = ["XLK", "XLF", "XLE", "XLV", "XLI", "XLC", "XLP", "XLY", "XLB", "XLU", "XLRE"];
+        let sector_10d_rets: Vec<(&str, f64)> = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            all_sector_etfs.iter().map(|&etf| {
+                let ret = mkt.sector_returns.get(etf)
+                    .filter(|v| v.len() > mi && mi >= 10)
+                    .map(|v| v[mi.saturating_sub(9)..=mi].iter().sum::<f64>())
+                    .unwrap_or(0.0);
+                (etf, ret)
+            }).collect()
+        } else {
+            all_sector_etfs.iter().map(|&etf| (etf, 0.0)).collect()
+        };
+
+        // sector_momentum_10d: 10-day return of asset's sector ETF (%)
+        let my_sector_10d = if let Some(etf) = sector_etf {
+            sector_10d_rets.iter().find(|(e, _)| *e == etf).map(|(_, r)| *r).unwrap_or(0.0)
+        } else { 0.0 };
+        f.push(my_sector_10d * 100.0);                                      // sector_momentum_10d (%)
+
+        // sector_momentum_20d: 20-day return of asset's sector ETF (%)
+        let my_sector_20d = if let (Some(mkt), Some(etf)) = (market, sector_etf) {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            mkt.sector_returns.get(etf)
+                .filter(|v| v.len() > mi && mi >= 20)
+                .map(|v| v[mi.saturating_sub(19)..=mi].iter().sum::<f64>())
+                .unwrap_or(0.0)
+        } else { 0.0 };
+        f.push(my_sector_20d * 100.0);                                      // sector_momentum_20d (%)
+
+        // sector_rank: rank of this asset's sector among all sectors by 10d momentum (normalised 0-1)
+        let sector_rank = if let Some(etf) = sector_etf {
+            let mut sorted_rets: Vec<f64> = sector_10d_rets.iter().map(|(_, r)| *r).collect();
+            sorted_rets.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)); // descending
+            let my_ret = sector_10d_rets.iter().find(|(e, _)| *e == etf).map(|(_, r)| *r).unwrap_or(0.0);
+            let rank = sorted_rets.iter().position(|&r| (r - my_ret).abs() < 1e-12).unwrap_or(sorted_rets.len()) + 1;
+            rank as f64 / sorted_rets.len().max(1) as f64
+        } else { 0.5 };
+        f.push(sector_rank);                                                 // sector_rank [0-1] (lower = better)
+
+        // sector_vs_spy_10d: sector ETF 10d return minus SPY 10d return (%)
+        let spy_10d_cum = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            if mkt.spy_returns.len() > mi && mi >= 10 {
+                mkt.spy_returns[mi.saturating_sub(9)..=mi].iter().sum::<f64>()
+            } else { 0.0 }
+        } else { 0.0 };
+        f.push((my_sector_10d - spy_10d_cum) * 100.0);                      // sector_vs_spy_10d (%)
+
+        // corr_with_sector_30d: 30-day rolling correlation with sector ETF
+        let corr_sector = if let (Some(mkt), Some(etf)) = (market, sector_etf) {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            if let Some(sector_v) = mkt.sector_returns.get(etf) {
+                if mi >= 29 && mi < sector_v.len() && i >= 30 {
+                    let asset_rets: Vec<f64> = (0..30).map(|j| {
+                        let idx = i.saturating_sub(j);
+                        if idx > 0 { safe_div(prices[idx] - prices[idx-1], prices[idx-1]) } else { 0.0 }
+                    }).collect();
+                    let sector_rets_30: Vec<f64> = (0..30).map(|j| {
+                        sector_v[mi.saturating_sub(j)]
+                    }).collect();
+                    correlation(&asset_rets, &sector_rets_30)
+                } else { 0.0 }
+            } else { 0.0 }
+        } else { 0.0 };
+        f.push(corr_sector);                                                 // corr_with_sector_30d [-1, 1]
+
+        // corr_with_spy_30d: 30-day rolling correlation with SPY
+        let corr_spy = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            if mi >= 29 && i >= 30 {
+                let asset_rets: Vec<f64> = (0..30).map(|j| {
+                    let idx = i.saturating_sub(j);
+                    if idx > 0 { safe_div(prices[idx] - prices[idx-1], prices[idx-1]) } else { 0.0 }
+                }).collect();
+                let spy_rets_30: Vec<f64> = (0..30).map(|j| {
+                    if mi.saturating_sub(j) < mkt.spy_returns.len() { mkt.spy_returns[mi.saturating_sub(j)] } else { 0.0 }
+                }).collect();
+                correlation(&asset_rets, &spy_rets_30)
+            } else { 0.0 }
+        } else { 0.0 };
+        f.push(corr_spy);                                                    // corr_with_spy_30d [-1, 1]
+
+        // gold_spy_ratio_10d: 10-day change in GLD/SPY price ratio (risk sentiment)
+        let gold_spy_ratio_change = if let Some(mkt) = market {
+            let mi = (i.saturating_sub(1)).min(mkt.spy_returns.len().saturating_sub(1));
+            if mi >= 10 && !mkt.gold_returns.is_empty() && !mkt.spy_returns.is_empty() {
+                // Cumulative returns as proxies for price ratio change
+                let gold_10d: f64 = mkt.gold_returns[mi.saturating_sub(9)..=mi.min(mkt.gold_returns.len()-1)].iter().sum();
+                let spy_10d_r: f64 = mkt.spy_returns[mi.saturating_sub(9)..=mi].iter().sum();
+                (gold_10d - spy_10d_r) * 100.0  // positive = gold outperforming (risk-off)
+            } else { 0.0 }
+        } else { 0.0 };
+        f.push(gold_spy_ratio_change);                                       // gold_spy_ratio_10d (%)
+
+        // market_breadth: fraction of sector ETFs with positive 10d momentum [0-1]
+        let positive_sectors = sector_10d_rets.iter().filter(|(_, r)| *r > 0.0).count();
+        let breadth = positive_sectors as f64 / sector_10d_rets.len().max(1) as f64;
+        f.push(breadth);                                                      // market_breadth [0-1]
+
+        // ══ T. VIX term structure, SKEW, VRP, FRED macro (10 features) ══
+        if let Some(ctx) = market {
+            let mi = (i.saturating_sub(1)).min(ctx.vix.len().saturating_sub(1));
+
+            // vix_term_slope: VIX3M/VIX - 1 (contango=complacent, backwardation=panic)
+            let vix_now = if mi < ctx.vix.len() { ctx.vix[mi] } else { 0.0 };
+            let vix3m_now = if mi < ctx.vix_3m.len() { ctx.vix_3m[mi] } else { 0.0 };
+            let vix9d_now = if mi < ctx.vix_9d.len() { ctx.vix_9d[mi] } else { 0.0 };
+            let vix_term_slope = if vix_now > 0.0 && vix3m_now > 0.0 { vix3m_now / vix_now - 1.0 } else { 0.0 };
+            f.push(vix_term_slope);                                           // vix_term_slope
+
+            // vix_9d_ratio: VIX9D/VIX (near-term panic ratio)
+            let vix_9d_ratio = if vix_now > 0.0 && vix9d_now > 0.0 { vix9d_now / vix_now } else { 1.0 };
+            f.push(vix_9d_ratio);                                             // vix_9d_ratio
+
+            // vix_term_spread: VIX3M - VIX (absolute vol points)
+            let vix_term_spread = if vix3m_now > 0.0 { vix3m_now - vix_now } else { 0.0 };
+            f.push(vix_term_spread);                                          // vix_term_spread
+
+            // skew_level: CBOE SKEW index (tail risk, normalised around 100)
+            let skew_now = if mi < ctx.skew.len() { ctx.skew[mi] } else { 0.0 };
+            f.push(skew_now / 100.0);                                         // skew_level (normalised)
+
+            // skew_delta_5d: SKEW 5-day change
+            let skew_5ago = if mi >= 5 && mi - 5 < ctx.skew.len() { ctx.skew[mi - 5] } else { skew_now };
+            f.push(if skew_5ago > 0.0 { (skew_now - skew_5ago) / skew_5ago * 100.0 } else { 0.0 }); // skew_delta_5d
+
+            // vrp: Variance Risk Premium = VIX^2 - realised_vol_20d^2
+            let realised_vol_20d_sq = if i >= 20 {
+                let recent_rets: Vec<f64> = (i-19..=i).map(|j| (prices[j] - prices[j-1]) / prices[j-1]).collect();
+                let rv_mean = recent_rets.iter().sum::<f64>() / recent_rets.len() as f64;
+                let rv_var = recent_rets.iter().map(|r| (r - rv_mean).powi(2)).sum::<f64>() / (recent_rets.len() - 1) as f64;
+                rv_var * 252.0 * 10000.0 // annualised variance in pct^2
+            } else { 0.0 };
+            let vix_sq = vix_now * vix_now;
+            f.push((vix_sq - realised_vol_20d_sq) / 100.0);                  // vrp (scaled)
+
+            // hy_spread: HY credit spread from FRED
+            let hy_now = if mi < ctx.hy_spread.len() { ctx.hy_spread[mi] } else { 0.0 };
+            f.push(hy_now);                                                   // hy_spread
+
+            // hy_spread_delta_5d
+            let hy_5ago = if mi >= 5 && mi - 5 < ctx.hy_spread.len() { ctx.hy_spread[mi - 5] } else { hy_now };
+            f.push(hy_now - hy_5ago);                                         // hy_spread_delta_5d
+
+            // breakeven_5y: 5-year breakeven inflation from FRED
+            let be_now = if mi < ctx.breakeven_5y.len() { ctx.breakeven_5y[mi] } else { 0.0 };
+            f.push(be_now);                                                   // breakeven_5y
+
+            // breakeven_delta_5d
+            let be_5ago = if mi >= 5 && mi - 5 < ctx.breakeven_5y.len() { ctx.breakeven_5y[mi - 5] } else { be_now };
+            f.push(be_now - be_5ago);                                         // breakeven_delta_5d
+        } else {
+            // No market context — push 10 zeros
+            for _ in 0..10 { f.push(0.0); }
+        }
+
+        // ══ Label: forward percentage return over `horizon` days ══
+        let label = (prices[i + horizon] - prices[i]) / prices[i] * 100.0; // percentage return
 
         debug_assert_eq!(f.len(), feat_count,
             "Feature count mismatch: expected {}, got {}", feat_count, f.len());
@@ -1543,14 +1768,27 @@ pub fn build_market_context(
         sector_returns.insert(ticker.to_string(), returns_vec(&prices));
     }
 
+    let vix_3m = histories.get("^VIX3M").cloned().unwrap_or_default();
+    let vix_9d = histories.get("^VIX9D").cloned().unwrap_or_default();
+    let skew = histories.get("^SKEW").cloned().unwrap_or_default();
+
+    // FRED series stored via market_history (populated by train)
+    let hy_spread = histories.get("HY_SPREAD").cloned().unwrap_or_default();
+    let breakeven_5y = histories.get("BREAKEVEN_5Y").cloned().unwrap_or_default();
+
     MarketContext {
         vix,
+        vix_3m,
+        vix_9d,
+        skew,
         tnx,
         irx,
         sector_returns,
         spy_returns,
         gold_returns,
         dollar_returns,
+        hy_spread,
+        breakeven_5y,
     }
 }
 

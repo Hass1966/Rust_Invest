@@ -148,11 +148,15 @@ impl LSTMModel {
             });
         }
 
-        // Check label distribution
+        // Check label distribution and compute class weights for balanced BCE
         let n_up = train_seqs.iter().filter(|s| s.label > 0.5).count();
-        println!("    [LSTM] Label distribution: {:.1}% up, {:.1}% down",
-            n_up as f64 / train_seqs.len() as f64 * 100.0,
-            (train_seqs.len() - n_up) as f64 / train_seqs.len() as f64 * 100.0);
+        let n_down = train_seqs.len() - n_up;
+        let n_total = train_seqs.len() as f64;
+        let w_pos = if n_up > 0 { n_total / (2.0 * n_up as f64) } else { 1.0 };
+        let w_neg = if n_down > 0 { n_total / (2.0 * n_down as f64) } else { 1.0 };
+        println!("    [LSTM] Label distribution: {:.1}% up, {:.1}% down (class weights: pos={:.3}, neg={:.3})",
+            n_up as f64 / n_total * 100.0,
+            n_down as f64 / n_total * 100.0, w_pos, w_neg);
 
         let optim_config = candle_nn::ParamsAdamW {
             lr: self.config.learning_rate,
@@ -192,6 +196,11 @@ impl LSTMModel {
                     labels_data.push(sanitise_f32(seq.label as f32));
                 }
 
+                // Build per-sample class weight tensor before labels_data is consumed
+                let weight_data: Vec<f32> = labels_data.iter().map(|&l| {
+                    if l > 0.5 { w_pos as f32 } else { w_neg as f32 }
+                }).collect();
+
                 let input = Tensor::from_vec(
                     input_data,
                     (batch_size, seq_len, n_features),
@@ -218,8 +227,22 @@ impl LSTMModel {
                     continue; // skip this batch
                 }
 
-                // Binary cross-entropy with logits
-                let loss = candle_nn::loss::binary_cross_entropy_with_logit(&logits, &labels)?;
+                // Class-weighted binary cross-entropy with logits
+                let weights_t = Tensor::from_vec(
+                    weight_data,
+                    (batch_size, 1),
+                    get_device(),
+                )?;
+                // BCE with logits per sample: max(x,0) - x*y + log(1 + exp(-|x|))
+                let logits_abs = logits.abs()?;
+                let relu_logits = logits.relu()?;
+                let xy = (&logits * &labels)?;
+                let exp_neg_abs = logits_abs.neg()?.exp()?;
+                let ones = Tensor::ones_like(&exp_neg_abs)?;
+                let log_term = (&ones + &exp_neg_abs)?.log()?;
+                let bce_per_sample = ((&relu_logits - &xy)? + &log_term)?;
+                let weighted_bce = (&bce_per_sample * &weights_t)?;
+                let loss = weighted_bce.mean_all()?;
                 let loss_val = loss.to_scalar::<f32>()? as f64;
 
                 // Validate loss
@@ -495,6 +518,39 @@ pub fn build_sequences_with_subset(samples: &[Sample], seq_len: usize, feature_i
             .collect();
 
         let label = if samples[i].label > 0.0 { 1.0 } else { 0.0 };
+
+        sequences.push(Sequence { features, label });
+    }
+
+    sequences
+}
+
+/// Build sequences with continuous labels (for regression mode).
+/// Unlike build_sequences_with_subset which converts labels to binary (0/1),
+/// this passes through the raw continuous label (percentage return).
+pub fn build_sequences_regression(samples: &[Sample], seq_len: usize, feature_indices: Option<&[usize]>) -> Vec<Sequence> {
+    if samples.len() < seq_len + 1 {
+        return Vec::new();
+    }
+
+    let mut sequences = Vec::new();
+
+    for i in seq_len..samples.len() {
+        let features: Vec<Vec<f64>> = samples[i - seq_len..i]
+            .iter()
+            .map(|s| {
+                if let Some(indices) = feature_indices {
+                    indices.iter().map(|&idx| {
+                        if idx < s.features.len() { s.features[idx] } else { 0.0 }
+                    }).collect()
+                } else {
+                    s.features.clone()
+                }
+            })
+            .collect();
+
+        // Pass through continuous label (percentage return)
+        let label = samples[i].label;
 
         sequences.push(Sequence { features, label });
     }

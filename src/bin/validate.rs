@@ -129,6 +129,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices = database.get_market_prices(ticker).unwrap_or_default();
         market_histories.insert(ticker.to_string(), prices);
     }
+    market_histories.insert("HY_SPREAD".to_string(), database.get_market_prices("HY_SPREAD").unwrap_or_default());
+    market_histories.insert("BREAKEVEN_5Y".to_string(), database.get_market_prices("BREAKEVEN_5Y").unwrap_or_default());
     let market_context = features::build_market_context(&market_histories);
 
     // Load all price history for each allocated asset
@@ -203,6 +205,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut day_results: Vec<DayResult> = Vec::new();
     let mut total_correct = 0_usize;
     let mut total_signals = 0_usize;
+    let mut total_tx_costs = 0.0_f64;
+
+    // Track previous signals for tx cost on signal changes
+    let mut prev_signals: HashMap<String, String> = HashMap::new();
 
     // Build price lookup: asset → date → price
     let price_lookup: HashMap<String, HashMap<String, f64>> = asset_prices.iter()
@@ -266,10 +272,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 symbol, cls, date, &asset_prices, &market_context, &database, cfg.verbose,
             ).unwrap_or("HOLD".to_string());
 
-            // Apply return: BUY/HOLD → invested, SELL → cash
+            // Deduct tx cost on signal changes (10 bps round-trip for stocks)
+            let prev_sig = prev_signals.get(symbol).map(|s| s.as_str()).unwrap_or("HOLD");
+            let signal_changed = prev_sig != signal.as_str();
+            let tx = if signal_changed { backtest_compare::tx_cost(cls) } else { 0.0 };
+            if signal_changed {
+                total_tx_costs += tx * weight * portfolio_value;
+            }
+
+            // Apply return: BUY/HOLD → invested, SELL → cash, minus tx cost
             let contribution = match signal.as_str() {
-                "SELL" => 0.0,
-                _ => weight * actual_return,
+                "SELL" => -tx * weight,
+                _ => weight * actual_return - tx * weight,
             };
 
             day_weighted_return += contribution;
@@ -299,6 +313,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
 
+        // Update previous signals for next day's tx cost tracking
+        for sig in &day_signals {
+            prev_signals.insert(sig.asset.clone(), sig.signal.clone());
+        }
+
         // Compound
         portfolio_value *= 1.0 + day_weighted_return;
         total_correct += day_correct;
@@ -316,7 +335,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Print Results ──
 
-    print_results(&day_results, cfg.capital, total_correct, total_signals, &cfg);
+    print_results(&day_results, cfg.capital, total_correct, total_signals, total_tx_costs, &cfg);
 
     Ok(())
 }
@@ -454,6 +473,7 @@ fn infer_with_saved_models_quiet(
         lgbm_importance: Vec::new(),
         stacking_weights: None,
         val_log_loss: None,
+        platt_params: None,
     })
 }
 
@@ -472,6 +492,7 @@ fn print_results(
     starting_capital: f64,
     total_correct: usize,
     total_signals: usize,
+    total_tx_costs: f64,
     _cfg: &Config,
 ) {
     let final_value = days.last().map(|d| d.portfolio_value).unwrap_or(starting_capital);
@@ -555,6 +576,7 @@ fn print_results(
     println!("  Starting capital : £{:.0}", starting_capital);
     println!("  Final value      : {}", cyan(format!("£{:.2}", final_value)));
     println!("  Total return     : {}", fmt_pct(total_return));
+    println!("  Tx costs (est)   : {}", red(format!("£{:.2}", total_tx_costs)));
     println!("  Period           : {} trading days", days.len());
     println!();
 

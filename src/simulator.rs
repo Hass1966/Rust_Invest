@@ -66,6 +66,8 @@ pub fn build_market_context_from_db(database: &db::Database) -> features::Market
         let prices = database.get_market_prices(ticker).unwrap_or_default();
         market_histories.insert(ticker.to_string(), prices);
     }
+    market_histories.insert("HY_SPREAD".to_string(), database.get_market_prices("HY_SPREAD").unwrap_or_default());
+    market_histories.insert("BREAKEVEN_5Y".to_string(), database.get_market_prices("BREAKEVEN_5Y").unwrap_or_default());
     features::build_market_context(&market_histories)
 }
 
@@ -208,6 +210,7 @@ pub fn infer_with_cached(
         lgbm_importance: Vec::new(),
         stacking_weights: None,
         val_log_loss: None,
+        platt_params: None,
     })
 }
 
@@ -320,6 +323,7 @@ pub fn generate_signals_bulk(
             lgbm_importance: Vec::new(),
             stacking_weights: None,
             val_log_loss: None,
+            platt_params: None,
         };
 
         // Trend at j-1 (data available before signal date)
@@ -677,5 +681,6 @@ fn infer_quiet(symbol: &str, samples: &[ml::Sample]) -> Option<ensemble::WalkFor
         lgbm_importance: Vec::new(),
         stacking_weights: None,
         val_log_loss: None,
+        platt_params: None,
     })
 }

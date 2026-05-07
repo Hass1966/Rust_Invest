@@ -26,15 +26,29 @@ use chrono::{Utc, Datelike, Timelike, Weekday};
 // Application State
 // ════════════════════════════════════════
 
+/// Tracks data quality metrics for monitoring and alerting
+#[derive(Debug, Clone, Default)]
+struct DataQualityState {
+    pg_write_failures: u64,
+    pg_write_successes: u64,
+    last_pg_failure: Option<String>,
+    last_pg_failure_error: Option<String>,
+    last_successful_signal_write: Option<String>,
+    last_signal_generation: Option<String>,
+    stale_assets: Vec<String>,
+}
+
 #[derive(Clone)]
 struct AppState {
     signals: Arc<RwLock<HashMap<String, enriched_signals::EnrichedSignal>>>,
     asset_config: Arc<RwLock<config::AssetConfig>>,
+    regime: Arc<RwLock<Option<market_regime::MarketRegimeState>>>,
+    data_quality: Arc<RwLock<DataQualityState>>,
     db_path: String,
-    llm_provider: Option<llm::LlmProvider>,
     http_client: reqwest::Client,
     rate_limiter: auth::RateLimiter,
     oauth_config: Option<auth::OAuthConfig>,
+    pg_pool: pg::PgPool,
 }
 
 // ════════════════════════════════════════
@@ -42,7 +56,7 @@ struct AppState {
 // ════════════════════════════════════════
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║         ALPHA SIGNAL — SERVE MODE (Web API Server)             ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
@@ -66,16 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Loaded asset config: {} stocks, {} FX, {} crypto",
         asset_config.stocks.len(), asset_config.fx.len(), asset_config.crypto.len());
 
-    // Load LLM provider
-    let llm_provider = llm::load_provider();
-    match &llm_provider {
-        Some(llm::LlmProvider::Ollama { base_url, model }) =>
-            println!("  LLM: Ollama ({}) at {}", model, base_url),
-        Some(llm::LlmProvider::Anthropic { model, .. }) =>
-            println!("  LLM: Anthropic ({})", model),
-        None =>
-            println!("  LLM: Not configured (set LLM_PROVIDER in .env)"),
-    }
+    println!("  Chat: Rule-based summaries (no LLM required)");
 
     let oauth_config = auth::OAuthConfig::from_env();
     match &oauth_config {
@@ -83,14 +88,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => println!("  OAuth: Not configured (set GOOGLE_CLIENT_ID etc.)"),
     }
 
+    // PostgreSQL: single source of truth for signals + portfolio
+    let pg_pool = pg::create_pool()?;
+    {
+        let _conn = pg_pool.get().await?;
+        println!("  PostgreSQL: Connected to alpha_signal");
+    }
+
     let state = AppState {
         signals: Arc::new(RwLock::new(HashMap::new())),
         asset_config: Arc::new(RwLock::new(asset_config)),
+        regime: Arc::new(RwLock::new(None)),
+        data_quality: Arc::new(RwLock::new(DataQualityState::default())),
         db_path: "rust_invest.db".to_string(),
-        llm_provider,
         http_client: reqwest::Client::new(),
         rate_limiter: auth::RateLimiter::new(),
         oauth_config,
+        pg_pool,
     };
 
     // ── Startup database migrations ──
@@ -112,12 +126,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let sigs = state.signals.read().await;
         let signals_map = sigs.clone();
+        let signals_vec: Vec<enriched_signals::EnrichedSignal> = sigs.values().cloned().collect();
         drop(sigs);
         let db_path = state.db_path.clone();
         tokio::task::spawn_blocking(move || {
             batch_resolve_signal_history(&db_path, &signals_map);
             resolve_pending_predictions(&db_path, &signals_map);
         }).await.ok();
+
+        // Also resolve in Postgres
+        batch_resolve_signals_pg(&state.pg_pool, &signals_vec).await;
     }
 
     // Start hourly scheduler
@@ -246,6 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/config/assets", get(get_assets))
         .route("/api/v1/models/current", get(get_models))
         .route("/api/v1/models/reload", post(reload_models))
+        .route("/api/v1/retrain/:asset", post(retrain_asset))
         .route("/api/v1/signals/current", get(get_all_signals))
         .route("/api/v1/signals/current/stocks", get(get_stock_signals))
         .route("/api/v1/signals/current/fx", get(get_fx_signals))
@@ -253,7 +272,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/signals/history/:asset", get(get_signal_history))
         .route("/api/v1/portfolio/simulate", get(simulate_portfolio))
         .route("/api/v1/portfolio/daily-tracker", get(get_daily_tracker))
+        .route("/api/v1/portfolio/rebalance", post(compute_rebalance))
         .route("/api/v1/history/portfolio", get(get_portfolio_history))
+        .route("/api/v1/portfolio/live", get(get_portfolio_live))
         .route("/api/v1/history/signals", get(get_signals_history))
         .route("/api/v1/hints", get(get_hints))
         .route("/api/v1/simulate", post(simulate_signals))
@@ -285,6 +306,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/simulator/walkforward", get(get_walkforward_data))
         .route("/api/v1/portfolio/managed-simulation", get(get_managed_simulation))
         .route("/api/v1/deep-dive/:asset", get(get_deep_dive))
+        .route("/api/v1/market/regime", get(get_market_regime))
+        .route("/api/v1/sectors", get(get_sector_overview))
+        .route("/api/v1/sectors/backtest", get(get_sector_backtest))
+        // Agent endpoints (PostgreSQL)
+        .route("/api/v1/agent/status", get(get_agent_status))
+        .route("/api/v1/agent/actions", get(get_agent_actions))
+        .route("/api/v1/agent/metrics", get(get_agent_metrics))
+        .route("/api/v1/agent/approve/:action_id", post(approve_agent_action))
+        .route("/api/v1/agent/reject/:action_id", post(reject_agent_action))
+        .route("/api/v1/agent/config", get(get_agent_config).patch(update_agent_config))
+        .route("/api/v1/agent/summary", get(get_agent_summary))
+        // Fleet endpoints (6-agent fleet)
+        .route("/api/v1/agents/fleet", get(get_fleet_status_handler))
+        .route("/api/v1/agents/activity", get(get_fleet_activity_handler))
+        .route("/api/v1/portfolio/ftse", get(get_portfolio_ftse))
+        .route("/api/v1/system/health", get(get_system_health))
         .layer(cors.clone())
         .with_state(state);
 
@@ -293,6 +330,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let index = frontend_dist.join("index.html");
         app
             .nest_service("/assets", ServeDir::new(frontend_dist.join("assets")))
+            .nest_service("/app/assets", ServeDir::new(frontend_dist.join("assets")))
+            .nest_service("/app/vite.svg", ServeFile::new(frontend_dist.join("vite.svg")))
             .fallback_service(ServeFile::new(&index))
     } else {
         app
@@ -318,7 +357,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    POST /api/v1/chat");
     println!("    POST /api/v1/admin/assets");
     println!("    PATCH /api/v1/admin/assets/:symbol");
-    println!("    GET  /api/v1/predictions/history\n");
+    println!("    GET  /api/v1/predictions/history");
+    println!("    GET  /api/v1/market/regime");
+    println!("    GET  /api/v1/agent/status");
+    println!("    GET  /api/v1/agent/actions");
+    println!("    GET  /api/v1/agent/metrics");
+    println!("    POST /api/v1/agent/approve/:action_id");
+    println!("    POST /api/v1/agent/reject/:action_id");
+    println!("    GET/PATCH /api/v1/agent/config\n");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -328,8 +374,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 // API Handlers
 // ════════════════════════════════════════
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "ok", "timestamp": Utc::now().to_rfc3339()}))
+async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let regime = state.regime.read().await;
+    let regime_info = match &*regime {
+        Some(r) => serde_json::json!({
+            "regime": r.regime.to_string(),
+            "spy_return_20d_pct": r.spy_return_20d_pct,
+            "spy_return_10d_pct": r.spy_return_10d_pct,
+            "spy_return_5d_pct": r.spy_return_5d_pct,
+            "risk_score": r.risk_score,
+            "regime_strength": r.regime_strength,
+        }),
+        None => serde_json::json!(null),
+    };
+    Json(serde_json::json!({
+        "status": "ok",
+        "timestamp": Utc::now().to_rfc3339(),
+        "market_regime": regime_info,
+    }))
+}
+
+async fn get_market_regime(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let regime = state.regime.read().await;
+    match &*regime {
+        Some(r) => Json(serde_json::json!({
+            "regime": r.regime.to_string(),
+            "spy_return_20d_pct": r.spy_return_20d_pct,
+            "spy_return_10d_pct": r.spy_return_10d_pct,
+            "spy_return_5d_pct": r.spy_return_5d_pct,
+            "risk_score": r.risk_score,
+            "regime_strength": r.regime_strength,
+            "spy_price_current": r.spy_price_current,
+            "spy_price_20d_ago": r.spy_price_20d_ago,
+            "defensive_assets": r.defensive_assets,
+            "thresholds": {
+                "bear_below_pct": -3.0,
+                "bull_above_pct": 3.0,
+                "fast_drop_warning": -2.0,
+                "fast_drop_crisis": -5.0,
+            },
+            "timestamp": r.timestamp,
+        })),
+        None => Json(serde_json::json!({
+            "regime": "UNKNOWN",
+            "error": "Insufficient SPY data for regime calculation",
+        })),
+    }
+}
+
+async fn get_sector_overview(
+    State(state): State<AppState>,
+) -> Json<sector::SectorOverview> {
+    let sigs = state.signals.read().await;
+    let inputs: Vec<sector::SignalInput> = sigs.values().map(|s| {
+        sector::SignalInput {
+            asset: s.asset.clone(),
+            asset_class: s.asset_class.clone(),
+            signal: s.signal.clone(),
+            probability_up: s.technical.probability_up,
+            confidence: s.technical.confidence,
+        }
+    }).collect();
+    Json(sector::build_sector_overview(&inputs))
+}
+
+async fn get_sector_backtest() -> Result<Json<serde_json::Value>, StatusCode> {
+    let path = "reports/sector_backtest.json";
+    match std::fs::read_to_string(path) {
+        Ok(raw) => {
+            let data: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            Ok(Json(data))
+        }
+        Err(_) => Err(StatusCode::NOT_FOUND),
+    }
 }
 
 async fn get_assets(
@@ -367,6 +487,66 @@ async fn reload_models() -> Json<serde_json::Value> {
         "assets_found": manifest.assets.len(),
         "generated_at": manifest.generated_at,
     }))
+}
+
+/// Retrain a single asset's models. Called by agent_alpha for auto-retraining.
+async fn retrain_asset(
+    Path(asset): Path<String>,
+) -> Json<serde_json::Value> {
+    let symbol = asset.to_uppercase();
+    println!("[retrain] Triggered for {}", symbol);
+
+    // Backup existing models first
+    let _ = model_store::backup_models(&symbol);
+
+    // Run training in a blocking task (CPU-bound)
+    let sym = symbol.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        targeted_train::train_single_asset(&sym, "rust_invest.db")
+    }).await;
+
+    match result {
+        Ok(train_result) if train_result.success => {
+            // Regenerate model manifest so serve uses new models
+            let all_symbols: Vec<&str> = stocks::STOCK_LIST.iter().map(|s| s.symbol)
+                .chain(stocks::FX_LIST.iter().map(|s| s.symbol))
+                .collect();
+            let _ = model_store::generate_manifest(&all_symbols);
+
+            println!("[retrain] {} complete: {:.1}% -> {:.1}%",
+                symbol, train_result.pre_accuracy, train_result.post_accuracy);
+
+            Json(serde_json::json!({
+                "status": "success",
+                "asset": symbol,
+                "pre_accuracy": train_result.pre_accuracy,
+                "post_accuracy": train_result.post_accuracy,
+                "linreg_accuracy": train_result.linreg_accuracy,
+                "logreg_accuracy": train_result.logreg_accuracy,
+                "gbt_accuracy": train_result.gbt_accuracy,
+            }))
+        }
+        Ok(train_result) => {
+            // Training failed — restore backup
+            let _ = model_store::restore_models(&symbol);
+            let err = train_result.error.unwrap_or_else(|| "Unknown error".to_string());
+            println!("[retrain] {} failed: {}", symbol, err);
+            Json(serde_json::json!({
+                "status": "failed",
+                "asset": symbol,
+                "error": err,
+            }))
+        }
+        Err(e) => {
+            let _ = model_store::restore_models(&symbol);
+            println!("[retrain] {} spawn error: {}", symbol, e);
+            Json(serde_json::json!({
+                "status": "failed",
+                "asset": symbol,
+                "error": format!("Spawn error: {}", e),
+            }))
+        }
+    }
 }
 
 /// Training results endpoint — serves reports/improved.json with all 6-model accuracies
@@ -486,191 +666,205 @@ fn compute_confidence_bands(resolved: &[&db::PredictionRecord]) -> Vec<serde_jso
 }
 
 /// GET /api/v1/signals/truth — signal truth / track record data
+/// Source: PostgreSQL alpha_signal.signals (single source of truth)
 async fn get_signal_truth(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(1000);
+    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(5000);
+    let resolved_only = params.get("resolved").map(|v| v == "true").unwrap_or(false);
 
-    let db_path = state.db_path.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let records = database.get_signal_history_all(limit).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let records = if resolved_only {
+        pg::get_resolved_signals(&state.pg_pool, limit).await
+    } else {
+        pg::get_all_signals(&state.pg_pool, limit).await
+    }.map_err(|e| { eprintln!("  [signal_truth] Postgres error: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
 
-        // ── Overall stats ──
-        let total = records.len();
-        let resolved: Vec<_> = records.iter().filter(|r| r.was_correct.is_some()).collect();
-        let pending_count = records.iter().filter(|r| r.was_correct.is_none()).count();
-        let correct_count = resolved.iter().filter(|r| r.was_correct == Some(true)).count();
-        let total_resolved = resolved.len();
-        let overall_accuracy = if total_resolved > 0 { correct_count as f64 / total_resolved as f64 * 100.0 } else { 0.0 };
+    // ── Overall stats ──
+    let total = records.len();
+    let resolved: Vec<_> = records.iter().filter(|r| r.was_correct.is_some()).collect();
+    let pending_count = records.iter().filter(|r| r.was_correct.is_none()).count();
+    let correct_count = resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+    let total_resolved = resolved.len();
+    let overall_accuracy = if total_resolved > 0 { correct_count as f64 / total_resolved as f64 * 100.0 } else { 0.0 };
 
-        // ── Accuracy by signal type ──
-        let mut by_signal: HashMap<String, (usize, usize)> = HashMap::new();
-        for r in &resolved {
-            let entry = by_signal.entry(r.signal_type.clone()).or_insert((0, 0));
-            entry.1 += 1;
-            if r.was_correct == Some(true) { entry.0 += 1; }
+    // ── Accuracy by signal type ──
+    let mut by_signal: HashMap<String, (usize, usize)> = HashMap::new();
+    for r in &resolved {
+        let entry = by_signal.entry(r.signal_type.clone()).or_insert((0, 0));
+        entry.1 += 1;
+        if r.was_correct == Some(true) { entry.0 += 1; }
+    }
+    let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SHORT", "SELL", "HOLD"].iter().map(|&st| {
+        let (correct, total) = by_signal.get(st).copied().unwrap_or((0, 0));
+        serde_json::json!({
+            "signal_type": st,
+            "correct": correct,
+            "total": total,
+            "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+        })
+    }).collect();
+
+    // ── Accuracy by asset class (stocks only now) ──
+    let asset_class_accuracy: Vec<serde_json::Value> = ["stock"].iter().map(|&ac| {
+        let (correct, total) = (correct_count, total_resolved);
+        serde_json::json!({
+            "asset_class": ac,
+            "correct": correct,
+            "total": total,
+            "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+        })
+    }).collect();
+
+    // ── Rolling accuracy (today, this week, all time) ──
+    let now = Utc::now();
+    let today_start = now.format("%Y-%m-%d").to_string();
+    let week_ago = (now - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+
+    let today_resolved: Vec<_> = resolved.iter().filter(|r| r.timestamp.starts_with(&today_start)).collect();
+    let today_correct = today_resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+
+    let week_resolved: Vec<_> = resolved.iter().filter(|r| &r.timestamp[..10] >= week_ago.as_str()).collect();
+    let week_correct = week_resolved.iter().filter(|r| r.was_correct == Some(true)).count();
+
+    let rolling = serde_json::json!({
+        "today": {
+            "resolved": today_resolved.len(),
+            "correct": today_correct,
+            "accuracy": if !today_resolved.is_empty() { today_correct as f64 / today_resolved.len() as f64 * 100.0 } else { 0.0 },
+        },
+        "this_week": {
+            "resolved": week_resolved.len(),
+            "correct": week_correct,
+            "accuracy": if !week_resolved.is_empty() { week_correct as f64 / week_resolved.len() as f64 * 100.0 } else { 0.0 },
+        },
+        "all_time": {
+            "resolved": total_resolved,
+            "correct": correct_count,
+            "accuracy": overall_accuracy,
+        },
+    });
+
+    // ── Per-asset accuracy ──
+    let mut per_asset: HashMap<String, (usize, usize)> = HashMap::new();
+    for r in &resolved {
+        let entry = per_asset.entry(r.asset.clone()).or_insert((0, 0));
+        entry.1 += 1;
+        if r.was_correct == Some(true) { entry.0 += 1; }
+    }
+    let mut per_asset_vec: Vec<serde_json::Value> = per_asset.iter().map(|(asset, (correct, total))| {
+        serde_json::json!({
+            "asset": asset,
+            "correct": correct,
+            "total": total,
+            "accuracy": if *total > 0 { *correct as f64 / *total as f64 * 100.0 } else { 0.0 },
+        })
+    }).collect();
+    per_asset_vec.sort_by(|a, b| a["asset"].as_str().cmp(&b["asset"].as_str()));
+
+    // ── Full signal history ──
+    let signals: Vec<serde_json::Value> = records.iter().map(|r| {
+        serde_json::json!({
+            "id": r.id,
+            "timestamp": r.timestamp,
+            "asset": r.asset,
+            "asset_class": r.asset_class,
+            "signal_type": r.signal_type,
+            "price_at_signal": r.price_at_signal,
+            "confidence": r.confidence,
+            "linreg_prob": r.linreg_prob,
+            "logreg_prob": r.logreg_prob,
+            "gbt_prob": r.gbt_prob,
+            "outcome_price": r.outcome_price,
+            "pct_change": r.pct_change,
+            "was_correct": r.was_correct,
+            "resolution_ts": r.resolution_ts,
+        })
+    }).collect();
+
+    // ── Actionable metrics (BUY + SELL + SHORT, excluding HOLD) ──
+    let actionable: Vec<_> = resolved.iter()
+        .filter(|r| r.signal_type != "HOLD")
+        .collect();
+    let actionable_correct = actionable.iter().filter(|r| r.was_correct == Some(true)).count();
+    let actionable_count = actionable.len();
+    let actionable_accuracy = if actionable_count > 0 { actionable_correct as f64 / actionable_count as f64 * 100.0 } else { 0.0 };
+
+    let buy_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "BUY").collect();
+    let buy_correct = buy_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
+    let buy_accuracy = if !buy_sigs.is_empty() { buy_correct as f64 / buy_sigs.len() as f64 * 100.0 } else { 0.0 };
+
+    let sell_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "SELL" || r.signal_type == "SHORT").collect();
+    let sell_correct = sell_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
+    let sell_accuracy = if !sell_sigs.is_empty() { sell_correct as f64 / sell_sigs.len() as f64 * 100.0 } else { 0.0 };
+
+    let hold_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "HOLD").collect();
+    let hold_correct = hold_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
+    let hold_accuracy = if !hold_sigs.is_empty() { hold_correct as f64 / hold_sigs.len() as f64 * 100.0 } else { 0.0 };
+
+    // Expected value per actionable signal (in basis points)
+    let returns: Vec<f64> = actionable.iter().filter_map(|r| {
+        r.pct_change.map(|pct| match r.signal_type.as_str() {
+            "BUY" => pct,
+            "SELL" | "SHORT" => -pct,
+            _ => 0.0,
+        })
+    }).collect();
+    let expected_value_bps = if !returns.is_empty() {
+        returns.iter().sum::<f64>() / returns.len() as f64 * 100.0
+    } else { 0.0 };
+
+    // Profit factor
+    let winners: f64 = returns.iter().filter(|&&r| r > 0.0).sum();
+    let losers: f64 = returns.iter().filter(|&&r| r < 0.0).map(|r| r.abs()).sum();
+    let profit_factor = if losers > 0.0 { winners / losers } else if winners > 0.0 { 99.99 } else { 0.0 };
+
+    let mut response = serde_json::json!({
+        "total_signals": total,
+        "total_resolved": total_resolved,
+        "total_pending": pending_count,
+        "total_correct": correct_count,
+        "overall_accuracy": overall_accuracy,
+        "actionable_accuracy": actionable_accuracy,
+        "actionable_signals": actionable_count,
+        "actionable_correct": actionable_correct,
+        "buy_accuracy": buy_accuracy,
+        "buy_signals": buy_sigs.len(),
+        "buy_correct": buy_correct,
+        "sell_accuracy": sell_accuracy,
+        "sell_signals": sell_sigs.len(),
+        "sell_correct": sell_correct,
+        "hold_accuracy": hold_accuracy,
+        "hold_signals": hold_sigs.len(),
+        "hold_correct": hold_correct,
+        "expected_value_bps": expected_value_bps,
+        "profit_factor": profit_factor,
+        "by_signal_type": signal_type_accuracy,
+        "by_asset_class": asset_class_accuracy,
+        "rolling": rolling,
+        "per_asset": per_asset_vec,
+        "signals": signals,
+    });
+
+    // Attach canonical Sharpe + max drawdown from daily_portfolio (Postgres, single source of truth)
+    if let Ok(portfolio) = pg::get_daily_portfolio(&state.pg_pool).await {
+        if portfolio.len() >= 2 {
+            let rets: Vec<f64> = portfolio.iter().map(|(_, _, _, dr, _)| *dr / 100.0).collect();
+            let mean = rets.iter().sum::<f64>() / rets.len() as f64;
+            let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (rets.len() - 1) as f64;
+            let std = var.sqrt();
+            let rf = 0.045 / 252.0;
+            let sharpe = if std > 1e-10 { (mean - rf) / std * 252.0_f64.sqrt() } else { 0.0 };
+            let values: Vec<f64> = portfolio.iter().map(|(_, _, v, _, _)| *v).collect();
+            let mut peak = 0.0_f64;
+            let mut max_dd = 0.0_f64;
+            for v in &values { if *v > peak { peak = *v; } let dd = if peak > 0.0 { (peak - v) / peak * 100.0 } else { 0.0 }; if dd > max_dd { max_dd = dd; } }
+            response["sharpe"] = serde_json::json!((sharpe * 100.0).round() / 100.0);
+            response["max_drawdown"] = serde_json::json!((max_dd * 10.0).round() / 10.0);
         }
-        let signal_type_accuracy: Vec<serde_json::Value> = ["BUY", "SHORT", "SELL", "HOLD"].iter().map(|&st| {
-            let (correct, total) = by_signal.get(st).copied().unwrap_or((0, 0));
-            serde_json::json!({
-                "signal_type": st,
-                "correct": correct,
-                "total": total,
-                "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
-            })
-        }).collect();
+    }
 
-        // ── Accuracy by asset class ──
-        let mut by_class: HashMap<String, (usize, usize)> = HashMap::new();
-        for r in &resolved {
-            let entry = by_class.entry(r.asset_class.clone()).or_insert((0, 0));
-            entry.1 += 1;
-            if r.was_correct == Some(true) { entry.0 += 1; }
-        }
-        let asset_class_accuracy: Vec<serde_json::Value> = ["stock", "fx", "crypto"].iter().map(|&ac| {
-            let (correct, total) = by_class.get(ac).copied().unwrap_or((0, 0));
-            serde_json::json!({
-                "asset_class": ac,
-                "correct": correct,
-                "total": total,
-                "accuracy": if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
-            })
-        }).collect();
-
-        // ── Rolling accuracy (today, this week, all time) ──
-        let now = Utc::now();
-        let today_start = now.format("%Y-%m-%d").to_string();
-        let week_ago = (now - chrono::Duration::days(7)).to_rfc3339();
-
-        let today_resolved: Vec<_> = resolved.iter().filter(|r| r.timestamp.starts_with(&today_start)).collect();
-        let today_correct = today_resolved.iter().filter(|r| r.was_correct == Some(true)).count();
-
-        let week_resolved: Vec<_> = resolved.iter().filter(|r| r.timestamp.as_str() >= week_ago.as_str()).collect();
-        let week_correct = week_resolved.iter().filter(|r| r.was_correct == Some(true)).count();
-
-        let rolling = serde_json::json!({
-            "today": {
-                "resolved": today_resolved.len(),
-                "correct": today_correct,
-                "accuracy": if !today_resolved.is_empty() { today_correct as f64 / today_resolved.len() as f64 * 100.0 } else { 0.0 },
-            },
-            "this_week": {
-                "resolved": week_resolved.len(),
-                "correct": week_correct,
-                "accuracy": if !week_resolved.is_empty() { week_correct as f64 / week_resolved.len() as f64 * 100.0 } else { 0.0 },
-            },
-            "all_time": {
-                "resolved": total_resolved,
-                "correct": correct_count,
-                "accuracy": overall_accuracy,
-            },
-        });
-
-        // ── Per-asset accuracy ──
-        let mut per_asset: HashMap<String, (usize, usize)> = HashMap::new();
-        for r in &resolved {
-            let entry = per_asset.entry(r.asset.clone()).or_insert((0, 0));
-            entry.1 += 1;
-            if r.was_correct == Some(true) { entry.0 += 1; }
-        }
-        let mut per_asset_vec: Vec<serde_json::Value> = per_asset.iter().map(|(asset, (correct, total))| {
-            serde_json::json!({
-                "asset": asset,
-                "correct": correct,
-                "total": total,
-                "accuracy": if *total > 0 { *correct as f64 / *total as f64 * 100.0 } else { 0.0 },
-            })
-        }).collect();
-        per_asset_vec.sort_by(|a, b| a["asset"].as_str().cmp(&b["asset"].as_str()));
-
-        // ── Full signal history ──
-        let signals: Vec<serde_json::Value> = records.iter().map(|r| {
-            serde_json::json!({
-                "id": r.id,
-                "timestamp": r.timestamp,
-                "asset": r.asset,
-                "asset_class": r.asset_class,
-                "signal_type": r.signal_type,
-                "price_at_signal": r.price_at_signal,
-                "confidence": r.confidence,
-                "linreg_prob": r.linreg_prob,
-                "logreg_prob": r.logreg_prob,
-                "gbt_prob": r.gbt_prob,
-                "outcome_price": r.outcome_price,
-                "pct_change": r.pct_change,
-                "was_correct": r.was_correct,
-                "resolution_ts": r.resolution_ts,
-            })
-        }).collect();
-
-        // ── Actionable metrics (BUY + SELL + SHORT, excluding HOLD) ──
-        let actionable: Vec<_> = resolved.iter()
-            .filter(|r| r.signal_type != "HOLD")
-            .collect();
-        let actionable_correct = actionable.iter().filter(|r| r.was_correct == Some(true)).count();
-        let actionable_count = actionable.len();
-        let actionable_accuracy = if actionable_count > 0 { actionable_correct as f64 / actionable_count as f64 * 100.0 } else { 0.0 };
-
-        let buy_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "BUY").collect();
-        let buy_correct = buy_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
-        let buy_accuracy = if !buy_sigs.is_empty() { buy_correct as f64 / buy_sigs.len() as f64 * 100.0 } else { 0.0 };
-
-        let sell_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "SELL" || r.signal_type == "SHORT").collect();
-        let sell_correct = sell_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
-        let sell_accuracy = if !sell_sigs.is_empty() { sell_correct as f64 / sell_sigs.len() as f64 * 100.0 } else { 0.0 };
-
-        let hold_sigs: Vec<_> = resolved.iter().filter(|r| r.signal_type == "HOLD").collect();
-        let hold_correct = hold_sigs.iter().filter(|r| r.was_correct == Some(true)).count();
-        let hold_accuracy = if !hold_sigs.is_empty() { hold_correct as f64 / hold_sigs.len() as f64 * 100.0 } else { 0.0 };
-
-        // Expected value per actionable signal (in basis points)
-        let returns: Vec<f64> = actionable.iter().filter_map(|r| {
-            r.pct_change.map(|pct| match r.signal_type.as_str() {
-                "BUY" => pct,
-                "SELL" | "SHORT" => -pct,
-                _ => 0.0,
-            })
-        }).collect();
-        let expected_value_bps = if !returns.is_empty() {
-            returns.iter().sum::<f64>() / returns.len() as f64 * 100.0
-        } else { 0.0 };
-
-        // Profit factor
-        let winners: f64 = returns.iter().filter(|&&r| r > 0.0).sum();
-        let losers: f64 = returns.iter().filter(|&&r| r < 0.0).map(|r| r.abs()).sum();
-        let profit_factor = if losers > 0.0 { winners / losers } else if winners > 0.0 { 99.99 } else { 0.0 };
-
-        Ok::<_, StatusCode>(Json(serde_json::json!({
-            "total_signals": total,
-            "total_resolved": total_resolved,
-            "total_pending": pending_count,
-            "total_correct": correct_count,
-            "overall_accuracy": overall_accuracy,
-            "actionable_accuracy": actionable_accuracy,
-            "actionable_signals": actionable_count,
-            "actionable_correct": actionable_correct,
-            "buy_accuracy": buy_accuracy,
-            "buy_signals": buy_sigs.len(),
-            "buy_correct": buy_correct,
-            "sell_accuracy": sell_accuracy,
-            "sell_signals": sell_sigs.len(),
-            "sell_correct": sell_correct,
-            "hold_accuracy": hold_accuracy,
-            "hold_signals": hold_sigs.len(),
-            "hold_correct": hold_correct,
-            "expected_value_bps": expected_value_bps,
-            "profit_factor": profit_factor,
-            "by_signal_type": signal_type_accuracy,
-            "by_asset_class": asset_class_accuracy,
-            "rolling": rolling,
-            "per_asset": per_asset_vec,
-            "signals": signals,
-        })))
-    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
-
-    Ok(result)
+    Ok(Json(response))
 }
 
 /// GET /api/v1/signals/truth/historical — backtest signal accuracy over portfolio holdings
@@ -934,11 +1128,12 @@ async fn force_resolve_signals(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let sigs = state.signals.read().await;
     let signals_map = sigs.clone();
+    let signals_vec: Vec<enriched_signals::EnrichedSignal> = sigs.values().cloned().collect();
     drop(sigs);
     let db_path = state.db_path.clone();
 
+    // Resolve SQLite signals
     let result = tokio::task::spawn_blocking(move || {
-        // Get counts before
         let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let before_unresolved = database.get_all_unresolved_signals().unwrap_or_default().len();
         let before_pending = database.get_pending_predictions().unwrap_or_default().len();
@@ -946,26 +1141,43 @@ async fn force_resolve_signals(
         batch_resolve_signal_history(&db_path, &signals_map);
         resolve_pending_predictions(&db_path, &signals_map);
 
-        // Get counts after
         let after_unresolved = database.get_all_unresolved_signals().unwrap_or_default().len();
         let after_pending = database.get_pending_predictions().unwrap_or_default().len();
 
-        Ok::<_, StatusCode>(Json(serde_json::json!({
-            "signals_resolved": before_unresolved - after_unresolved,
-            "predictions_resolved": before_pending - after_pending,
-            "signals_still_pending": after_unresolved,
-            "predictions_still_pending": after_pending,
-        })))
+        Ok::<_, StatusCode>((
+            before_unresolved.saturating_sub(after_unresolved),
+            before_pending.saturating_sub(after_pending),
+            after_unresolved,
+            after_pending,
+        ))
     }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
 
-    Ok(result)
+    // Resolve Postgres signals
+    let pg_before = pg::get_all_unresolved_signals(&state.pg_pool).await
+        .map(|u| u.len()).unwrap_or(0);
+    batch_resolve_signals_pg(&state.pg_pool, &signals_vec).await;
+    let pg_after = pg::get_all_unresolved_signals(&state.pg_pool).await
+        .map(|u| u.len()).unwrap_or(0);
+
+    Ok(Json(serde_json::json!({
+        "signals_resolved": result.0,
+        "predictions_resolved": result.1,
+        "signals_still_pending": result.2,
+        "predictions_still_pending": result.3,
+        "pg_signals_resolved": pg_before.saturating_sub(pg_after),
+        "pg_signals_still_pending": pg_after,
+    })))
 }
 
 async fn get_all_signals(
     State(state): State<AppState>,
 ) -> Json<Vec<enriched_signals::EnrichedSignal>> {
+    // Descoped: only return stocks (ASSET_UNIVERSE = ["stock"])
     let sigs = state.signals.read().await;
-    let mut signals: Vec<_> = sigs.values().cloned().collect();
+    let mut signals: Vec<_> = sigs.values()
+        .filter(|s| pg::ASSET_UNIVERSE.contains(&s.asset_class.as_str()))
+        .cloned()
+        .collect();
     signals.sort_by(|a, b| a.asset.cmp(&b.asset));
     Json(signals)
 }
@@ -982,28 +1194,18 @@ async fn get_stock_signals(
     Json(signals)
 }
 
+/// FX signals — descoped (returns empty array)
 async fn get_fx_signals(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Json<Vec<enriched_signals::EnrichedSignal>> {
-    let sigs = state.signals.read().await;
-    let mut signals: Vec<_> = sigs.values()
-        .filter(|s| s.asset_class == "fx")
-        .cloned()
-        .collect();
-    signals.sort_by(|a, b| a.asset.cmp(&b.asset));
-    Json(signals)
+    Json(vec![])
 }
 
+/// Crypto signals — descoped (returns empty array)
 async fn get_crypto_signals(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Json<Vec<enriched_signals::EnrichedSignal>> {
-    let sigs = state.signals.read().await;
-    let mut signals: Vec<_> = sigs.values()
-        .filter(|s| s.asset_class == "crypto")
-        .cloned()
-        .collect();
-    signals.sort_by(|a, b| a.asset.cmp(&b.asset));
-    Json(signals)
+    Json(vec![])
 }
 
 async fn get_signal_history(
@@ -1134,44 +1336,174 @@ async fn get_daily_tracker(
     Ok(Json(result))
 }
 
+/// POST /api/v1/portfolio/rebalance — compute optimal sector-weighted allocation
+async fn compute_rebalance(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let signals = state.signals.read().await.clone();
+    let regime = state.regime.read().await.clone();
+    let db_path = state.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        daily_tracker::compute_rebalance(&signals, regime.as_ref(), &db_path)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(result))
+}
+
+/// GET /api/v1/history/portfolio — portfolio equity curve
+/// Source: PostgreSQL alpha_signal.daily_portfolio (single source of truth)
 async fn get_portfolio_history(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let database = db::Database::new(&state.db_path)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let rows = database.get_daily_portfolio(90).unwrap_or_default();
+    let rows = pg::get_daily_portfolio(&state.pg_pool).await
+        .map_err(|e| { eprintln!("  [portfolio_history] Postgres error: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
 
     if rows.is_empty() {
         return Ok(Json(serde_json::json!({
             "has_data": false,
-            "note": "No portfolio history yet. Data accumulates hourly once serve is running."
+            "note": "No portfolio history yet. Run rebuild_portfolio to populate."
         })));
     }
 
-    // Reverse to chronological order for charting
-    let mut rows = rows;
-    rows.reverse();
+    // rows are already in chronological order from Postgres
+    let (seed_date, seed_value, _, _, _) = &rows[0];
+    let (_, _, latest_value, _, latest_cum) = &rows[rows.len() - 1];
+    let _ = seed_date;
 
-    let seed = rows.first().map(|r| r.seed_value).unwrap_or(0.0);
-    let latest = rows.last().unwrap();
-
-    let points: Vec<serde_json::Value> = rows.iter().map(|r| {
+    let points: Vec<serde_json::Value> = rows.iter().map(|(date, _seed, value, daily_ret, cum_ret)| {
         serde_json::json!({
-            "date": r.date,
-            "value": r.portfolio_value,
-            "daily_return": r.daily_return,
-            "cumulative_return": r.cumulative_return,
+            "date": date,
+            "value": value,
+            "daily_return": daily_ret,
+            "cumulative_return": cum_ret,
         })
     }).collect();
 
     Ok(Json(serde_json::json!({
         "has_data": true,
-        "seed_value": seed,
-        "current_value": latest.portfolio_value,
-        "cumulative_return": latest.cumulative_return,
+        "seed_value": seed_value,
+        "current_value": latest_value,
+        "cumulative_return": latest_cum,
         "days": rows.len(),
         "points": points,
+    })))
+}
+
+/// GET /api/v1/portfolio/live — live portfolio state from Postgres
+/// Returns current portfolio value, equity curve, signal stats, and SPY benchmark.
+async fn get_portfolio_live(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Portfolio equity curve from Postgres
+    let portfolio = pg::get_daily_portfolio(&state.pg_pool).await
+        .map_err(|e| { eprintln!("  [portfolio/live] Postgres error: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    // Signal stats from Postgres
+    let stats = pg::get_signal_stats(&state.pg_pool).await
+        .map_err(|e| { eprintln!("  [portfolio/live] Stats error: {}", e); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    if portfolio.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "has_data": false,
+            "stats": stats,
+        })));
+    }
+
+    let (_, seed_value, _, _, _) = &portfolio[0];
+    let (latest_date, _, latest_value, _, latest_cum) = &portfolio[portfolio.len() - 1];
+    let seed = *seed_value;
+
+    // Build portfolio date→value map for SPY alignment
+    let portfolio_dates: Vec<String> = portfolio.iter().map(|(d, _, _, _, _)| d.clone()).collect();
+    let first_date = portfolio_dates[0].clone();
+
+    let points: Vec<serde_json::Value> = portfolio.iter().map(|(date, _seed, value, daily_ret, cum_ret)| {
+        serde_json::json!({
+            "date": date,
+            "value": value,
+            "daily_return": daily_ret,
+            "cumulative_return": cum_ret,
+        })
+    }).collect();
+
+    // Fetch SPY benchmark from SQLite for the same period
+    let db_path = state.db_path.clone();
+    let first_date_clone = first_date.clone();
+    let portfolio_dates_clone = portfolio_dates.clone();
+    let spy_benchmark: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
+        let database = match db::Database::new(&db_path) {
+            Ok(db) => db,
+            Err(_) => return Vec::new(),
+        };
+        let spy_history = match database.get_stock_history("SPY") {
+            Ok(h) => h,
+            Err(_) => return Vec::new(),
+        };
+        // Build date→price map from SPY history
+        let spy_map: std::collections::HashMap<String, f64> = spy_history.iter()
+            .map(|p| (p.timestamp[..10].to_string(), p.price))
+            .collect();
+        // Find SPY price on the portfolio start date (or nearest prior)
+        let spy_start_price = spy_map.get(&first_date_clone[..10])
+            .copied()
+            .or_else(|| {
+                // Find nearest available price before start date
+                let mut prices: Vec<(&str, f64)> = spy_history.iter()
+                    .map(|p| (p.timestamp.as_str(), p.price))
+                    .collect();
+                prices.sort_by_key(|(d, _)| d.to_string());
+                prices.iter()
+                    .filter(|(d, _)| *d <= first_date_clone.as_str())
+                    .last()
+                    .map(|(_, p)| *p)
+            });
+        let spy_start = match spy_start_price {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        // For each portfolio date, compute SPY value normalised to seed capital
+        portfolio_dates_clone.iter().filter_map(|date| {
+            let date_key = &date[..10];
+            spy_map.get(date_key).map(|spy_price| {
+                let spy_value = seed * (spy_price / spy_start);
+                serde_json::json!({ "date": date, "value": spy_value })
+            })
+        }).collect()
+    }).await.unwrap_or_default();
+
+    let spy_return = if spy_benchmark.len() >= 2 {
+        let last_val = spy_benchmark.last().and_then(|v| v["value"].as_f64()).unwrap_or(seed);
+        (last_val / seed - 1.0) * 100.0
+    } else { 0.0 };
+
+    // Canonical Sharpe ratio and max drawdown from daily_portfolio (server-side, single source of truth)
+    let daily_returns: Vec<f64> = portfolio.iter().map(|(_, _, _, dr, _)| *dr / 100.0).collect();
+    let (sharpe, max_drawdown) = if daily_returns.len() >= 2 {
+        let mean = daily_returns.iter().sum::<f64>() / daily_returns.len() as f64;
+        let var = daily_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (daily_returns.len() - 1) as f64;
+        let std = var.sqrt();
+        let rf_daily = 0.045 / 252.0;
+        let s = if std > 1e-10 { (mean - rf_daily) / std * 252.0_f64.sqrt() } else { 0.0 };
+        // Max drawdown from equity curve
+        let values: Vec<f64> = portfolio.iter().map(|(_, _, v, _, _)| *v).collect();
+        let mut peak = 0.0_f64;
+        let mut max_dd = 0.0_f64;
+        for v in &values { if *v > peak { peak = *v; } let dd = if peak > 0.0 { (peak - v) / peak * 100.0 } else { 0.0 }; if dd > max_dd { max_dd = dd; } }
+        (s, max_dd)
+    } else { (0.0, 0.0) };
+
+    Ok(Json(serde_json::json!({
+        "has_data": true,
+        "seed_value": seed_value,
+        "current_value": latest_value,
+        "cumulative_return": latest_cum,
+        "latest_date": latest_date,
+        "days": portfolio.len(),
+        "points": points,
+        "spy_benchmark": spy_benchmark,
+        "spy_return": spy_return,
+        "sharpe": (sharpe * 100.0).round() / 100.0,
+        "max_drawdown": (max_drawdown * 10.0).round() / 10.0,
+        "stats": stats,
     })))
 }
 
@@ -1305,15 +1637,6 @@ async fn chat_handler(
     State(state): State<AppState>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let provider = match &state.llm_provider {
-        Some(p) => p,
-        None => {
-            return Ok(Json(serde_json::json!({
-                "response": "LLM not configured. Install Ollama or set LLM_PROVIDER in .env"
-            })));
-        }
-    };
-
     let tab_context = req.tab_context.unwrap_or_else(|| "overview".to_string());
     let is_morning_briefing = req.message.trim() == "morning_briefing";
 
@@ -1325,117 +1648,160 @@ async fn chat_handler(
         }).await.unwrap_or_else(|_| serde_json::json!({"has_data": false}))
     };
 
-    // Build signals context (shared between briefing and general chat)
-    let (signals_table, portfolio_summary, accuracy_summary) = {
-        let sigs = state.signals.read().await;
-        let relevant: Vec<_> = match tab_context.as_str() {
-            "stocks" => sigs.values().filter(|s| s.asset_class == "stock").cloned().collect(),
-            "fx" => sigs.values().filter(|s| s.asset_class == "fx").cloned().collect(),
-            "crypto" => sigs.values().filter(|s| s.asset_class == "crypto").cloned().collect(),
-            _ => sigs.values().cloned().collect(),
-        };
+    // Collect signals filtered by tab
+    let sigs = state.signals.read().await;
+    let mut relevant: Vec<_> = match tab_context.as_str() {
+        "stocks" => sigs.values().filter(|s| s.asset_class == "stock").cloned().collect(),
+        "fx" => sigs.values().filter(|s| s.asset_class == "fx").cloned().collect(),
+        "crypto" => sigs.values().filter(|s| s.asset_class == "crypto").cloned().collect(),
+        _ => sigs.values().cloned().collect(),
+    };
+    drop(sigs);
 
-        // Format signals table
-        let mut signals_table = String::from("Asset | Signal | Confidence | Prob Up | RSI | Price | Quality\n");
-        for s in &relevant {
-            signals_table.push_str(&format!(
-                "{} | {} | {:.1}/10 | {:.1}% | {:.0} | {:.2} | {}\n",
-                s.asset, s.signal, s.technical.confidence,
-                s.technical.probability_up, s.technical.rsi,
-                s.price, s.technical.quality,
-            ));
+    let response = if is_morning_briefing {
+        generate_morning_briefing(&relevant, &portfolio_context)
+    } else {
+        generate_chat_response(&req.message, &relevant, &portfolio_context)
+    };
+
+    Ok(Json(serde_json::json!({ "response": response })))
+}
+
+/// Rule-based morning briefing generator — no LLM required.
+fn generate_morning_briefing(
+    signals: &[enriched_signals::EnrichedSignal],
+    portfolio_context: &serde_json::Value,
+) -> String {
+    let total = signals.len();
+    let buys: Vec<_> = signals.iter().filter(|s| s.signal == "BUY").collect();
+    let sells: Vec<_> = signals.iter().filter(|s| s.signal == "SELL" || s.signal == "SHORT").collect();
+    let holds: Vec<_> = signals.iter().filter(|s| s.signal == "HOLD").collect();
+
+    // Determine mood
+    let buy_pct = if total > 0 { buys.len() as f64 / total as f64 * 100.0 } else { 0.0 };
+    let sell_pct = if total > 0 { sells.len() as f64 / total as f64 * 100.0 } else { 0.0 };
+    let mood = if buy_pct > 50.0 {
+        "optimistic"
+    } else if sell_pct > 40.0 {
+        "cautious"
+    } else {
+        "mixed"
+    };
+
+    // Portfolio summary
+    let portfolio_line = if portfolio_context["has_data"].as_bool().unwrap_or(false) {
+        let value = portfolio_context["current_value"].as_f64().unwrap_or(0.0);
+        let daily_ret = portfolio_context["daily_return"].as_f64().unwrap_or(0.0);
+        let cum_ret = portfolio_context["cumulative_return"].as_f64().unwrap_or(0.0);
+        format!(
+            "The portfolio stands at {:.0} ({:+.2}% today, {:+.2}% cumulative).",
+            value, daily_ret, cum_ret
+        )
+    } else {
+        String::new()
+    };
+
+    // Para 1: Market mood
+    let para1 = format!(
+        "Alpha Signal is tracking {} assets today with {} BUY, {} SELL/SHORT, and {} HOLD signals — the overall mood is {}. {}",
+        total, buys.len(), sells.len(), holds.len(), mood, portfolio_line
+    );
+
+    // Para 2: Strongest signals (top 3 by confidence)
+    let mut strong: Vec<_> = signals.iter()
+        .filter(|s| s.signal != "HOLD")
+        .collect();
+    strong.sort_by(|a, b| b.technical.confidence.partial_cmp(&a.technical.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    let top_signals: Vec<String> = strong.iter().take(3).map(|s| {
+        format!("{} {} (confidence {:.1}/10, prob {:.0}%)",
+            s.signal, s.asset, s.technical.confidence, s.technical.probability_up)
+    }).collect();
+    let para2 = if top_signals.is_empty() {
+        "No strong actionable signals today.".to_string()
+    } else {
+        format!("Strongest signals: {}.", top_signals.join("; "))
+    };
+
+    // Para 3: Risk watch — highest-confidence SELL or oversold RSI
+    let risk_signal = signals.iter()
+        .filter(|s| s.signal == "SELL" || s.signal == "SHORT" || s.technical.rsi > 70.0 || s.technical.rsi < 30.0)
+        .max_by(|a, b| a.technical.confidence.partial_cmp(&b.technical.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    let para3 = match risk_signal {
+        Some(s) => {
+            let reason = if s.technical.rsi > 70.0 { "overbought RSI" }
+                else if s.technical.rsi < 30.0 { "oversold RSI" }
+                else { "bearish signal" };
+            format!("Watch out: {} shows {} (RSI {:.0}, signal {}).", s.asset, reason, s.technical.rsi, s.signal)
         }
+        None => "No major risk flags in today's signals.".to_string(),
+    };
 
-        // Format portfolio summary
-        let mut portfolio_summary = String::new();
+    format!("{}\n\n{}\n\n{}", para1, para2, para3)
+}
+
+/// Rule-based chat response — answers common queries from signal/portfolio data.
+fn generate_chat_response(
+    question: &str,
+    signals: &[enriched_signals::EnrichedSignal],
+    portfolio_context: &serde_json::Value,
+) -> String {
+    let q = question.to_lowercase();
+
+    // Portfolio status questions
+    if q.contains("portfolio") || q.contains("value") || q.contains("return") || q.contains("performance") {
         if portfolio_context["has_data"].as_bool().unwrap_or(false) {
             let value = portfolio_context["current_value"].as_f64().unwrap_or(0.0);
             let daily_ret = portfolio_context["daily_return"].as_f64().unwrap_or(0.0);
             let cum_ret = portfolio_context["cumulative_return"].as_f64().unwrap_or(0.0);
             let accuracy = portfolio_context["model_accuracy_pct"].as_f64().unwrap_or(0.0);
-            let seed = portfolio_context["seed_value"].as_f64().unwrap_or(100_000.0);
-
-            portfolio_summary.push_str(&format!(
-                "Portfolio value: £{:.2} (seed: £{:.0})\n\
-                 Daily return: {:.2}%\n\
-                 Cumulative return: {:.2}%\n\
-                 Model accuracy: {:.1}%\n",
-                value, seed, daily_ret, cum_ret, accuracy,
-            ));
-
-            // Asset allocations
-            if let Some(today_sigs) = portfolio_context["today_signals"].as_array() {
-                portfolio_summary.push_str("\nAsset allocations:\n");
-                portfolio_summary.push_str("Asset | Weight | Signal | Daily Return | Contribution\n");
-                for ts in today_sigs {
-                    portfolio_summary.push_str(&format!(
-                        "{} | {:.1}% | {} | {:.2}% | {:.3}%\n",
-                        ts["asset"].as_str().unwrap_or("?"),
-                        ts["weight"].as_f64().unwrap_or(0.0),
-                        ts["signal"].as_str().unwrap_or("?"),
-                        ts["price_return"].as_f64().unwrap_or(0.0),
-                        ts["contribution"].as_f64().unwrap_or(0.0),
-                    ));
-                }
-            }
+            return format!(
+                "Portfolio value: {:.2}, daily return: {:+.2}%, cumulative return: {:+.2}%, model accuracy: {:.1}%.\n\
+                 Note: past performance does not guarantee future results.",
+                value, daily_ret, cum_ret, accuracy
+            );
         } else {
-            portfolio_summary.push_str("Portfolio tracking has not started yet — no historical data available.\n");
+            return "Portfolio tracking has not started yet — no historical data available.".to_string();
         }
-
-        // Per-asset model accuracy from signals
-        let mut accuracy_summary = String::new();
-        for s in &relevant {
-            accuracy_summary.push_str(&format!(
-                "{}: walk-forward accuracy {:.1}%, agreement {}\n",
-                s.asset, s.technical.walk_forward_accuracy, s.technical.model_agreement,
-            ));
-        }
-
-        (signals_table, portfolio_summary, accuracy_summary)
-    };
-
-    // Build system prompt — specialised for morning briefing vs generic chat
-    let system_prompt = if is_morning_briefing {
-        format!(
-            "You are a concise financial morning briefing generator for Alpha Signal. \
-             Given today's signals, generate a 3-paragraph briefing in plain English \
-             (no jargon without explanation):\n\
-             Para 1: What markets are doing today in one sentence, then the overall mood \
-             (calm/cautious/fearful) based on signal distribution and any VIX data available.\n\
-             Para 2: The 2-3 strongest signals today and what they mean for someone with money to invest.\n\
-             Para 3: One 'watch out' — the biggest risk or caution signal visible in today's data.\n\
-             Keep total response under 150 words. No bullet points. \
-             Write as if speaking to someone new to investing.\n\n\
-             === TODAY'S SIGNALS ===\n{}\n\
-             === PORTFOLIO ===\n{}\n\
-             === MODEL ACCURACY ===\n{}",
-            signals_table, portfolio_summary, accuracy_summary,
-        )
-    } else {
-        format!(
-            "You are an AI analyst for a quantitative investment system (Alpha Signal).\n\
-             Here is the current portfolio state:\n\n\
-             === PORTFOLIO ===\n{}\n\
-             === TODAY'S SIGNALS ===\n{}\n\
-             === MODEL ACCURACY ===\n{}\n\
-             Answer questions about this specific portfolio only.\n\
-             Be concise and specific with numbers.\n\
-             Never give financial advice. Always note past performance doesn't guarantee future results.\n\
-             Explain technical concepts in plain language when you use them.",
-            portfolio_summary, signals_table, accuracy_summary,
-        )
-    };
-
-    let user_message = if is_morning_briefing {
-        "Generate today's morning briefing."
-    } else {
-        &req.message
-    };
-
-    match llm::chat(&state.http_client, provider, &system_prompt, user_message).await {
-        Ok(response) => Ok(Json(serde_json::json!({ "response": response }))),
-        Err(e) => Ok(Json(serde_json::json!({ "response": format!("Error: {}", e) }))),
     }
+
+    // Signal-specific questions
+    if q.contains("buy") || q.contains("sell") || q.contains("short") || q.contains("signal") {
+        let buys: Vec<_> = signals.iter().filter(|s| s.signal == "BUY").collect();
+        let sells: Vec<_> = signals.iter().filter(|s| s.signal == "SELL" || s.signal == "SHORT").collect();
+        let mut lines = vec![format!("Currently {} BUY and {} SELL/SHORT signals active.", buys.len(), sells.len())];
+        let mut top: Vec<_> = signals.iter().filter(|s| s.signal != "HOLD").collect();
+        top.sort_by(|a, b| b.technical.confidence.partial_cmp(&a.technical.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        for s in top.iter().take(5) {
+            lines.push(format!("  {} {} — confidence {:.1}/10, prob {:.0}%, RSI {:.0}",
+                s.signal, s.asset, s.technical.confidence, s.technical.probability_up, s.technical.rsi));
+        }
+        lines.push("Note: past performance does not guarantee future results.".to_string());
+        return lines.join("\n");
+    }
+
+    // Asset-specific questions
+    for sig in signals {
+        if q.contains(&sig.asset.to_lowercase()) {
+            return format!(
+                "{}: signal={}, confidence={:.1}/10, probability_up={:.1}%, RSI={:.0}, price={:.2}, quality={}, accuracy={:.1}%.\n\
+                 Note: past performance does not guarantee future results.",
+                sig.asset, sig.signal, sig.technical.confidence,
+                sig.technical.probability_up, sig.technical.rsi,
+                sig.price, sig.technical.quality, sig.technical.walk_forward_accuracy
+            );
+        }
+    }
+
+    // Default
+    format!(
+        "I can answer questions about your portfolio, current signals, and specific assets. \
+         Try asking about portfolio performance, today's BUY/SELL signals, or a specific asset like AAPL.\n\
+         Currently tracking {} signals ({} BUY, {} SELL/SHORT).\n\
+         Note: past performance does not guarantee future results.",
+        signals.len(),
+        signals.iter().filter(|s| s.signal == "BUY").count(),
+        signals.iter().filter(|s| s.signal == "SELL" || s.signal == "SHORT").count(),
+    )
 }
 
 // ════════════════════════════════════════
@@ -1470,6 +1836,7 @@ async fn add_asset(
         symbol: symbol.clone(),
         name: name.clone(),
         enabled,
+        tags: Vec::new(),
     };
 
     // Update in-memory config
@@ -1661,11 +2028,17 @@ async fn refresh_signals(state: &AppState) -> Result<(), Box<dyn std::error::Err
     let db_path = state.db_path.clone();
     let asset_config = state.asset_config.read().await.clone();
 
-    let new_signals = tokio::task::spawn_blocking(move || {
+    let (new_signals, regime_state) = tokio::task::spawn_blocking(move || {
         generate_all_signals(&db_path, &asset_config)
     }).await??;
 
-    // Store snapshots + signal history in DB
+    // Update regime state
+    {
+        let mut regime = state.regime.write().await;
+        *regime = regime_state;
+    }
+
+    // Store snapshots + signal history in SQLite (backward compat)
     {
         let database = db::Database::new(&state.db_path)
             .map_err(|e| format!("DB error: {}", e))?;
@@ -1675,6 +2048,51 @@ async fn refresh_signals(state: &AppState) -> Result<(), Box<dyn std::error::Err
             record_signal_history(&database, sig, &ts);
         }
     }
+
+    // Dual-write: also write signals to Postgres (single source of truth)
+    {
+        let ts = Utc::now().to_rfc3339();
+        let mut pg_ok = 0u64;
+        let mut pg_fail = 0u64;
+        let mut last_err = String::new();
+        for sig in &new_signals {
+            if !pg::ASSET_UNIVERSE.contains(&sig.asset_class.as_str()) { continue; }
+            let linreg = sig.models.get("linreg").or_else(|| sig.models.get("ridge")).map(|m| m.probability_up).unwrap_or(0.0);
+            let logreg = sig.models.get("logreg").or_else(|| sig.models.get("lgbm")).map(|m| m.probability_up).unwrap_or(0.0);
+            let gbt = sig.models.get("gbt").or_else(|| sig.models.get("gru")).map(|m| m.probability_up).unwrap_or(0.0);
+            if let Err(e) = pg::insert_signal(
+                &state.pg_pool, &ts, &sig.asset, &sig.asset_class, &sig.signal,
+                sig.price, sig.technical.confidence, linreg, logreg, gbt,
+            ).await {
+                pg_fail += 1;
+                last_err = format!("{}: {}", sig.asset, e);
+                eprintln!("  [PG] Signal write failed for {}: {}", sig.asset, e);
+            } else {
+                pg_ok += 1;
+            }
+        }
+        // Update data quality tracking
+        {
+            let mut dq = state.data_quality.write().await;
+            dq.pg_write_successes += pg_ok;
+            dq.pg_write_failures += pg_fail;
+            dq.last_signal_generation = Some(ts.clone());
+            if pg_fail > 0 {
+                dq.last_pg_failure = Some(ts.clone());
+                dq.last_pg_failure_error = Some(last_err);
+            }
+            if pg_ok > 0 {
+                dq.last_successful_signal_write = Some(ts);
+            }
+        }
+        if pg_fail > 0 {
+            eprintln!("  [DataQuality] PG write: {}/{} succeeded, {} failed",
+                pg_ok, pg_ok + pg_fail, pg_fail);
+        }
+    }
+
+    // Resolve stale Postgres signals
+    batch_resolve_signals_pg(&state.pg_pool, &new_signals).await;
 
     // Update the cache
     let mut sigs = state.signals.write().await;
@@ -1694,10 +2112,10 @@ async fn refresh_signals_with_market_hours(state: &AppState) -> Result<(), Box<d
 
     let is_weekend = weekday == Weekday::Sat || weekday == Weekday::Sun;
 
-    // US stocks: Mon-Fri, 14:30-21:00 UTC
+    // US stocks: Mon-Fri, 14:30-21:00 UTC (for price fetching)
     let us_market_open = !is_weekend && hour >= 14 && hour <= 21;
 
-    // FX: Sun 22:00 UTC to Fri 22:00 UTC (nearly 24/5)
+    // FX: Sun 22:00 UTC to Fri 22:00 UTC (nearly 24/5) (for price fetching)
     let fx_open = match weekday {
         Weekday::Sat => false,
         Weekday::Sun => hour >= 22,
@@ -1708,7 +2126,7 @@ async fn refresh_signals_with_market_hours(state: &AppState) -> Result<(), Box<d
     // Crypto: 24/7
     let crypto_open = true;
 
-    // Fetch live prices first so inference uses current data
+    // Fetch live prices only when markets are open
     if let Err(e) = fetch_and_store_live_prices(state, us_market_open, fx_open, crypto_open).await {
         eprintln!("  [LivePrice] Warning: {}", e);
     }
@@ -1716,11 +2134,21 @@ async fn refresh_signals_with_market_hours(state: &AppState) -> Result<(), Box<d
     let db_path = state.db_path.clone();
     let asset_config = state.asset_config.read().await.clone();
 
-    let new_signals = tokio::task::spawn_blocking(move || {
-        generate_signals_filtered(&db_path, &asset_config, us_market_open, fx_open, crypto_open)
+    // Generate signals for ALL asset classes regardless of market hours.
+    // On weekends/off-hours, models use last known prices from DB (e.g. Friday close).
+    // This ensures accuracy data flows continuously so the agent can trigger retrains.
+    // Resolution logic (can_resolve_signal) already skips weekends for stocks.
+    let (new_signals, regime_state) = tokio::task::spawn_blocking(move || {
+        generate_signals_filtered(&db_path, &asset_config, true, true, true)
     }).await??;
 
-    // Store snapshots + signal history
+    // Update regime state
+    {
+        let mut regime = state.regime.write().await;
+        *regime = regime_state;
+    }
+
+    // Store snapshots + signal history in SQLite (backward compat)
     {
         let database = db::Database::new(&state.db_path)
             .map_err(|e| format!("DB error: {}", e))?;
@@ -1730,6 +2158,50 @@ async fn refresh_signals_with_market_hours(state: &AppState) -> Result<(), Box<d
             record_signal_history(&database, sig, &ts);
         }
     }
+
+    // Dual-write: also write signals to Postgres (single source of truth)
+    {
+        let ts = Utc::now().to_rfc3339();
+        let mut pg_ok = 0u64;
+        let mut pg_fail = 0u64;
+        let mut last_err = String::new();
+        for sig in &new_signals {
+            if !pg::ASSET_UNIVERSE.contains(&sig.asset_class.as_str()) { continue; }
+            let linreg = sig.models.get("linreg").or_else(|| sig.models.get("ridge")).map(|m| m.probability_up).unwrap_or(0.0);
+            let logreg = sig.models.get("logreg").or_else(|| sig.models.get("lgbm")).map(|m| m.probability_up).unwrap_or(0.0);
+            let gbt = sig.models.get("gbt").or_else(|| sig.models.get("gru")).map(|m| m.probability_up).unwrap_or(0.0);
+            if let Err(e) = pg::insert_signal(
+                &state.pg_pool, &ts, &sig.asset, &sig.asset_class, &sig.signal,
+                sig.price, sig.technical.confidence, linreg, logreg, gbt,
+            ).await {
+                pg_fail += 1;
+                last_err = format!("{}: {}", sig.asset, e);
+                eprintln!("  [PG] Signal write failed for {}: {}", sig.asset, e);
+            } else {
+                pg_ok += 1;
+            }
+        }
+        {
+            let mut dq = state.data_quality.write().await;
+            dq.pg_write_successes += pg_ok;
+            dq.pg_write_failures += pg_fail;
+            dq.last_signal_generation = Some(ts.clone());
+            if pg_fail > 0 {
+                dq.last_pg_failure = Some(ts.clone());
+                dq.last_pg_failure_error = Some(last_err);
+            }
+            if pg_ok > 0 {
+                dq.last_successful_signal_write = Some(ts);
+            }
+        }
+        if pg_fail > 0 {
+            eprintln!("  [DataQuality] PG write: {}/{} succeeded, {} failed",
+                pg_ok, pg_ok + pg_fail, pg_fail);
+        }
+    }
+
+    // Resolve stale Postgres signals
+    batch_resolve_signals_pg(&state.pg_pool, &new_signals).await;
 
     // Merge into cache (only replace refreshed assets)
     let mut sigs = state.signals.write().await;
@@ -1747,7 +2219,7 @@ async fn refresh_signals_with_market_hours(state: &AppState) -> Result<(), Box<d
 fn generate_all_signals(
     db_path: &str,
     asset_config: &config::AssetConfig,
-) -> Result<Vec<enriched_signals::EnrichedSignal>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Vec<enriched_signals::EnrichedSignal>, Option<market_regime::MarketRegimeState>), Box<dyn std::error::Error + Send + Sync>> {
     generate_signals_filtered(db_path, asset_config, true, true, true)
 }
 
@@ -1758,7 +2230,7 @@ fn generate_signals_filtered(
     include_stocks: bool,
     include_fx: bool,
     include_crypto: bool,
-) -> Result<Vec<enriched_signals::EnrichedSignal>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Vec<enriched_signals::EnrichedSignal>, Option<market_regime::MarketRegimeState>), Box<dyn std::error::Error + Send + Sync>> {
     let database = db::Database::new(db_path)
         .map_err(|e| format!("DB error: {}", e))?;
 
@@ -1771,6 +2243,8 @@ fn generate_signals_filtered(
         let prices = database.get_market_prices(ticker).unwrap_or_default();
         market_histories.insert(ticker.to_string(), prices);
     }
+    market_histories.insert("HY_SPREAD".to_string(), database.get_market_prices("HY_SPREAD").unwrap_or_default());
+    market_histories.insert("BREAKEVEN_5Y".to_string(), database.get_market_prices("BREAKEVEN_5Y").unwrap_or_default());
     let market_context = features::build_market_context(&market_histories);
 
     // Load Fear & Greed history once — used by stocks, FX, and crypto
@@ -1780,6 +2254,15 @@ fn generate_signals_filtered(
     } else {
         Some(&fear_greed_history)
     };
+
+    // ── Compute regime BEFORE signal generation so sell thresholds are regime-aware ──
+    let spy_prices_for_regime: Vec<f64> = market_histories.get("SPY")
+        .cloned()
+        .unwrap_or_default();
+    let regime_computed = market_regime::compute_regime(&spy_prices_for_regime);
+    if let Some(ref regime_state) = regime_computed {
+        ensemble::set_market_regime(&regime_state.regime);
+    }
 
     let mut enriched_signals = Vec::new();
 
@@ -1799,122 +2282,39 @@ fn generate_signals_filtered(
         }
     }
 
-    // ── FX signals (inference only) ──
-    if include_fx {
-        let enabled_fx = asset_config.enabled_fx();
-        for asset_entry in &enabled_fx {
-            let points = match database.get_fx_history(&asset_entry.symbol) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            if points.len() < 300 { continue; }
+    // ── FX signals disabled (descoped — separate project) ──
+    // ── Crypto signals disabled (descoped — separate project) ──
 
-            if let Some(sig) = infer_fx_signal(&asset_entry.symbol, &points, &market_context, fg_ref) {
-                enriched_signals.push(sig);
-            }
-        }
-    }
-
-    // ── Crypto signals (inference only) ──
-    if include_crypto {
-        let enabled_crypto = asset_config.enabled_crypto();
-        if !enabled_crypto.is_empty() {
-            let coin_ids: Vec<String> = database.get_all_coin_ids()
-                .unwrap_or_default().into_iter().filter(|id| id != "tether").collect();
-
-            let mut crypto_prices_map: HashMap<String, Vec<f64>> = HashMap::new();
-            let mut crypto_returns_map: HashMap<String, Vec<f64>> = HashMap::new();
-            let mut crypto_dates_map: HashMap<String, Vec<String>> = HashMap::new();
-            for coin_id in &coin_ids {
-                let points = match database.get_coin_history(coin_id) {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
-                if points.len() < 60 { continue; }
-                let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
-                let returns: Vec<f64> = prices.windows(2).map(|w| (w[1] - w[0]) / w[0]).collect();
-                let dates: Vec<String> = points.iter().map(|p| p.timestamp[..10].to_string()).collect();
-                crypto_prices_map.insert(coin_id.clone(), prices);
-                crypto_returns_map.insert(coin_id.clone(), returns);
-                crypto_dates_map.insert(coin_id.clone(), dates);
-            }
-            let crypto_syms: Vec<&str> = coin_ids.iter().map(|s| s.as_str()).collect();
-            let crypto_enrichment = crypto_features::enrich_crypto_features(
-                &crypto_syms, &crypto_prices_map, &crypto_returns_map, &crypto_dates_map,
-            );
-
-            for asset_entry in &enabled_crypto {
-                if let Some(sig) = infer_crypto_signal(
-                    &asset_entry.symbol, &database, &crypto_enrichment,
-                ) {
-                    enriched_signals.push(sig);
-                }
-            }
-        }
-    }
-
-    // ── Apply adaptive thresholds from historical accuracy ──
-    let adaptive = ensemble::compute_adaptive_thresholds(db_path);
-    if !adaptive.is_empty() {
-        for sig in enriched_signals.iter_mut() {
-            if let Some(&(buy_thresh, sell_thresh)) = adaptive.get(&sig.asset) {
-                let prob = sig.technical.probability_up;
-                let is_buy = sig.signal == "BUY";
-                let is_sell = sig.signal == "SELL";
-                // Tighten: if signal is BUY but prob doesn't meet adaptive threshold, demote to HOLD
-                if is_buy && prob <= buy_thresh {
-                    sig.signal = "HOLD".to_string();
-                }
-                // Tighten: if signal is SELL but prob doesn't meet adaptive threshold, demote to HOLD
-                if is_sell && prob >= sell_thresh {
-                    sig.signal = "HOLD".to_string();
-                }
-            }
-        }
-    }
-
-    // ── Apply cached LLM sentiment from news_sentiment table ──
-    // Read sentiment AND actually adjust signals (not just display)
+    // ── Populate LLM sentiment (display only, no signal adjustment) ──
     if let Ok(conn) = rusqlite::Connection::open(db_path) {
         for sig in enriched_signals.iter_mut() {
             let data = news_sentiment::get_recent_sentiment(&conn, &sig.asset, 1);
             if let Some(latest) = data.first() {
-                let sentiment = latest.combined_score;
-                let analysis = latest.llm_analysis.clone();
-
-                // Apply actual signal adjustment (mirrors apply_sentiment_adjustment logic)
-                sig.llm_sentiment = sentiment;
-                sig.llm_analysis = analysis;
-
-                let ensemble_prob = sig.technical.probability_up;
-                let model_direction = if ensemble_prob > 0.5 { 1.0 } else { -1.0 };
-                let alignment = sentiment * model_direction;
-
-                if alignment > 0.0 {
-                    sig.technical.confidence += alignment * 5.0;
-                } else if alignment < -0.3 {
-                    sig.technical.confidence = (sig.technical.confidence + alignment * 3.0).max(0.0);
-                    if sentiment.abs() > 0.6 && (ensemble_prob - 0.5).abs() < 0.08 {
-                        sig.signal = "HOLD".to_string();
-                    }
-                }
+                sig.llm_sentiment = latest.combined_score;
+                sig.llm_analysis = latest.llm_analysis.clone();
             }
         }
     }
 
-    // ── Suppress BUY→HOLD for chronically poor-performing assets ──
-    const SUPPRESSED_ASSETS: &[&str] = &[
-        "NZDUSD=X", "AUDUSD=X", "USDIDR=X", "CRM", "LMT", "XLI", "USDMXN=X",
-    ];
-    for sig in enriched_signals.iter_mut() {
-        if sig.signal == "BUY" && SUPPRESSED_ASSETS.contains(&sig.asset.as_str()) {
-            sig.signal = "HOLD".to_string();
-            sig.reason = format!("BUY suppressed (low historical accuracy) — {}", sig.reason);
+    // ── Apply market regime defensive rotation ──
+    // (regime_computed was already computed above before signal generation)
+    if let Some(ref regime_state) = regime_computed {
+        let defensive = asset_config.defensive_symbols();
+        let modified = market_regime::apply_regime_overlay(regime_state, &mut enriched_signals, &defensive);
+        println!("  [Regime] {} (SPY 20d: {:.2}%), {} signals modified",
+            regime_state.regime, regime_state.spy_return_20d_pct, modified);
+
+        // Stamp each signal with the current regime
+        let regime_str = regime_state.regime.to_string();
+        for sig in enriched_signals.iter_mut() {
+            sig.market_regime = Some(regime_str.clone());
         }
+    } else {
+        println!("  [Regime] Insufficient SPY data for regime calculation");
     }
 
     println!("  Generated {} enriched signals (inference only)", enriched_signals.len());
-    Ok(enriched_signals)
+    Ok((enriched_signals, regime_computed))
 }
 
 // ════════════════════════════════════════
@@ -1943,7 +2343,8 @@ fn infer_stock_signal(
     );
     if samples.is_empty() { return None; }
 
-    let wf = inference::infer_with_saved_models(symbol, &samples)?;
+    // Try regression models first (v6), fall back to classification (v5)
+    let reg = inference::infer_regression_models(symbol, &samples);
 
     let result = analysis::analyse_coin(symbol, points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -1953,7 +2354,18 @@ fn infer_stock_signal(
         _ => "BEARISH",
     };
 
-    let signal = ensemble::ensemble_signal(symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
+    let mut signal = if let Some(ref reg_result) = reg {
+        let mut sig = ensemble::regression_signal(symbol, reg_result, result.current_price, result.rsi_14.unwrap_or(50.0), trend, "stock");
+        // Multi-horizon confirmation: filter through 5d model agreement
+        let filtered = inference::apply_horizon_agreement(&sig.signal, symbol, &samples, reg_result, "stock");
+        if filtered != sig.signal {
+            sig.signal = filtered;
+        }
+        sig
+    } else {
+        let wf = inference::infer_with_saved_models(symbol, &samples)?;
+        ensemble::ensemble_signal(symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend)
+    };
 
     let vol_5d = if prices.len() >= 5 {
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-5..])))
@@ -1985,7 +2397,7 @@ fn infer_fx_signal(
     );
     if samples.is_empty() { return None; }
 
-    let wf = inference::infer_with_saved_models(symbol, &samples)?;
+    let reg = inference::infer_regression_models(symbol, &samples);
 
     let result = analysis::analyse_coin(symbol, points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -1995,7 +2407,17 @@ fn infer_fx_signal(
         _ => "BEARISH",
     };
 
-    let signal = ensemble::ensemble_signal(symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
+    let signal = if let Some(ref reg_result) = reg {
+        let mut sig = ensemble::regression_signal(symbol, reg_result, result.current_price, result.rsi_14.unwrap_or(50.0), trend, "fx");
+        let filtered = inference::apply_horizon_agreement(&sig.signal, symbol, &samples, reg_result, "fx");
+        if filtered != sig.signal {
+            sig.signal = filtered;
+        }
+        sig
+    } else {
+        let wf = inference::infer_with_saved_models(symbol, &samples)?;
+        ensemble::ensemble_signal(symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend)
+    };
 
     let vol_5d = if prices.len() >= 5 {
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-5..])))
@@ -2046,7 +2468,7 @@ fn infer_crypto_signal(
 
     if enriched_samples.is_empty() { return None; }
 
-    let wf = inference::infer_with_saved_models(coin_id, &enriched_samples)?;
+    let reg = inference::infer_regression_models(coin_id, &enriched_samples);
 
     let result = analysis::analyse_coin(coin_id, &points);
     let sma_7 = analysis::sma(&prices, 7);
@@ -2056,7 +2478,17 @@ fn infer_crypto_signal(
         _ => "BEARISH",
     };
 
-    let signal = ensemble::ensemble_signal(coin_id, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend);
+    let signal = if let Some(ref reg_result) = reg {
+        let mut sig = ensemble::regression_signal(coin_id, reg_result, result.current_price, result.rsi_14.unwrap_or(50.0), trend, "crypto");
+        let filtered = inference::apply_horizon_agreement(&sig.signal, coin_id, &enriched_samples, reg_result, "crypto");
+        if filtered != sig.signal {
+            sig.signal = filtered;
+        }
+        sig
+    } else {
+        let wf = inference::infer_with_saved_models(coin_id, &enriched_samples)?;
+        ensemble::ensemble_signal(coin_id, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend)
+    };
 
     let vol_5d = if prices.len() >= 5 {
         Some(analysis::std_dev(&daily_returns(&prices[prices.len()-5..])))
@@ -2261,6 +2693,31 @@ fn resolution_ready(signal_dt: chrono::DateTime<Utc>, asset_class: &str, now: ch
     }
 }
 
+/// Parse a timestamp string from either RFC3339 (`2026-04-17T01:02:36+01:00`)
+/// or PostgreSQL `::text` format (`2026-04-17 01:02:36.948369+01`).
+fn parse_pg_timestamp(ts: &str) -> Option<chrono::DateTime<Utc>> {
+    // Try RFC3339 first
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    // Normalize Postgres ::text format: replace space with T, pad short timezone offset
+    let mut s = ts.replace(' ', "T");
+    // Postgres outputs +01 or -05, RFC3339 needs +01:00 or -05:00
+    if let Some(pos) = s.rfind('+').or_else(|| s.rfind('-').filter(|&p| p > 10)) {
+        let tz_part = &s[pos..];
+        if tz_part.len() == 3 {
+            // +01 -> +01:00
+            s.push_str(":00");
+        } else if tz_part.len() == 5 && !tz_part.contains(':') {
+            // +0100 -> +01:00
+            s.insert(pos + 3, ':');
+        }
+    }
+    chrono::DateTime::parse_from_rfc3339(&s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
 /// Minimum price move threshold for a signal to be considered "correct", by asset class.
 fn min_threshold_for_class(asset_class: &str) -> f64 {
     match asset_class {
@@ -2380,6 +2837,63 @@ fn resolve_pending_predictions(db_path: &str, signals: &HashMap<String, enriched
 
     if resolved > 0 {
         println!("  [Predictions] Resolved {} of {} pending predictions", resolved, pending.len());
+    }
+}
+
+/// Batch-resolve unresolved signals in PostgreSQL using current cached prices.
+/// Mirrors the SQLite batch_resolve logic but runs async against Postgres.
+async fn batch_resolve_signals_pg(
+    pool: &pg::PgPool,
+    current_signals: &[enriched_signals::EnrichedSignal],
+) {
+    let unresolved = match pg::get_all_unresolved_signals(pool).await {
+        Ok(u) => u,
+        Err(e) => { eprintln!("  [PG-Resolve] Error: {}", e); return; }
+    };
+    if unresolved.is_empty() { return; }
+
+    let now = Utc::now();
+    let resolve_ts = now.to_rfc3339();
+    let mut resolved = 0;
+
+    // Build price lookup from current signals
+    let prices: HashMap<String, f64> = current_signals.iter()
+        .map(|s| (s.asset.clone(), s.price))
+        .collect();
+
+    for sig in &unresolved {
+        let signal_dt = match parse_pg_timestamp(&sig.timestamp) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        if !resolution_ready(signal_dt, &sig.asset_class, now) { continue; }
+
+        let current_price = match prices.get(&sig.asset) {
+            Some(&p) if p > 0.0 => p,
+            _ => continue,
+        };
+
+        if sig.price_at_signal <= 0.0 { continue; }
+
+        let pct_change = (current_price - sig.price_at_signal) / sig.price_at_signal * 100.0;
+        let threshold = min_threshold_for_class(&sig.asset_class);
+        let was_correct = match sig.signal_type.as_str() {
+            "BUY" => pct_change > threshold,
+            "SELL" | "SHORT" => pct_change < -threshold,
+            "HOLD" => pct_change.abs() < threshold,
+            _ => false,
+        };
+
+        if let Err(e) = pg::resolve_signal(pool, sig.id, current_price, pct_change, was_correct, &resolve_ts).await {
+            eprintln!("  [PG-Resolve] Error resolving {}: {}", sig.id, e);
+        } else {
+            resolved += 1;
+        }
+    }
+
+    if resolved > 0 {
+        println!("  [PG-Resolve] Resolved {} of {} unresolved signals in Postgres", resolved, unresolved.len());
     }
 }
 
@@ -3004,9 +3518,9 @@ fn can_resolve_signal(
 /// Record a signal to signal_history table, resolving the previous unresolved signal for the same asset
 fn record_signal_history(database: &db::Database, sig: &enriched_signals::EnrichedSignal, timestamp: &str) {
     // Extract model probabilities from the enriched signal
-    let linreg_prob = sig.models.get("linreg").map(|m| m.probability_up);
-    let logreg_prob = sig.models.get("logreg").map(|m| m.probability_up);
-    let gbt_prob = sig.models.get("gbt").map(|m| m.probability_up);
+    let linreg_prob = sig.models.get("linreg").or_else(|| sig.models.get("ridge")).map(|m| m.probability_up);
+    let logreg_prob = sig.models.get("logreg").or_else(|| sig.models.get("lgbm")).map(|m| m.probability_up);
+    let gbt_prob = sig.models.get("gbt").or_else(|| sig.models.get("gru")).map(|m| m.probability_up);
 
     // Resolve previous unresolved signal for this asset (market-hours aware)
     if let Ok(Some(prev)) = database.get_last_unresolved_signal(&sig.asset) {
@@ -3027,6 +3541,47 @@ fn record_signal_history(database: &db::Database, sig: &enriched_signals::Enrich
                     prev.id, current_price, pct_change, was_correct, timestamp,
                 );
             }
+        } else {
+            // Time stop: force-resolve signals older than 5 days
+            // This prevents stale signals accumulating and caps holding period
+            let signal_date = &prev.timestamp[..10]; // "2026-04-11"
+            let today = &timestamp[..10];
+            if signal_date < today {
+                // Parse dates to check 5-day time stop
+                if let (Some(sd), Some(td)) = (
+                    chrono::NaiveDate::parse_from_str(signal_date, "%Y-%m-%d").ok(),
+                    chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").ok(),
+                ) {
+                    let days_held = (td - sd).num_days();
+                    if days_held >= 5 {
+                        let current_price = sig.price;
+                        let prev_price = prev.price_at_signal;
+                        if prev_price > 0.0 {
+                            let pct_change = (current_price - prev_price) / prev_price * 100.0;
+                            let threshold = min_threshold_for_class(&prev.asset_class);
+                            let was_correct = match prev.signal_type.as_str() {
+                                "BUY" => pct_change > threshold,
+                                "SELL" | "SHORT" => pct_change < -threshold,
+                                "HOLD" => pct_change.abs() < threshold,
+                                _ => false,
+                            };
+                            let _ = database.resolve_signal_history(
+                                prev.id, current_price, pct_change, was_correct, timestamp,
+                            );
+                            println!("  [TimeStop] Force-resolved {} {} after {} days (pct={:.2}%)",
+                                prev.asset, prev.signal_type, days_held, pct_change);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Dedup: skip if we already have an unresolved signal for this asset today
+    if let Ok(Some(existing)) = database.get_last_unresolved_signal(&sig.asset) {
+        let today = &timestamp[..10]; // "2026-04-11"
+        if existing.timestamp.starts_with(today) {
+            return; // Already have today's signal for this asset, skip duplicate
         }
     }
 
@@ -3351,6 +3906,45 @@ fn run_startup_migrations(db_path: &str) {
         )"
     );
 
+    // Agent tables
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS agent_actions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_type     TEXT NOT NULL,
+            asset           TEXT,
+            trigger_reason  TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'proposed',
+            accuracy_before REAL,
+            accuracy_after  REAL,
+            details_json    TEXT,
+            created_at      TEXT DEFAULT (datetime('now')),
+            executed_at     TEXT,
+            evaluated_at    TEXT
+        )"
+    );
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_agent_actions_status ON agent_actions(status, created_at)");
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_agent_actions_asset ON agent_actions(asset, created_at)");
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS agent_metrics (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT NOT NULL,
+            asset           TEXT NOT NULL,
+            metric_type     TEXT NOT NULL,
+            value           REAL NOT NULL,
+            window_days     INTEGER,
+            details_json    TEXT
+        )"
+    );
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_agent_metrics_asset ON agent_metrics(asset, timestamp)");
+    let _ = database.execute_raw("CREATE INDEX IF NOT EXISTS idx_agent_metrics_type ON agent_metrics(metric_type, timestamp)");
+    let _ = database.execute_raw(
+        "CREATE TABLE IF NOT EXISTS agent_config (
+            key             TEXT PRIMARY KEY,
+            value           TEXT NOT NULL,
+            updated_at      TEXT DEFAULT (datetime('now'))
+        )"
+    );
+
     // FIX 1: Restore correct seed value (£133,993.00)
     match database.execute_raw(
         "UPDATE daily_portfolio
@@ -3402,6 +3996,8 @@ async fn get_walkforward_data() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(json))
 }
 
+/// GET /api/v1/simulator/data — historical prices + signals for simulator assets + SPY
+/// Descoped: stocks/ETFs only (no FX, no crypto)
 async fn get_simulator_data(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -3409,17 +4005,14 @@ async fn get_simulator_data(
     let result = tokio::task::spawn_blocking(move || {
         let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // Simulator assets — must match frontend AVAILABLE_ASSETS + SPY benchmark
+        // Simulator assets — stocks/ETFs only (descoped FX/crypto)
         let stock_symbols = [
             "AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD", "SPY",
             "TLT", "AGG", "BND", "USO", "CPER", "BRK-B",
         ];
-        let fx_symbols = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "EURJPY=X"];
-        let crypto_ids = ["bitcoin", "ethereum"];
 
         let mut price_history = serde_json::Map::new();
 
-        // Fetch stock/ETF prices (includes SPY benchmark)
         for sym in &stock_symbols {
             let points = database.get_stock_history(sym).unwrap_or_default();
             let arr: Vec<serde_json::Value> = points.iter().map(|p| {
@@ -3428,30 +4021,10 @@ async fn get_simulator_data(
             price_history.insert(sym.to_string(), serde_json::Value::Array(arr));
         }
 
-        // Fetch FX prices
-        for sym in &fx_symbols {
-            let points = database.get_fx_history(sym).unwrap_or_default();
-            let arr: Vec<serde_json::Value> = points.iter().map(|p| {
-                serde_json::json!({"date": &p.timestamp[..10], "price": p.price})
-            }).collect();
-            price_history.insert(sym.to_string(), serde_json::Value::Array(arr));
-        }
-
-        // Fetch crypto prices
-        for coin in &crypto_ids {
-            let points = database.get_coin_history(coin).unwrap_or_default();
-            let arr: Vec<serde_json::Value> = points.iter().map(|p| {
-                serde_json::json!({"date": &p.timestamp[..10], "price": p.price})
-            }).collect();
-            price_history.insert(coin.to_string(), serde_json::Value::Array(arr));
-        }
-
-        // Fetch signal history for all simulator assets (not SPY)
+        // Signal history for simulator assets (not SPY)
         let sim_assets = [
             "AAPL", "MSFT", "GOOGL", "JPM", "HSBA.L", "AZN.L", "XOM", "GLD",
             "TLT", "AGG", "BND", "USO", "CPER", "BRK-B",
-            "EURUSD=X", "GBPUSD=X", "USDJPY=X", "EURJPY=X",
-            "bitcoin", "ethereum",
         ];
         let all_signals = database.get_signal_history_all(10000).unwrap_or_default();
 
@@ -3479,72 +4052,10 @@ async fn get_simulator_data(
     Ok(result)
 }
 
-/// GET /api/v1/portfolio/managed-simulation — all assets' signals + prices from live start
-async fn get_managed_simulation(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let db_path = state.db_path.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let database = db::Database::new(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        // Get ALL signal history from live start
-        let all_signals = database.get_signal_history_all(100000).unwrap_or_default();
-        let live_start = "2026-03-15";
-
-        // Filter to live period and collect unique assets
-        let live_signals: Vec<_> = all_signals.iter()
-            .filter(|s| &s.timestamp[..10] >= live_start)
-            .collect();
-
-        let mut asset_classes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        for s in &live_signals {
-            asset_classes.entry(s.asset.clone()).or_insert_with(|| s.asset_class.clone());
-        }
-
-        // Build signal array
-        let signals: Vec<serde_json::Value> = live_signals.iter().map(|s| {
-            serde_json::json!({
-                "date": &s.timestamp[..10],
-                "asset": s.asset,
-                "signal": s.signal_type,
-                "confidence": s.confidence,
-                "price": s.price_at_signal,
-                "asset_class": s.asset_class,
-            })
-        }).collect();
-
-        // Fetch price history for all assets that have signals
-        let mut price_history = serde_json::Map::new();
-        for (asset, asset_class) in &asset_classes {
-            let points = if asset_class == "crypto" {
-                database.get_coin_history(asset).unwrap_or_default()
-            } else {
-                database.get_stock_history(asset).unwrap_or_default()
-            };
-            let arr: Vec<serde_json::Value> = points.iter()
-                .filter(|p| &p.timestamp[..10] >= live_start)
-                .map(|p| serde_json::json!({"date": &p.timestamp[..10], "price": p.price}))
-                .collect();
-            price_history.insert(asset.clone(), serde_json::Value::Array(arr));
-        }
-
-        // Also include SPY for benchmark
-        if !price_history.contains_key("SPY") {
-            let spy_points = database.get_stock_history("SPY").unwrap_or_default();
-            let arr: Vec<serde_json::Value> = spy_points.iter()
-                .filter(|p| &p.timestamp[..10] >= live_start)
-                .map(|p| serde_json::json!({"date": &p.timestamp[..10], "price": p.price}))
-                .collect();
-            price_history.insert("SPY".to_string(), serde_json::Value::Array(arr));
-        }
-
-        Ok::<_, StatusCode>(Json(serde_json::json!({
-            "price_history": price_history,
-            "signals": signals,
-        })))
-    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
-
-    Ok(result)
+/// GET /api/v1/portfolio/managed-simulation — REMOVED (410 Gone)
+/// Dynamic Universe mode has been retired. Use /api/v1/portfolio/live instead.
+async fn get_managed_simulation() -> StatusCode {
+    StatusCode::GONE
 }
 
 // ════════════════════════════════════════
@@ -3711,6 +4222,342 @@ async fn get_deep_dive(
     Ok(Json(serde_json::Value::Object(result)))
 }
 
+// ════════════════════════════════════════
+// Agent API Handlers (PostgreSQL)
+// ════════════════════════════════════════
+
+/// GET /api/v1/agent/status — Agent state + last run info
+async fn get_agent_status(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let pool = &state.pg_pool;
+    let agent_state: agent::AgentState = pg::get_agent_config(pool, "agent_state").await
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let config = agent::AgentConfig::load_from_pg(pool).await;
+    Json(serde_json::json!({
+        "state": agent_state,
+        "config": config,
+    }))
+}
+
+/// GET /api/v1/agent/actions — Action log with filtering and outcomes
+async fn get_agent_actions(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(500);
+    let status_filter = params.get("status").cloned();
+    let show_historical = params.get("historical").map(|v| v == "true").unwrap_or(false);
+
+    let all_actions = pg::get_agent_actions(&state.pg_pool, limit, status_filter.as_deref()).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::hours(48);
+    let cutoff_str = cutoff.to_rfc3339();
+
+    let actions: Vec<serde_json::Value> = all_actions.into_iter().filter(|a| {
+        if let Some(s) = &a.asset {
+            if s.contains('=') || ["bitcoin","ethereum","solana","dogecoin","cardano","ripple",
+                "polkadot","avalanche","chainlink","litecoin","uniswap","stellar","monero","aave","cosmos","tron"].contains(&s.as_str()) {
+                return false;
+            }
+        }
+        if show_historical { return true; }
+        let is_resolved = matches!(a.status.as_str(), "evaluated" | "rolled_back" | "approved" | "rejected");
+        if is_resolved { return true; }
+        match &a.created_at {
+            Some(ts) => ts.as_str() >= cutoff_str.as_str(),
+            None => false,
+        }
+    }).map(|a| {
+        let outcome = match a.status.as_str() {
+            "evaluated" => {
+                match (a.accuracy_before, a.accuracy_after) {
+                    (Some(before), Some(after)) => {
+                        let delta = after - before;
+                        if delta > 1.0 { format!("improved +{:.1}pp", delta) }
+                        else if delta < -1.0 { format!("degraded {:.1}pp", delta) }
+                        else { "no significant change".to_string() }
+                    }
+                    _ => "evaluated (no accuracy data)".to_string(),
+                }
+            }
+            "rolled_back" => "rolled back — accuracy degraded".to_string(),
+            "approved" => "manually approved".to_string(),
+            "rejected" => "manually rejected".to_string(),
+            "proposed" => "pending approval".to_string(),
+            "executed" => "awaiting evaluation".to_string(),
+            s => s.to_string(),
+        };
+        let mut v = serde_json::to_value(&a).unwrap_or_default();
+        v["outcome"] = serde_json::json!(outcome);
+        v
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "actions": actions,
+        "total": actions.len(),
+    })))
+}
+
+/// GET /api/v1/agent/metrics — Accuracy time-series for dashboard
+async fn get_agent_metrics(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(2000);
+    let asset = params.get("asset").cloned();
+    let metric_type = params.get("type").cloned();
+
+    let all_metrics = pg::get_agent_metrics(&state.pg_pool, asset.as_deref(), metric_type.as_deref(), limit).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let metrics: Vec<_> = all_metrics.into_iter().filter(|m| {
+        let a = &m.asset;
+        !a.contains('=') && !["bitcoin","ethereum","solana","dogecoin","cardano","ripple",
+         "polkadot","avalanche","chainlink","litecoin","uniswap","stellar","monero","aave","cosmos","tron"].contains(&a.as_str())
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "metrics": metrics,
+        "total": metrics.len(),
+    })))
+}
+
+/// POST /api/v1/agent/approve/:action_id
+async fn approve_agent_action(
+    State(state): State<AppState>,
+    Path(action_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    pg::update_agent_action_status(&state.pg_pool, action_id, "approved", None).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({"status": "approved", "action_id": action_id})))
+}
+
+/// POST /api/v1/agent/reject/:action_id
+async fn reject_agent_action(
+    State(state): State<AppState>,
+    Path(action_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    pg::update_agent_action_status(&state.pg_pool, action_id, "rejected", None).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({"status": "rejected", "action_id": action_id})))
+}
+
+/// GET /api/v1/agent/config
+async fn get_agent_config(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let config = agent::AgentConfig::load_from_pg(&state.pg_pool).await;
+    let val = serde_json::to_value(config).unwrap_or_default();
+    Ok(Json(val))
+}
+
+/// PATCH /api/v1/agent/config
+async fn update_agent_config(
+    State(state): State<AppState>,
+    Json(updates): Json<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    for (key, value) in &updates {
+        pg::set_agent_config(&state.pg_pool, key, value).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    let config = agent::AgentConfig::load_from_pg(&state.pg_pool).await;
+    let val = serde_json::to_value(config).unwrap_or_default();
+    Ok(Json(val))
+}
+
+/// GET /api/v1/agent/summary — Aggregated agent stats for dashboard
+async fn get_agent_summary(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let summary = pg::get_agent_summary(&state.pg_pool).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(summary))
+}
+
+/// GET /api/v1/agents/fleet — Fleet status for all 6 agents
+async fn get_fleet_status_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let fleet = pg::get_fleet_status(&state.pg_pool).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(fleet))
+}
+
+/// GET /api/v1/agents/activity — Recent fleet activity feed
+async fn get_fleet_activity_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let limit: i64 = params.get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200);
+    let activities = pg::get_fleet_activity(&state.pg_pool, limit).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "activities": activities })))
+}
+
+/// GET /api/v1/portfolio/ftse — FTSE equity curve from PG signals + ISF.L benchmark
+async fn get_portfolio_ftse(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Get all resolved .L signals from PG
+    let signals = pg::get_resolved_signals_by_suffix(&state.pg_pool, ".L").await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Get ISF.L benchmark from SQLite
+    let db_path = state.db_path.clone();
+    let isf_prices = tokio::task::spawn_blocking(move || -> Vec<(String, f64)> {
+        let database = match db::Database::new(&db_path) {
+            Ok(d) => d,
+            Err(_) => return vec![],
+        };
+        database.get_stock_history("ISF.L")
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| (p.timestamp, p.price))
+            .collect()
+    }).await.unwrap_or_default();
+
+    if signals.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "error": "No FTSE signals found",
+            "signals": [],
+            "equity_curve": [],
+            "benchmark": [],
+        })));
+    }
+
+    // Build daily equity curve from signals
+    let starting_capital = 100_000.0;
+    let mut capital = starting_capital;
+    let mut equity_curve: Vec<serde_json::Value> = Vec::new();
+
+    // Group signals by date
+    let mut daily_signals: std::collections::BTreeMap<String, Vec<&pg::SignalRow>> = std::collections::BTreeMap::new();
+    for sig in &signals {
+        let date = sig.timestamp.split('T').next().unwrap_or(&sig.timestamp).to_string();
+        daily_signals.entry(date).or_default().push(sig);
+    }
+
+    for (date, day_sigs) in &daily_signals {
+        let n = day_sigs.len() as f64;
+        if n == 0.0 { continue; }
+        let daily_return: f64 = day_sigs.iter().filter_map(|s| {
+            let pct = s.pct_change?;
+            match s.signal_type.as_str() {
+                "BUY" => Some(pct / 100.0),
+                "SELL" | "SHORT" => Some(-pct / 100.0),
+                _ => None,
+            }
+        }).sum::<f64>() / n;
+        capital *= 1.0 + daily_return;
+        equity_curve.push(serde_json::json!({
+            "date": date,
+            "value": (capital * 100.0).round() / 100.0,
+        }));
+    }
+
+    // Normalize ISF.L benchmark to same starting capital, aligned to signal period
+    let first_signal_date = daily_signals.keys().next().cloned().unwrap_or_default();
+    let benchmark: Vec<serde_json::Value> = if !isf_prices.is_empty() && !first_signal_date.is_empty() {
+        // Find the ISF.L price on or just before the first signal date
+        let anchor_price = isf_prices.iter()
+            .filter(|(d, _)| d.as_str() <= first_signal_date.as_str())
+            .last()
+            .map(|(_, p)| *p)
+            .unwrap_or(isf_prices[0].1);
+        // Only include dates from the first signal date onward
+        isf_prices.iter()
+            .filter(|(d, _)| d.as_str() >= first_signal_date.as_str())
+            .map(|(d, p)| {
+                serde_json::json!({
+                    "date": d,
+                    "value": (starting_capital * p / anchor_price * 100.0).round() / 100.0,
+                })
+            }).collect()
+    } else {
+        vec![]
+    };
+
+    // Summary stats
+    let total_signals = signals.len();
+    let ftse_assets: std::collections::HashSet<&str> = signals.iter().map(|s| s.asset.as_str()).collect();
+    let correct = signals.iter().filter(|s| s.was_correct == Some(true)).count();
+    let accuracy = if total_signals > 0 { 100.0 * correct as f64 / total_signals as f64 } else { 0.0 };
+    let total_return = if starting_capital > 0.0 { (capital / starting_capital - 1.0) * 100.0 } else { 0.0 };
+
+    Ok(Json(serde_json::json!({
+        "starting_capital": starting_capital,
+        "current_value": (capital * 100.0).round() / 100.0,
+        "total_return_pct": (total_return * 100.0).round() / 100.0,
+        "total_signals": total_signals,
+        "accuracy": (accuracy * 100.0).round() / 100.0,
+        "ftse_assets": ftse_assets.len(),
+        "equity_curve": equity_curve,
+        "benchmark": benchmark,
+    })))
+}
+
+// ════════════════════════════════════════
+// System Health / Data Quality endpoint
+// ════════════════════════════════════════
+
+async fn get_system_health(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let dq = state.data_quality.read().await;
+    let signal_count = state.signals.read().await.len();
+
+    // Check PG pool health
+    let pg_healthy = match state.pg_pool.get().await {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+
+    // Determine overall status
+    let total_writes = dq.pg_write_successes + dq.pg_write_failures;
+    let failure_rate = if total_writes > 0 {
+        (dq.pg_write_failures as f64 / total_writes as f64) * 100.0
+    } else { 0.0 };
+
+    let status = if !pg_healthy {
+        "critical"
+    } else if failure_rate > 50.0 {
+        "critical"
+    } else if failure_rate > 10.0 {
+        "warning"
+    } else {
+        "healthy"
+    };
+
+    Json(serde_json::json!({
+        "status": status,
+        "timestamp": Utc::now().to_rfc3339(),
+        "postgres": {
+            "connected": pg_healthy,
+            "write_successes": dq.pg_write_successes,
+            "write_failures": dq.pg_write_failures,
+            "failure_rate_pct": format!("{:.1}", failure_rate),
+            "last_failure": dq.last_pg_failure,
+            "last_failure_error": dq.last_pg_failure_error,
+            "last_successful_write": dq.last_successful_signal_write,
+        },
+        "signals": {
+            "cached_count": signal_count,
+            "last_generation": dq.last_signal_generation,
+        },
+        "uptime": {
+            "server": "running",
+        }
+    }))
+}
+
 /// Build a default asset config from the existing STOCK_LIST/FX_LIST
 fn default_asset_config() -> config::AssetConfig {
     config::AssetConfig {
@@ -3718,11 +4565,13 @@ fn default_asset_config() -> config::AssetConfig {
             symbol: s.symbol.to_string(),
             name: s.name.to_string(),
             enabled: true,
+            tags: Vec::new(),
         }).collect(),
         fx: stocks::FX_LIST.iter().map(|s| config::AssetEntry {
             symbol: s.symbol.to_string(),
             name: s.name.to_string(),
             enabled: true,
+            tags: Vec::new(),
         }).collect(),
         crypto: Vec::new(),
     }

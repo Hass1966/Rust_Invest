@@ -20,6 +20,33 @@ struct AssetAccuracy {
     ensemble: f64,
 }
 
+/// Regression accuracy results for one asset (v6+)
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct RegressionAccuracy {
+    ridge_mae: f64,
+    lgbm_mae: f64,
+    gru_mae: f64,
+    ridge_dir_acc: f64,
+    lgbm_dir_acc: f64,
+    gru_dir_acc: f64,
+}
+
+/// Save training loss curves to JSON for chart generation
+fn save_training_curves(symbol: &str, model_name: &str, train_losses: &[f64], val_losses: &[f64]) {
+    let _ = std::fs::create_dir_all("reports/training_curves");
+    let data: Vec<serde_json::Value> = train_losses.iter().zip(val_losses.iter()).enumerate()
+        .map(|(epoch, (&tl, &vl))| serde_json::json!({
+            "epoch": epoch + 1,
+            "train_loss": (tl * 10000.0).round() / 10000.0,
+            "val_loss": (vl * 10000.0).round() / 10000.0,
+        }))
+        .collect();
+    let path = format!("reports/training_curves/{}_{}.json", symbol.to_lowercase(), model_name);
+    if let Ok(json) = serde_json::to_string_pretty(&data) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Limit Rayon to 6 cores — leaves 2 free for OS and running services
@@ -30,6 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = std::env::args().collect();
     let test_lstm = args.iter().any(|a| a == "--test-lstm");
+    let horizon: usize = args.iter().position(|a| a == "--horizon")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let horizon_prefix = if horizon > 1 { format!("{}d_", horizon) } else { String::new() };
 
     let client = reqwest::Client::new();
     let database = db::Database::new("rust_invest.db")?;
@@ -52,8 +84,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let now = Utc::now().to_rfc3339();
 
-    // ── Fetch crypto ──
-    println!("━━━ FETCHING CRYPTO DATA ━━━\n");
+    // ── Crypto data fetch disabled (descoped) ──
+    println!("━━━ CRYPTO DATA FETCH SKIPPED (descoped) ━━━\n");
+    if false {
     let coins = crypto::fetch_top_coins(&client).await?;
     for coin in &coins {
         database.insert_crypto(coin, &now)?;
@@ -91,6 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => println!("    ✗ {}: {}", coin.name, e),
         }
     }
+    } // end if false (crypto fetch disabled)
 
     // ── Fetch stocks (Polygon primary, Yahoo fallback) ──
     println!("\n━━━ FETCHING STOCK DATA (7 years) — Polygon primary, Yahoo fallback ━━━\n");
@@ -117,8 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Fetch FX (Polygon primary, Yahoo fallback) ──
-    println!("\n━━━ FETCHING FX DATA (7 years) — Polygon primary, Yahoo fallback ━━━\n");
+    // ── FX data fetch disabled (descoped) ──
+    println!("\n━━━ FX DATA FETCH SKIPPED (descoped) ━━━\n");
+    if false {
     for fx in stocks::FX_LIST {
         let existing = database.count_fx_history(fx.symbol)?;
         if existing > 1000 {
@@ -141,6 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => println!("    ✗ {}: {}", fx.symbol, e),
         }
     }
+    } // end if false (FX fetch disabled)
 
     // ── Fetch market indicators ──
     println!("\n━━━ FETCHING MARKET INDICATORS ━━━\n");
@@ -197,6 +233,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Stored: BOE={}, Gilt={}, ECB={}, EU_HICP={} data points",
         boe_rates.len(), gilt_yields.len(), ecb_rates.len(), eu_inflation.len());
 
+    // ── Fetch FRED series (HY credit spread, breakeven inflation) ──
+    let fred_api_key = std::env::var("FRED_API_KEY").unwrap_or_default();
+    if !fred_api_key.is_empty() {
+        println!("\n━━━ FETCHING FRED SERIES ━━━\n");
+        let (hy_res, be_res) = tokio::join!(
+            macro_data::fetch_hy_spread(&client, &fred_api_key),
+            macro_data::fetch_breakeven_inflation(&client, &fred_api_key),
+        );
+        let hy_spread = hy_res.unwrap_or_else(|e| { println!("  HY spread failed: {}", e); vec![] });
+        let breakeven = be_res.unwrap_or_else(|e| { println!("  Breakeven inflation failed: {}", e); vec![] });
+        for (date, val) in &hy_spread {
+            let _ = database.insert_market_history("HY_SPREAD", *val, None, date);
+        }
+        for (date, val) in &breakeven {
+            let _ = database.insert_market_history("BREAKEVEN_5Y", *val, None, date);
+        }
+        println!("  Stored: HY_SPREAD={}, BREAKEVEN_5Y={} data points", hy_spread.len(), breakeven.len());
+    } else {
+        println!("\n  Skipping FRED series (no FRED_API_KEY set)\n");
+    }
+
     // ── Build market context ──
     let mut market_histories: HashMap<String, Vec<f64>> = HashMap::new();
     let spy_prices: Vec<f64> = database.get_stock_history("SPY")?.iter().map(|p| p.price).collect();
@@ -205,6 +262,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prices = database.get_market_prices(ticker)?;
         market_histories.insert(ticker.to_string(), prices);
     }
+    // FRED series (stored in market_history by train)
+    market_histories.insert("HY_SPREAD".to_string(), database.get_market_prices("HY_SPREAD").unwrap_or_default());
+    market_histories.insert("BREAKEVEN_5Y".to_string(), database.get_market_prices("BREAKEVEN_5Y").unwrap_or_default());
     let market_context = features::build_market_context(&market_histories);
 
     // Build ExtendedMacro with BOE/ECB data
@@ -220,18 +280,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         short_interest_ratio: 0.0,
     };
 
-    // ── Train & save all 6 models for stocks ──
-    println!("\n━━━ TRAINING ALL 6 MODELS (Walk-Forward) ━━━\n");
+    // ── Train regression models for stocks (Ridge + LightGBM + GRU) ──
+    println!("\n━━━ TRAINING REGRESSION MODELS (v6: Ridge + LightGBM + GRU) ━━━\n");
     let total_features = features::feature_names().len();
     println!("  Total features: {} (active: {}, pruned: {})",
         total_features, features::active_feature_count(), total_features - features::active_feature_count());
 
     let ensemble_overrides = ensemble::load_ensemble_overrides();
     let mut accuracy_results: HashMap<String, AssetAccuracy> = HashMap::new();
+    let mut regression_results: HashMap<String, RegressionAccuracy> = HashMap::new();
 
     let mut backtest_results: Vec<backtester::BacktestResult> = Vec::new();
     let bt_config = backtester::BacktestConfig::default();
-    // let tft_config = tft::TFTConfig::default();
 
     // Pre-fetch all stock data from database (sequential reads)
     let stock_data: Vec<_> = stocks::STOCK_LIST.iter().filter_map(|stock| {
@@ -243,20 +303,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Train all stocks in parallel using all CPU cores
     type RetrainLog = (String, f64, f64, i64, i64, i64, i64);
-    let stock_results: Vec<(Option<(String, AssetAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
+    let stock_results: Vec<(Option<(String, RegressionAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
         stock_data.par_iter().filter_map(|(stock, points)| {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
 
-        let samples = features::build_rich_features_ext(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None, Some(&ext_macro), None);
+        let samples = features::build_rich_features_horizon(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, None, Some(&ext_macro), None, horizon);
         if samples.len() < 100 { return None; }
-
-        let vol_threshold = features::compute_volatility_threshold(&samples);
-        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&samples, vol_threshold);
-        let (w_down, w_up) = features::compute_class_weights(&samples, vol_threshold);
-        println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
-            stock.symbol, buy_count, short_count, sell_count, hold_count, w_down, w_up);
 
         let pre_acc = model_store::load_model_accuracy(stock.symbol);
 
@@ -267,17 +321,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut accuracy_data = None;
 
-        if let Some(wf) = ensemble::walk_forward_samples(stock.symbol, &samples, train_window, test_window, step) {
-            let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
-
-            let mut regime_acc = 0.0;
-            if let Some(rw) = regime::walk_forward_regime(stock.symbol, &samples, train_window, test_window, step) {
-                regime_acc = rw.overall_accuracy;
-            }
-
-            let ov = ensemble::get_override(&ensemble_overrides, stock.symbol);
-            let ens_acc = compute_ensemble_accuracy(&wf, &ov);
-
+        if let Some(reg) = ensemble::walk_forward_regression(stock.symbol, &samples, train_window, test_window, step) {
             // Save final-fold models
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
@@ -286,45 +330,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
-
             let recency_weights = ensemble::compute_recency_weights(last_fold.len());
-            let class_adjusted_weights: Vec<f64> = last_fold.iter().zip(recency_weights.iter()).map(|(s, &rw)| {
-                let cw = if s.label > 0.0 { w_up } else { w_down };
-                rw * cw
-            }).collect();
-
-            let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.005, 3000);
-            let _ = model_store::save_weights(stock.symbol, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
-
-            let mut log = ml::LogisticRegression::new(n_feat);
-            log.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.01, 3000);
-            let _ = model_store::save_weights(stock.symbol, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
-            let y_train: Vec<f64> = last_fold.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+            let y_train: Vec<f64> = last_fold.iter().map(|s| s.label).collect(); // continuous % returns
+
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
-            let gbt_recency = &class_adjusted_weights[..x_t.len()];
-            let gbt_config = gbt::GBTConfig::default();
-            let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
-            let _ = model_store::save_gbt(stock.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            let post_acc = (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0;
-            println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
-                stock.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
-                lstm_acc, regime_acc);
+            // === Save Ridge ===
+            if let Ok(ridge) = ridge::RidgeRegression::train(x_t, y_t, 10.0) {
+                if horizon_prefix.is_empty() {
+                    let _ = ridge.save(stock.symbol, n_feat, last_fold.len(), reg.ridge_mae, &means, &stds);
+                } else {
+                    // Save 5d Ridge model with prefix
+                    let _ = ridge.save_as(&format!("{}{}",horizon_prefix, stock.symbol.to_lowercase()), n_feat, last_fold.len(), reg.ridge_mae, &means, &stds);
+                }
+            }
 
-            accuracy_data = Some((stock.symbol.to_string(), AssetAccuracy {
-                linreg: wf.linear_accuracy,
-                logreg: wf.logistic_accuracy,
-                gbt: wf.gbt_accuracy,
-                lstm: lstm_acc,
-                regime: regime_acc,
-                ensemble: ens_acc,
+            // === Save LightGBM Regressor ===
+            let lgbm_recency: Vec<f64> = recency_weights[..x_t.len()].to_vec();
+            let lgbm_config = lgbm::LGBMRegressorConfig::default();
+            if let Ok(lgbm) = lgbm::LightGBMRegressor::train(x_t, y_t, Some(&lgbm_recency), Some(x_v), Some(y_v), &lgbm_config) {
+                let save_path = if horizon_prefix.is_empty() {
+                    model_store::lgbm_regressor_path(stock.symbol)
+                } else {
+                    model_store::lgbm_regressor_path_5d(stock.symbol)
+                };
+                let _ = lgbm.save(&save_path);
+                // Save LGBM MAE separately for proper weighting at inference
+                let _ = model_store::save_lgbm_mae(stock.symbol, reg.lgbm_mae, reg.lgbm_dir_acc);
+            }
+
+            // === Save GRU Regression ===
+            let top_feature_indices: Vec<usize> = if !reg.lgbm_importance.is_empty() {
+                let mut indexed: Vec<(usize, f64)> = reg.lgbm_importance.iter()
+                    .enumerate().map(|(i, (_, imp))| (i, *imp)).collect();
+                indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                indexed.iter().take(30).map(|(idx, _)| *idx).collect()
+            } else {
+                (0..n_feat.min(30)).collect()
+            };
+
+            let gru_n_feat = if top_feature_indices.len() >= 20 { top_feature_indices.len() } else { n_feat };
+            let gru_fi = if top_feature_indices.len() >= 20 { Some(top_feature_indices.as_slice()) } else { None };
+
+            let gru_config = gru::GRURegressionConfig {
+                input_size: gru_n_feat,
+                ..gru::GRURegressionConfig::default()
+            };
+
+            if let Ok(mut gru_model) = gru::GRURegressionModel::new(gru_config) {
+                let val_split = (last_fold.len() as f64 * 0.85) as usize;
+                let (train_part, val_part) = last_fold.split_at(val_split);
+                match gru_model.train_regression(train_part, val_part, gru_fi) {
+                    Ok(result) => {
+                        let gru_path = model_store::gru_path(stock.symbol);
+                        let _ = gru_model.save(&gru_path);
+                        let _ = model_store::save_gru_meta(
+                            stock.symbol, gru_n_feat, gru_config.hidden_size,
+                            gru_config.seq_length, train_part.len(), result.val_mae,
+                            &means, &stds, gru_fi,
+                        );
+                        save_training_curves(stock.symbol, "gru", &result.train_losses, &result.val_losses);
+                    }
+                    Err(e) => println!("    [GRU-Reg] {} training failed: {}", stock.symbol, e),
+                }
+            }
+
+            let post_acc = reg.ridge_dir_acc * 100.0;
+            println!("  ✓ Regression models trained for {} [Ridge MAE:{:.4} Dir:{:.1}% | LGBM MAE:{:.4} Dir:{:.1}% | GRU MAE:{:.4} Dir:{:.1}%]",
+                stock.symbol, reg.ridge_mae, reg.ridge_dir_acc * 100.0,
+                reg.lgbm_mae, reg.lgbm_dir_acc * 100.0,
+                reg.gru_mae, reg.gru_dir_acc * 100.0);
+
+            accuracy_data = Some((stock.symbol.to_string(), RegressionAccuracy {
+                ridge_mae: reg.ridge_mae,
+                lgbm_mae: reg.lgbm_mae,
+                gru_mae: reg.gru_mae,
+                ridge_dir_acc: reg.ridge_dir_acc * 100.0,
+                lgbm_dir_acc: reg.lgbm_dir_acc * 100.0,
+                gru_dir_acc: reg.gru_dir_acc * 100.0,
             }, (stock.symbol.to_string(), pre_acc, post_acc,
-                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64)));
+                0, 0, 0, 0)));
         }
 
         let backtest = backtester::run_backtest(stock.symbol, &samples, &prices, train_window, test_window, step, &bt_config);
@@ -334,17 +423,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Merge results and write retrain logs (sequential DB writes)
     for (accuracy_opt, backtest_opt) in stock_results {
         if let Some((symbol, acc, (sym, pre_acc, post_acc, buy, sell, short, hold))) = accuracy_opt {
-            accuracy_results.insert(symbol, acc);
-            let _ = database.insert_retrain_log(&sym, "ensemble", pre_acc, post_acc, buy, sell, short, hold);
+            regression_results.insert(symbol, acc);
+            let _ = database.insert_retrain_log(&sym, "regression", pre_acc, post_acc, buy, sell, short, hold);
         }
         if let Some(bt) = backtest_opt {
             backtest_results.push(bt);
         }
     }
 
-    // ── Train & save all 6 models for FX ──
-    println!("\n━━━ TRAINING FX MODELS ━━━\n");
-    // Pre-fetch all FX data from database (sequential reads)
+    // ── FX training disabled (descoped — separate project) ──
+    println!("\n━━━ FX TRAINING SKIPPED (descoped) ━━━\n");
+    if false {
+    println!("\n━━━ TRAINING FX REGRESSION MODELS ━━━\n");
     let fx_data: Vec<_> = stocks::FX_LIST.iter().filter_map(|fx| {
         database.get_fx_history(fx.symbol).ok()
             .filter(|points| points.len() >= 300)
@@ -352,19 +442,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }).collect();
     println!("  Loaded {} FX pairs — training in parallel\n", fx_data.len());
 
-    let fx_results: Vec<(Option<(String, AssetAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
+    let fx_results: Vec<(Option<(String, RegressionAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
         fx_data.par_iter().filter_map(|(fx, points)| {
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
         let timestamps: Vec<String> = points.iter().map(|p| p.timestamp.clone()).collect();
-        let samples = features::build_rich_features_ext(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None, Some(&ext_macro), None);
+        let samples = features::build_rich_features_horizon(&prices, &volumes, &timestamps, Some(&market_context), "fx", Some(fx.symbol), None, None, Some(&ext_macro), None, horizon);
         if samples.len() < 100 { return None; }
-
-        let vol_threshold = features::compute_volatility_threshold(&samples);
-        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(&samples, vol_threshold);
-        let (w_down, w_up) = features::compute_class_weights(&samples, vol_threshold);
-        println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
-            fx.symbol, buy_count, short_count, sell_count, hold_count, w_down, w_up);
 
         let pre_acc = model_store::load_model_accuracy(fx.symbol);
 
@@ -375,17 +459,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut accuracy_data = None;
 
-        if let Some(wf) = ensemble::walk_forward_samples(fx.symbol, &samples, train_window, test_window, step) {
-            let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
-
-            let mut regime_acc = 0.0;
-            if let Some(rw) = regime::walk_forward_regime(fx.symbol, &samples, train_window, test_window, step) {
-                regime_acc = rw.overall_accuracy;
-            }
-
-            let ov = ensemble::get_override(&ensemble_overrides, fx.symbol);
-            let ens_acc = compute_ensemble_accuracy(&wf, &ov);
-
+        if let Some(reg) = ensemble::walk_forward_regression(fx.symbol, &samples, train_window, test_window, step) {
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
                 while s + train_window + test_window <= samples.len() { last = s + train_window; s += step; }
@@ -394,43 +468,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_fold: Vec<ml::Sample> = samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
             let recency_weights = ensemble::compute_recency_weights(last_fold.len());
-            let class_adjusted_weights: Vec<f64> = last_fold.iter().zip(recency_weights.iter()).map(|(s, &rw)| {
-                let cw = if s.label > 0.0 { w_up } else { w_down };
-                rw * cw
-            }).collect();
-
-            let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.005, 3000);
-            let _ = model_store::save_weights(fx.symbol, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
-
-            let mut log = ml::LogisticRegression::new(n_feat);
-            log.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.01, 3000);
-            let _ = model_store::save_weights(fx.symbol, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
-            let y_train: Vec<f64> = last_fold.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+            let y_train: Vec<f64> = last_fold.iter().map(|s| s.label).collect();
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
-            let gbt_recency = &class_adjusted_weights[..x_t.len()];
-            let gbt_config = gbt::GBTConfig::default();
-            let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
-            let _ = model_store::save_gbt(fx.symbol, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            let post_acc = (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0;
-            println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
-                fx.symbol, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
-                lstm_acc, regime_acc);
+            if let Ok(ridge) = ridge::RidgeRegression::train(x_t, y_t, 10.0) {
+                let _ = ridge.save(fx.symbol, n_feat, last_fold.len(), reg.ridge_mae, &means, &stds);
+            }
 
-            accuracy_data = Some((fx.symbol.to_string(), AssetAccuracy {
-                linreg: wf.linear_accuracy,
-                logreg: wf.logistic_accuracy,
-                gbt: wf.gbt_accuracy,
-                lstm: lstm_acc,
-                regime: regime_acc,
-                ensemble: ens_acc,
-            }, (fx.symbol.to_string(), pre_acc, post_acc,
-                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64)));
+            let lgbm_recency: Vec<f64> = recency_weights[..x_t.len()].to_vec();
+            let lgbm_config = lgbm::LGBMRegressorConfig::default();
+            if let Ok(lgbm) = lgbm::LightGBMRegressor::train(x_t, y_t, Some(&lgbm_recency), Some(x_v), Some(y_v), &lgbm_config) {
+                let _ = lgbm.save(&model_store::lgbm_regressor_path(fx.symbol));
+            }
+
+            let top_fi: Vec<usize> = if !reg.lgbm_importance.is_empty() {
+                let mut indexed: Vec<(usize, f64)> = reg.lgbm_importance.iter()
+                    .enumerate().map(|(i, (_, imp))| (i, *imp)).collect();
+                indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                indexed.iter().take(30).map(|(idx, _)| *idx).collect()
+            } else { (0..n_feat.min(30)).collect() };
+            let gru_n = if top_fi.len() >= 20 { top_fi.len() } else { n_feat };
+            let gru_fi = if top_fi.len() >= 20 { Some(top_fi.as_slice()) } else { None };
+            let gru_config = gru::GRURegressionConfig { input_size: gru_n, ..gru::GRURegressionConfig::default() };
+
+            if let Ok(mut gru_model) = gru::GRURegressionModel::new(gru_config) {
+                let val_split = (last_fold.len() as f64 * 0.85) as usize;
+                let (tp, vp) = last_fold.split_at(val_split);
+                if let Ok(result) = gru_model.train_regression(tp, vp, gru_fi) {
+                    let _ = gru_model.save(&model_store::gru_path(fx.symbol));
+                    let _ = model_store::save_gru_meta(fx.symbol, gru_n, gru_config.hidden_size, gru_config.seq_length, tp.len(), result.val_mae, &means, &stds, gru_fi);
+                    save_training_curves(fx.symbol, "gru", &result.train_losses, &result.val_losses);
+                }
+            }
+
+            let post_acc = reg.ridge_dir_acc * 100.0;
+            println!("  ✓ FX regression trained for {} [Ridge MAE:{:.4} | LGBM MAE:{:.4} | GRU MAE:{:.4}]",
+                fx.symbol, reg.ridge_mae, reg.lgbm_mae, reg.gru_mae);
+
+            accuracy_data = Some((fx.symbol.to_string(), RegressionAccuracy {
+                ridge_mae: reg.ridge_mae, lgbm_mae: reg.lgbm_mae, gru_mae: reg.gru_mae,
+                ridge_dir_acc: reg.ridge_dir_acc * 100.0, lgbm_dir_acc: reg.lgbm_dir_acc * 100.0, gru_dir_acc: reg.gru_dir_acc * 100.0,
+            }, (fx.symbol.to_string(), pre_acc, post_acc, 0, 0, 0, 0)));
         }
 
         let backtest = backtester::run_backtest(fx.symbol, &samples, &prices, train_window, test_window, step, &bt_config);
@@ -439,14 +521,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (accuracy_opt, backtest_opt) in fx_results {
         if let Some((symbol, acc, (sym, pre_acc, post_acc, buy, sell, short, hold))) = accuracy_opt {
-            accuracy_results.insert(symbol, acc);
-            let _ = database.insert_retrain_log(&sym, "ensemble", pre_acc, post_acc, buy, sell, short, hold);
+            regression_results.insert(symbol, acc);
+            let _ = database.insert_retrain_log(&sym, "regression", pre_acc, post_acc, buy, sell, short, hold);
         }
         if let Some(bt) = backtest_opt {
             backtest_results.push(bt);
         }
     }
+    } // end if false (FX disabled)
 
+    // ── Crypto training disabled (descoped — separate project) ──
+    println!("━━━ CRYPTO TRAINING SKIPPED (descoped) ━━━\n");
+    if false {
     // ── Train crypto models ──
     let coin_ids: Vec<String> = database.get_all_coin_ids()?.into_iter().filter(|id| id != "tether").collect();
 
@@ -472,7 +558,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if points.len() < 200 { return None; }
         let prices: Vec<f64> = points.iter().map(|p| p.price).collect();
         let volumes: Vec<Option<f64>> = points.iter().map(|p| p.volume).collect();
-        let base_samples = gbt::build_extended_features(&prices, &volumes);
+        let base_samples = gbt::build_extended_features_horizon(&prices, &volumes, horizon);
         if base_samples.is_empty() { return None; }
 
         let enriched_samples: Vec<ml::Sample> = if let Some(crypto_rows) = crypto_enrichment.get(coin_id.as_str()) {
@@ -500,14 +586,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }).collect();
     println!("  Prepared {} crypto assets — training in parallel\n", crypto_prepared.len());
 
-    let crypto_results: Vec<(Option<(String, AssetAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
+    let crypto_results: Vec<(Option<(String, RegressionAccuracy, RetrainLog)>, Option<backtester::BacktestResult>)> =
         crypto_prepared.par_iter().filter_map(|(coin_id, enriched_samples, prices)| {
-        let vol_threshold = features::compute_volatility_threshold(enriched_samples);
-        let (buy_count, short_count, sell_count, hold_count) = features::class_distribution(enriched_samples, vol_threshold);
-        let (w_down, w_up) = features::compute_class_weights(enriched_samples, vol_threshold);
-        println!("  {} class dist: BUY={} SHORT={} SELL={} HOLD={} (w_down={:.2} w_up={:.2})",
-            coin_id, buy_count, short_count, sell_count, hold_count, w_down, w_up);
-
         let pre_acc = model_store::load_model_accuracy(coin_id);
 
         let n_feat = enriched_samples[0].features.len();
@@ -517,14 +597,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut accuracy_data = None;
 
-        if let Some(wf) = ensemble::walk_forward_samples(coin_id, enriched_samples, train_window, test_window, step) {
-            let lstm_acc = if wf.has_lstm { wf.lstm_accuracy } else { 0.0 };
-
-            let mut regime_acc = 0.0;
-            if let Some(rw) = regime::walk_forward_regime(coin_id, enriched_samples, train_window, test_window, step) {
-                regime_acc = rw.overall_accuracy;
-            }
-
+        if let Some(reg) = ensemble::walk_forward_regression(coin_id, enriched_samples, train_window, test_window, step) {
             let last_train_end = {
                 let mut s = 0; let mut last = 0;
                 while s + train_window + test_window <= enriched_samples.len() { last = s + train_window; s += step; }
@@ -533,43 +606,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_fold: Vec<ml::Sample> = enriched_samples[last_train_end.saturating_sub(train_window)..last_train_end].to_vec();
             let (means, stds) = ml::normalise(&mut last_fold);
             let recency_weights = ensemble::compute_recency_weights(last_fold.len());
-            let class_adjusted_weights: Vec<f64> = last_fold.iter().zip(recency_weights.iter()).map(|(s, &rw)| {
-                let cw = if s.label > 0.0 { w_up } else { w_down };
-                rw * cw
-            }).collect();
-
-            let mut lin = ml::LinearRegression::new(n_feat);
-            lin.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.005, 3000);
-            let _ = model_store::save_weights(coin_id, "linreg", &lin.weights, lin.bias, n_feat, last_fold.len(), wf.linear_accuracy, &means, &stds);
-
-            let mut log = ml::LogisticRegression::new(n_feat);
-            log.train_weighted(&last_fold, Some(&class_adjusted_weights), 0.01, 3000);
-            let _ = model_store::save_weights(coin_id, "logreg", &log.weights, log.bias, n_feat, last_fold.len(), wf.logistic_accuracy, &means, &stds);
 
             let x_train: Vec<Vec<f64>> = last_fold.iter().map(|s| s.features.clone()).collect();
-            let y_train: Vec<f64> = last_fold.iter().map(|s| if s.label > 0.0 { 1.0 } else { 0.0 }).collect();
+            let y_train: Vec<f64> = last_fold.iter().map(|s| s.label).collect();
             let val_start = (x_train.len() as f64 * 0.85) as usize;
             let (x_t, x_v) = x_train.split_at(val_start);
             let (y_t, y_v) = y_train.split_at(val_start);
-            let gbt_recency = &class_adjusted_weights[..x_t.len()];
-            let gbt_config = gbt::GBTConfig::default();
-            let gbt_model = gbt::GradientBoostedClassifier::train_weighted(x_t, y_t, Some(gbt_recency), Some(x_v), Some(y_v), gbt_config);
-            let _ = model_store::save_gbt(coin_id, &gbt_model, last_fold.len(), wf.gbt_accuracy, &means, &stds);
 
-            let post_acc = (wf.linear_accuracy + wf.logistic_accuracy + wf.gbt_accuracy) / 3.0;
-            println!("  ✓ All 5 models trained for {} [LinReg:{:.1}% LogReg:{:.1}% GBT:{:.1}% LSTM:{:.1}% Regime:{:.1}%]",
-                coin_id, wf.linear_accuracy, wf.logistic_accuracy, wf.gbt_accuracy,
-                lstm_acc, regime_acc);
+            if let Ok(ridge) = ridge::RidgeRegression::train(x_t, y_t, 10.0) {
+                let _ = ridge.save(coin_id, n_feat, last_fold.len(), reg.ridge_mae, &means, &stds);
+            }
 
-            accuracy_data = Some((coin_id.to_string(), AssetAccuracy {
-                linreg: wf.linear_accuracy,
-                logreg: wf.logistic_accuracy,
-                gbt: wf.gbt_accuracy,
-                lstm: lstm_acc,
-                regime: regime_acc,
-                ensemble: post_acc,
-            }, (coin_id.to_string(), pre_acc, post_acc,
-                buy_count as i64, sell_count as i64, short_count as i64, hold_count as i64)));
+            let lgbm_recency: Vec<f64> = recency_weights[..x_t.len()].to_vec();
+            let lgbm_config = lgbm::LGBMRegressorConfig::default();
+            if let Ok(lgbm) = lgbm::LightGBMRegressor::train(x_t, y_t, Some(&lgbm_recency), Some(x_v), Some(y_v), &lgbm_config) {
+                let _ = lgbm.save(&model_store::lgbm_regressor_path(coin_id));
+            }
+
+            let top_fi: Vec<usize> = if !reg.lgbm_importance.is_empty() {
+                let mut indexed: Vec<(usize, f64)> = reg.lgbm_importance.iter()
+                    .enumerate().map(|(i, (_, imp))| (i, *imp)).collect();
+                indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                indexed.iter().take(30).map(|(idx, _)| *idx).collect()
+            } else { (0..n_feat.min(30)).collect() };
+            let gru_n = if top_fi.len() >= 20 { top_fi.len() } else { n_feat };
+            let gru_fi = if top_fi.len() >= 20 { Some(top_fi.as_slice()) } else { None };
+            let gru_config = gru::GRURegressionConfig { input_size: gru_n, ..gru::GRURegressionConfig::default() };
+
+            if let Ok(mut gru_model) = gru::GRURegressionModel::new(gru_config) {
+                let val_split = (last_fold.len() as f64 * 0.85) as usize;
+                let (tp, vp) = last_fold.split_at(val_split);
+                if let Ok(result) = gru_model.train_regression(tp, vp, gru_fi) {
+                    let _ = gru_model.save(&model_store::gru_path(coin_id));
+                    let _ = model_store::save_gru_meta(coin_id, gru_n, gru_config.hidden_size, gru_config.seq_length, tp.len(), result.val_mae, &means, &stds, gru_fi);
+                    save_training_curves(coin_id, "gru", &result.train_losses, &result.val_losses);
+                }
+            }
+
+            let post_acc = reg.ridge_dir_acc * 100.0;
+            println!("  ✓ Crypto regression trained for {} [Ridge MAE:{:.4} | LGBM MAE:{:.4} | GRU MAE:{:.4}]",
+                coin_id, reg.ridge_mae, reg.lgbm_mae, reg.gru_mae);
+
+            accuracy_data = Some((coin_id.to_string(), RegressionAccuracy {
+                ridge_mae: reg.ridge_mae, lgbm_mae: reg.lgbm_mae, gru_mae: reg.gru_mae,
+                ridge_dir_acc: reg.ridge_dir_acc * 100.0, lgbm_dir_acc: reg.lgbm_dir_acc * 100.0, gru_dir_acc: reg.gru_dir_acc * 100.0,
+            }, (coin_id.to_string(), pre_acc, post_acc, 0, 0, 0, 0)));
         }
 
         let backtest = backtester::run_backtest(coin_id, enriched_samples, prices, train_window, test_window, step, &bt_config);
@@ -578,13 +659,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (accuracy_opt, backtest_opt) in crypto_results {
         if let Some((symbol, acc, (sym, pre_acc, post_acc, buy, sell, short, hold))) = accuracy_opt {
-            accuracy_results.insert(symbol, acc);
-            let _ = database.insert_retrain_log(&sym, "ensemble", pre_acc, post_acc, buy, sell, short, hold);
+            regression_results.insert(symbol, acc);
+            let _ = database.insert_retrain_log(&sym, "regression", pre_acc, post_acc, buy, sell, short, hold);
         }
         if let Some(bt) = backtest_opt {
             backtest_results.push(bt);
         }
     }
+    } // end if false (crypto disabled)
 
     if !backtest_results.is_empty() {
         backtester::print_backtest_summary(&backtest_results);
@@ -623,49 +705,105 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // ── Save improved results and generate comparison report ──
-    if !accuracy_results.is_empty() {
+    // ── Save regression results ──
+    if !regression_results.is_empty() {
         let improved = serde_json::json!({
-            "version": "v10_5model",
+            "version": "v6_regression",
             "date": Utc::now().format("%Y-%m-%d").to_string(),
             "features": features::active_feature_count(),
-            "models": ["LinReg", "LogReg", "GBT", "LSTM", "RegimeEnsemble"],
-            "assets": accuracy_results.iter().map(|(k, v)| {
+            "models": ["Ridge", "LightGBM", "GRU"],
+            "assets": regression_results.iter().map(|(k, v)| {
                 (k.clone(), serde_json::json!({
-                    "linreg": (v.linreg * 10.0).round() / 10.0,
-                    "logreg": (v.logreg * 10.0).round() / 10.0,
-                    "gbt": (v.gbt * 10.0).round() / 10.0,
-                    "lstm": (v.lstm * 10.0).round() / 10.0,
-                    "regime": (v.regime * 10.0).round() / 10.0,
-                    "ensemble": (v.ensemble * 10.0).round() / 10.0,
+                    "ridge_mae": (v.ridge_mae * 10000.0).round() / 10000.0,
+                    "lgbm_mae": (v.lgbm_mae * 10000.0).round() / 10000.0,
+                    "gru_mae": (v.gru_mae * 10000.0).round() / 10000.0,
+                    "ridge_dir_acc": (v.ridge_dir_acc * 10.0).round() / 10.0,
+                    "lgbm_dir_acc": (v.lgbm_dir_acc * 10.0).round() / 10.0,
+                    "gru_dir_acc": (v.gru_dir_acc * 10.0).round() / 10.0,
                 }))
             }).collect::<serde_json::Map<String, serde_json::Value>>()
         });
 
         let _ = std::fs::create_dir_all("reports");
         let _ = std::fs::write("reports/improved.json", serde_json::to_string_pretty(&improved).unwrap_or_default());
-
-        generate_comparison_report(&accuracy_results, &ensemble_overrides);
-        println!("  Comparison report: reports/improvement_report.html");
     }
 
-    // ── Print 6-model summary table ──
-    if !accuracy_results.is_empty() {
-        println!("\n━━━ 5-MODEL ACCURACY SUMMARY ━━━\n");
-        println!("  {:<16} {:>7} {:>7} {:>7} {:>7} {:>7}",
-            "Asset", "LinReg", "LogReg", "GBT", "LSTM", "Regime");
-        println!("  {}", "-".repeat(56));
-        let mut sorted_assets: Vec<&String> = accuracy_results.keys().collect();
+    // ── Print regression summary table ──
+    if !regression_results.is_empty() {
+        println!("\n━━━ REGRESSION MODEL SUMMARY (v6) ━━━\n");
+        println!("  {:<16} {:>10} {:>10} {:>10} {:>9} {:>9} {:>9}",
+            "Asset", "Ridge MAE", "LGBM MAE", "GRU MAE", "Ridge%", "LGBM%", "GRU%");
+        println!("  {}", "-".repeat(80));
+        let mut sorted_assets: Vec<&String> = regression_results.keys().collect();
         sorted_assets.sort();
         for asset in sorted_assets {
-            let a = &accuracy_results[asset];
-            println!("  {:<16} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
-                asset, a.linreg, a.logreg, a.gbt, a.lstm, a.regime);
+            let a = &regression_results[asset];
+            println!("  {:<16} {:>10.4} {:>10.4} {:>10.4} {:>8.1}% {:>8.1}% {:>8.1}%",
+                asset, a.ridge_mae, a.lgbm_mae, a.gru_mae,
+                a.ridge_dir_acc, a.lgbm_dir_acc, a.gru_dir_acc);
+        }
+    }
+
+    // ── Aggregate feature importance across all assets ──
+    {
+        let mut global_importance: HashMap<String, Vec<f64>> = HashMap::new();
+        // Load importance from saved LightGBM models
+        let feature_names = features::active_feature_names();
+        for symbol in regression_results.keys() {
+            let lgbm_path = model_store::lgbm_regressor_path(symbol);
+            if let Ok(m) = lgbm::LightGBMRegressor::load(&lgbm_path, feature_names.len()) {
+                let feat_refs: Vec<&str> = feature_names.iter().map(|s| s.as_str()).collect();
+                let importance = m.feature_importance(&feat_refs);
+                for (name, imp) in &importance {
+                    global_importance.entry(name.clone()).or_default().push(*imp);
+                }
+            }
+        }
+
+        if !global_importance.is_empty() {
+            // Rank by mean importance
+            let mut ranked: Vec<(String, f64)> = global_importance.iter()
+                .map(|(name, imps)| (name.clone(), imps.iter().sum::<f64>() / imps.len() as f64))
+                .collect();
+            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Print top 30
+            println!("\n━━━ FEATURE IMPORTANCE (Top 30) ━━━\n");
+            for (i, (name, imp)) in ranked.iter().take(30).enumerate() {
+                println!("  {:>2}. {:<30} {:.6}", i + 1, name, imp);
+            }
+
+            // Save full report
+            let report = serde_json::json!({
+                "generated_at": chrono::Utc::now().to_rfc3339(),
+                "n_assets": regression_results.len(),
+                "n_features": feature_names.len(),
+                "ranked_features": ranked.iter().enumerate().map(|(i, (name, imp))| {
+                    serde_json::json!({
+                        "rank": i + 1,
+                        "name": name,
+                        "mean_importance": (imp * 1_000_000.0).round() / 1_000_000.0,
+                        "n_assets_present": global_importance.get(name).map(|v| v.len()).unwrap_or(0),
+                    })
+                }).collect::<Vec<_>>(),
+                "recommended_top_30": ranked.iter().take(30)
+                    .filter(|(name, _)| {
+                        // Remove auto-correlated features from recommendations
+                        !["autocorr_1d", "consecutive_up_days", "consecutive_down_days"].contains(&name.as_str())
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>(),
+            });
+
+            let _ = std::fs::create_dir_all("reports");
+            let _ = std::fs::write("reports/feature_importance.json",
+                serde_json::to_string_pretty(&report).unwrap_or_default());
+            println!("\n  Feature importance report saved to reports/feature_importance.json");
         }
     }
 
     println!("\n━━━ TRAINING COMPLETE ━━━");
-    println!("  Models: 5 (LinReg, LogReg, GBT, LSTM, RegimeEnsemble)");
+    println!("  Models: 2 (Ridge, LightGBM Regressor) — GRU disabled");
     println!("  Features: {} active ({} total, {} pruned)",
         features::active_feature_count(), features::feature_names().len(),
         features::feature_names().len() - features::active_feature_count());
@@ -689,6 +827,8 @@ async fn run_lstm_test(database: &db::Database) -> Result<(), Box<dyn std::error
         let prices = database.get_market_prices(ticker)?;
         market_histories.insert(ticker.to_string(), prices);
     }
+    market_histories.insert("HY_SPREAD".to_string(), database.get_market_prices("HY_SPREAD").unwrap_or_default());
+    market_histories.insert("BREAKEVEN_5Y".to_string(), database.get_market_prices("BREAKEVEN_5Y").unwrap_or_default());
     let market_context = features::build_market_context(&market_histories);
 
     for symbol in &test_symbols {

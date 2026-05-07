@@ -1,0 +1,12 @@
+{
+  "overrides": {
+    "FNF": {
+      "buy_threshold": 0.6,
+      "sell_threshold": null,
+      "reason": "Agent: asymmetric accuracy adjustment",
+      "set_by": "agent",
+      "set_at": "2026-05-06T16:56:45.702858799+00:00",
+      "expires_at": "2026-05-13T16:56:45.702862023+00:00"
+    }
+  }
+}

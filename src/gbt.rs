@@ -673,7 +673,16 @@ pub fn build_extended_features(
     prices: &[f64],
     volumes: &[Option<f64>],
 ) -> Vec<Sample> {
-    let base_samples = ml::build_features(prices, volumes);
+    build_extended_features_horizon(prices, volumes, 1)
+}
+
+/// Build extended features with configurable prediction horizon.
+pub fn build_extended_features_horizon(
+    prices: &[f64],
+    volumes: &[Option<f64>],
+    horizon: usize,
+) -> Vec<Sample> {
+    let base_samples = ml::build_features_horizon(prices, volumes, horizon);
 
     if prices.len() < 201 {
         return base_samples;

@@ -1,0 +1,219 @@
+{
+  "generated_at": "2026-05-07T06:00:21.555118314+00:00",
+  "n_assets": 351,
+  "n_features": 30,
+  "ranked_features": [
+    {
+      "mean_importance": 0.498999,
+      "n_assets_present": 351,
+      "name": "BB_position",
+      "rank": 1
+    },
+    {
+      "mean_importance": 0.023584,
+      "n_assets_present": 351,
+      "name": "volume_ratio_20d",
+      "rank": 2
+    },
+    {
+      "mean_importance": 0.022045,
+      "n_assets_present": 351,
+      "name": "vix_9d_ratio",
+      "rank": 3
+    },
+    {
+      "mean_importance": 0.021824,
+      "n_assets_present": 351,
+      "name": "BB_width",
+      "rank": 4
+    },
+    {
+      "mean_importance": 0.021288,
+      "n_assets_present": 351,
+      "name": "volume_ratio_5d",
+      "rank": 5
+    },
+    {
+      "mean_importance": 0.019939,
+      "n_assets_present": 351,
+      "name": "daily_range_pct",
+      "rank": 6
+    },
+    {
+      "mean_importance": 0.019643,
+      "n_assets_present": 351,
+      "name": "price_vs_52w_high",
+      "rank": 7
+    },
+    {
+      "mean_importance": 0.019614,
+      "n_assets_present": 351,
+      "name": "gold_return_5d",
+      "rank": 8
+    },
+    {
+      "mean_importance": 0.018996,
+      "n_assets_present": 351,
+      "name": "spy_ret_21d",
+      "rank": 9
+    },
+    {
+      "mean_importance": 0.0187,
+      "n_assets_present": 351,
+      "name": "dollar_return_5d",
+      "rank": 10
+    },
+    {
+      "mean_importance": 0.01847,
+      "n_assets_present": 351,
+      "name": "vix_change_1d",
+      "rank": 11
+    },
+    {
+      "mean_importance": 0.018458,
+      "n_assets_present": 351,
+      "name": "SPY_return_1d",
+      "rank": 12
+    },
+    {
+      "mean_importance": 0.018267,
+      "n_assets_present": 351,
+      "name": "lag1_return",
+      "rank": 13
+    },
+    {
+      "mean_importance": 0.0177,
+      "n_assets_present": 351,
+      "name": "SPY_return_5d",
+      "rank": 14
+    },
+    {
+      "mean_importance": 0.017374,
+      "n_assets_present": 351,
+      "name": "atr_14d",
+      "rank": 15
+    },
+    {
+      "mean_importance": 0.01677,
+      "n_assets_present": 351,
+      "name": "vix_term_spread",
+      "rank": 16
+    },
+    {
+      "mean_importance": 0.016218,
+      "n_assets_present": 351,
+      "name": "vol_ratio_5_20",
+      "rank": 17
+    },
+    {
+      "mean_importance": 0.01587,
+      "n_assets_present": 351,
+      "name": "momentum_3d",
+      "rank": 18
+    },
+    {
+      "mean_importance": 0.015762,
+      "n_assets_present": 351,
+      "name": "volatility_5d",
+      "rank": 19
+    },
+    {
+      "mean_importance": 0.015658,
+      "n_assets_present": 351,
+      "name": "ret_63d",
+      "rank": 20
+    },
+    {
+      "mean_importance": 0.015615,
+      "n_assets_present": 351,
+      "name": "momentum_1d",
+      "rank": 21
+    },
+    {
+      "mean_importance": 0.015321,
+      "n_assets_present": 351,
+      "name": "skew_delta_5d",
+      "rank": 22
+    },
+    {
+      "mean_importance": 0.015161,
+      "n_assets_present": 351,
+      "name": "vix_sma10_dist",
+      "rank": 23
+    },
+    {
+      "mean_importance": 0.014479,
+      "n_assets_present": 351,
+      "name": "tnx_change_5d",
+      "rank": 24
+    },
+    {
+      "mean_importance": 0.014459,
+      "n_assets_present": 351,
+      "name": "ret_2d",
+      "rank": 25
+    },
+    {
+      "mean_importance": 0.014408,
+      "n_assets_present": 351,
+      "name": "RSI_delta_3d",
+      "rank": 26
+    },
+    {
+      "mean_importance": 0.014337,
+      "n_assets_present": 351,
+      "name": "obv_slope_10d",
+      "rank": 27
+    },
+    {
+      "mean_importance": 0.013742,
+      "n_assets_present": 351,
+      "name": "gold_spy_ratio_10d",
+      "rank": 28
+    },
+    {
+      "mean_importance": 0.013695,
+      "n_assets_present": 351,
+      "name": "hurst_exponent_est",
+      "rank": 29
+    },
+    {
+      "mean_importance": 0.013605,
+      "n_assets_present": 351,
+      "name": "rel_strength_vs_spy_1d",
+      "rank": 30
+    }
+  ],
+  "recommended_top_30": [
+    "BB_position",
+    "volume_ratio_20d",
+    "vix_9d_ratio",
+    "BB_width",
+    "volume_ratio_5d",
+    "daily_range_pct",
+    "price_vs_52w_high",
+    "gold_return_5d",
+    "spy_ret_21d",
+    "dollar_return_5d",
+    "vix_change_1d",
+    "SPY_return_1d",
+    "lag1_return",
+    "SPY_return_5d",
+    "atr_14d",
+    "vix_term_spread",
+    "vol_ratio_5_20",
+    "momentum_3d",
+    "volatility_5d",
+    "ret_63d",
+    "momentum_1d",
+    "skew_delta_5d",
+    "vix_sma10_dist",
+    "tnx_change_5d",
+    "ret_2d",
+    "RSI_delta_3d",
+    "obv_slope_10d",
+    "gold_spy_ratio_10d",
+    "hurst_exponent_est",
+    "rel_strength_vs_spy_1d"
+  ]
+}

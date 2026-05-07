@@ -23,7 +23,7 @@ use std::path::Path;
 use crate::gbt;
 
 const MODEL_DIR: &str = "models";
-pub const MODEL_VERSION: u32 = 4; // v4: feature pruning (83→68), GBT class weighting, ensemble overrides
+pub const MODEL_VERSION: u32 = 6; // v6: regression ensemble (Ridge + LightGBM + GRU), percentage return labels
 const RETRAIN_DAYS: i64 = 7;  // Retrain after 7 days
 
 /// Metadata for a saved model
@@ -130,6 +130,20 @@ pub struct SavedLSTMMeta {
     pub norm_stds: Vec<f64>,
 }
 
+/// Saved GRU metadata (weights in .safetensors, this tracks meta + norm params)
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SavedGRUMeta {
+    pub meta: ModelMeta,
+    pub hidden_size: usize,
+    pub seq_length: usize,
+    pub norm_means: Vec<f64>,
+    pub norm_stds: Vec<f64>,
+    /// Feature indices used for GRU input (top-N from importance ranking).
+    /// If None, all features are used.
+    #[serde(default)]
+    pub feature_indices: Option<Vec<usize>>,
+}
+
 // ════════════════════════════════════════
 // File Paths
 // ════════════════════════════════════════
@@ -152,6 +166,57 @@ pub fn lstm_path(symbol: &str) -> String {
 /// Get path for LSTM metadata file
 pub fn lstm_meta_path(symbol: &str) -> String {
     format!("{}/{}_lstm_meta.json", MODEL_DIR, symbol.to_lowercase())
+}
+
+/// Get path for GRU safetensors file
+pub fn gru_path(symbol: &str) -> String {
+    format!("{}/{}_gru.safetensors", MODEL_DIR, symbol.to_lowercase())
+}
+
+/// Get path for GRU metadata file
+pub fn gru_meta_path(symbol: &str) -> String {
+    format!("{}/{}_gru_meta.json", MODEL_DIR, symbol.to_lowercase())
+}
+
+/// Get path for Ridge regression model (uses SavedWeights format)
+pub fn ridge_path(symbol: &str) -> String {
+    model_path(symbol, "ridge")
+}
+
+/// Get path for LightGBM regressor model file
+pub fn lgbm_regressor_path(symbol: &str) -> String {
+    format!("{}/{}_lgbm_reg.txt", MODEL_DIR, symbol.to_lowercase())
+}
+
+/// Get path for LightGBM MAE metadata file
+pub fn lgbm_mae_path(symbol: &str) -> String {
+    format!("{}/{}_lgbm_mae.json", MODEL_DIR, symbol.to_lowercase())
+}
+
+/// Get path for 5-day Ridge model
+pub fn ridge_path_5d(symbol: &str) -> String {
+    format!("{}/5d_{}_ridge.json", MODEL_DIR, symbol.to_lowercase())
+}
+
+/// Get path for 5-day LightGBM regressor model
+pub fn lgbm_regressor_path_5d(symbol: &str) -> String {
+    format!("{}/5d_{}_lgbm_reg.txt", MODEL_DIR, symbol.to_lowercase())
+}
+
+/// Save LightGBM MAE metadata alongside the model
+pub fn save_lgbm_mae(symbol: &str, mae: f64, dir_acc: f64) -> Result<(), String> {
+    let path = lgbm_mae_path(symbol);
+    let data = serde_json::json!({ "mae": mae, "dir_acc": dir_acc });
+    fs::write(&path, serde_json::to_string(&data).unwrap())
+        .map_err(|e| format!("Failed to write LGBM MAE: {}", e))
+}
+
+/// Load LightGBM MAE from saved metadata
+pub fn load_lgbm_mae(symbol: &str) -> Option<f64> {
+    let path = lgbm_mae_path(symbol);
+    let contents = fs::read_to_string(&path).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    val.get("mae").and_then(|v| v.as_f64())
 }
 
 // ════════════════════════════════════════
@@ -211,11 +276,10 @@ fn is_stale(trained_at: &str) -> bool {
     true // If we can't parse the date, assume stale
 }
 
-/// Check if all core models exist and are valid for a symbol
+/// Check if all core models exist and are valid for a symbol (regression ensemble)
 pub fn has_valid_models(symbol: &str, expected_features: usize) -> bool {
-    is_model_valid(&model_path(symbol, "linreg"), expected_features)
-        && is_model_valid(&model_path(symbol, "logreg"), expected_features)
-        && is_model_valid(&model_path(symbol, "gbt"), expected_features)
+    // Ridge is the minimum required model; LightGBM and GRU are optional
+    is_model_valid(&ridge_path(symbol), expected_features)
 }
 
 /// Get staleness info for a model
@@ -310,6 +374,19 @@ pub fn save_gbt(
     norm_means: &[f64],
     norm_stds: &[f64],
 ) -> Result<(), String> {
+    save_gbt_as(symbol, "gbt", classifier, train_samples, accuracy, norm_means, norm_stds)
+}
+
+/// Save GBT model with a custom model type name (e.g. "5d_gbt")
+pub fn save_gbt_as(
+    symbol: &str,
+    model_type: &str,
+    classifier: &gbt::GradientBoostedClassifier,
+    train_samples: usize,
+    accuracy: f64,
+    norm_means: &[f64],
+    norm_stds: &[f64],
+) -> Result<(), String> {
     ensure_model_dir();
 
     let trees: Vec<SerializableNode> = classifier.trees.iter()
@@ -317,7 +394,7 @@ pub fn save_gbt(
         .collect();
 
     let saved = SavedGBT {
-        meta: make_meta(symbol, "gbt", classifier.n_features, train_samples, accuracy),
+        meta: make_meta(symbol, model_type, classifier.n_features, train_samples, accuracy),
         trees,
         initial_prediction: classifier.initial_prediction,
         learning_rate: classifier.config.learning_rate,
@@ -329,16 +406,21 @@ pub fn save_gbt(
     let json = serde_json::to_string(&saved)
         .map_err(|e| format!("JSON serialisation error: {}", e))?;
 
-    let path = model_path(symbol, "gbt");
+    let path = model_path(symbol, model_type);
     fs::write(&path, json).map_err(|e| format!("Write error: {}", e))?;
-    println!("    [Store] Saved {} GBT ({} trees) → {}", symbol, classifier.trees.len(), path);
+    println!("    [Store] Saved {} {} ({} trees) → {}", symbol, model_type, classifier.trees.len(), path);
 
     Ok(())
 }
 
 /// Load GBT model and reconstruct classifier
 pub fn load_gbt(symbol: &str) -> Result<(SavedGBT, gbt::GradientBoostedClassifier), String> {
-    let path = model_path(symbol, "gbt");
+    load_gbt_as(symbol, "gbt")
+}
+
+/// Load a GBT model with custom type name (e.g., "5d_gbt" for 5-day horizon)
+pub fn load_gbt_as(symbol: &str, model_type: &str) -> Result<(SavedGBT, gbt::GradientBoostedClassifier), String> {
+    let path = model_path(symbol, model_type);
     let contents = fs::read_to_string(&path)
         .map_err(|e| format!("Read error: {}", e))?;
     let saved: SavedGBT = serde_json::from_str(&contents)
@@ -407,25 +489,80 @@ pub fn load_lstm_meta(symbol: &str) -> Result<SavedLSTMMeta, String> {
         .map_err(|e| format!("Deserialise error: {}", e))
 }
 
+/// Save GRU metadata (weights saved separately via candle VarMap)
+pub fn save_gru_meta(
+    symbol: &str,
+    n_features: usize,
+    hidden_size: usize,
+    seq_length: usize,
+    train_samples: usize,
+    mae: f64,
+    norm_means: &[f64],
+    norm_stds: &[f64],
+    feature_indices: Option<&[usize]>,
+) -> Result<(), String> {
+    ensure_model_dir();
+
+    let saved = SavedGRUMeta {
+        meta: make_meta(symbol, "gru", n_features, train_samples, mae),
+        hidden_size,
+        seq_length,
+        norm_means: norm_means.to_vec(),
+        norm_stds: norm_stds.to_vec(),
+        feature_indices: feature_indices.map(|fi| fi.to_vec()),
+    };
+
+    let json = serde_json::to_string_pretty(&saved)
+        .map_err(|e| format!("JSON serialisation error: {}", e))?;
+
+    let path = gru_meta_path(symbol);
+    fs::write(&path, json).map_err(|e| format!("Write error: {}", e))?;
+    println!("    [Store] Saved {} GRU meta → {}", symbol, path);
+
+    Ok(())
+}
+
+/// Load GRU metadata
+pub fn load_gru_meta(symbol: &str) -> Result<SavedGRUMeta, String> {
+    let path = gru_meta_path(symbol);
+    let contents = fs::read_to_string(&path)
+        .map_err(|e| format!("Read error: {}", e))?;
+    serde_json::from_str(&contents)
+        .map_err(|e| format!("Deserialise error: {}", e))
+}
+
 // ════════════════════════════════════════
 // Cache Management
 // ════════════════════════════════════════
 
 /// Summary of all cached models
 /// Load pre-retrain accuracy for an asset (average of available model accuracies)
+/// For regression models, returns average directional accuracy (from walk_forward_accuracy field).
 pub fn load_model_accuracy(symbol: &str) -> f64 {
     let mut acc_sum = 0.0;
     let mut count = 0;
-    for model_type in &["linreg", "logreg"] {
-        if let Ok(saved) = load_weights(symbol, model_type) {
+
+    // Check regression models first (ridge stores MAE in walk_forward_accuracy)
+    if let Ok(saved) = load_weights(symbol, "ridge") {
+        // For ridge, walk_forward_accuracy stores MAE — invert for a rough "accuracy" proxy
+        acc_sum += saved.meta.walk_forward_accuracy;
+        count += 1;
+    }
+
+    // Fallback: check legacy classification models
+    if count == 0 {
+        for model_type in &["linreg", "logreg"] {
+            if let Ok(saved) = load_weights(symbol, model_type) {
+                acc_sum += saved.meta.walk_forward_accuracy;
+                count += 1;
+            }
+        }
+        if let Ok((saved, _)) = load_gbt(symbol) {
             acc_sum += saved.meta.walk_forward_accuracy;
             count += 1;
         }
     }
-    if let Ok((saved, _)) = load_gbt(symbol) {
-        acc_sum += saved.meta.walk_forward_accuracy;
-        count += 1;
-    }
+
     if count > 0 { acc_sum / count as f64 } else { 0.0 }
 }
 
@@ -453,14 +590,32 @@ const MANIFEST_PATH: &str = "models/manifest.json";
 /// Summary entry for one asset in the manifest
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ManifestAssetEntry {
+    #[serde(default)]
     pub linreg_accuracy: Option<f64>,
+    #[serde(default)]
     pub logreg_accuracy: Option<f64>,
+    #[serde(default)]
     pub gbt_accuracy: Option<f64>,
     #[serde(default)]
     pub lstm_accuracy: Option<f64>,
     #[serde(default)]
     pub regime_accuracy: Option<f64>,
+    #[serde(default)]
     pub ensemble_accuracy: Option<f64>,
+    /// Regression model MAE values (v6+)
+    #[serde(default)]
+    pub ridge_mae: Option<f64>,
+    #[serde(default)]
+    pub lgbm_mae: Option<f64>,
+    #[serde(default)]
+    pub gru_mae: Option<f64>,
+    /// Regression model directional accuracies (v6+)
+    #[serde(default)]
+    pub ridge_dir_acc: Option<f64>,
+    #[serde(default)]
+    pub lgbm_dir_acc: Option<f64>,
+    #[serde(default)]
+    pub gru_dir_acc: Option<f64>,
     pub last_trained: Option<String>,
     pub weights_present: bool,
 }
@@ -479,6 +634,46 @@ pub fn generate_manifest(symbols: &[&str]) -> ModelManifest {
     let mut assets = std::collections::HashMap::new();
 
     for symbol in symbols {
+        // Check regression models first (v6+)
+        let ridge_path_str = ridge_path(symbol);
+        let lgbm_reg_path_str = lgbm_regressor_path(symbol);
+        let gru_meta_path_str = gru_meta_path(symbol);
+
+        let mut ridge_mae_val = None;
+        let lgbm_mae_val: Option<f64> = None;
+        let mut gru_mae_val: Option<f64> = None;
+        let ridge_dir_val: Option<f64> = None;
+        let lgbm_dir_val: Option<f64> = None;
+        let gru_dir_val: Option<f64> = None;
+        let mut last_trained = None;
+        let mut weights_present = false;
+
+        // Ridge (SavedWeights format, walk_forward_accuracy stores MAE for regression)
+        if let Ok(contents) = fs::read_to_string(&ridge_path_str) {
+            if let Ok(saved) = serde_json::from_str::<SavedWeights>(&contents) {
+                ridge_mae_val = Some(saved.meta.walk_forward_accuracy);
+                last_trained = Some(saved.meta.trained_at.clone());
+                weights_present = true;
+            }
+        }
+
+        // LightGBM regressor (check file existence)
+        if std::path::Path::new(&lgbm_reg_path_str).exists() {
+            weights_present = true;
+        }
+
+        // GRU regression (meta JSON)
+        if let Ok(contents) = fs::read_to_string(&gru_meta_path_str) {
+            if let Ok(saved) = serde_json::from_str::<SavedGRUMeta>(&contents) {
+                gru_mae_val = Some(saved.meta.walk_forward_accuracy);
+                if last_trained.is_none() || saved.meta.trained_at > *last_trained.as_ref().unwrap_or(&String::new()) {
+                    last_trained = Some(saved.meta.trained_at.clone());
+                }
+                weights_present = true;
+            }
+        }
+
+        // Also check legacy classification models for backward compat
         let linreg_path = model_path(symbol, "linreg");
         let logreg_path = model_path(symbol, "logreg");
         let gbt_path_str = model_path(symbol, "gbt");
@@ -486,31 +681,23 @@ pub fn generate_manifest(symbols: &[&str]) -> ModelManifest {
         let mut linreg_acc = None;
         let mut logreg_acc = None;
         let mut gbt_acc = None;
-        let mut last_trained = None;
-        let mut weights_present = false;
 
         if let Ok(contents) = fs::read_to_string(&linreg_path) {
             if let Ok(saved) = serde_json::from_str::<SavedWeights>(&contents) {
                 linreg_acc = Some(saved.meta.walk_forward_accuracy);
-                last_trained = Some(saved.meta.trained_at.clone());
+                if last_trained.is_none() { last_trained = Some(saved.meta.trained_at.clone()); }
                 weights_present = true;
             }
         }
         if let Ok(contents) = fs::read_to_string(&logreg_path) {
             if let Ok(saved) = serde_json::from_str::<SavedWeights>(&contents) {
                 logreg_acc = Some(saved.meta.walk_forward_accuracy);
-                if last_trained.is_none() {
-                    last_trained = Some(saved.meta.trained_at.clone());
-                }
                 weights_present = true;
             }
         }
         if let Ok(contents) = fs::read_to_string(&gbt_path_str) {
             if let Ok(saved) = serde_json::from_str::<SavedGBT>(&contents) {
                 gbt_acc = Some(saved.meta.walk_forward_accuracy);
-                if last_trained.is_none() || saved.meta.trained_at > *last_trained.as_ref().unwrap() {
-                    last_trained = Some(saved.meta.trained_at.clone());
-                }
                 weights_present = true;
             }
         }
@@ -530,6 +717,12 @@ pub fn generate_manifest(symbols: &[&str]) -> ModelManifest {
                 lstm_accuracy: lstm_acc,
                 regime_accuracy: regime_acc,
                 ensemble_accuracy,
+                ridge_mae: ridge_mae_val,
+                lgbm_mae: lgbm_mae_val,
+                gru_mae: gru_mae_val,
+                ridge_dir_acc: ridge_dir_val,
+                lgbm_dir_acc: lgbm_dir_val,
+                gru_dir_acc: gru_dir_val,
                 last_trained,
                 weights_present,
             });
@@ -574,6 +767,84 @@ pub fn load_manifest() -> Result<ModelManifest, String> {
         .map_err(|e| format!("Failed to parse manifest: {}", e))
 }
 
+// ════════════════════════════════════════
+// Backup / Restore (for agent rollbacks)
+// ════════════════════════════════════════
+
+const BACKUP_DIR: &str = "models/backups";
+
+/// Backup all model files for a symbol to models/backups/
+pub fn backup_models(symbol: &str) -> Result<usize, String> {
+    let _ = fs::create_dir_all(BACKUP_DIR);
+    let sym_lower = symbol.to_lowercase();
+    let mut count = 0;
+
+    if let Ok(entries) = fs::read_dir(MODEL_DIR) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with(&sym_lower) && (name.ends_with(".json") || name.ends_with(".safetensors")) {
+                    let dest = format!("{}/{}", BACKUP_DIR, name);
+                    if fs::copy(entry.path(), &dest).is_ok() {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if count > 0 {
+        println!("    [Backup] Backed up {} model files for {}", count, symbol);
+        Ok(count)
+    } else {
+        Err(format!("No model files found for {}", symbol))
+    }
+}
+
+/// Restore model files for a symbol from models/backups/
+pub fn restore_models(symbol: &str) -> Result<usize, String> {
+    let sym_lower = symbol.to_lowercase();
+    let mut count = 0;
+
+    if !Path::new(BACKUP_DIR).exists() {
+        return Err("No backup directory found".to_string());
+    }
+
+    if let Ok(entries) = fs::read_dir(BACKUP_DIR) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with(&sym_lower) && (name.ends_with(".json") || name.ends_with(".safetensors")) {
+                    let dest = format!("{}/{}", MODEL_DIR, name);
+                    if fs::copy(entry.path(), &dest).is_ok() {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if count > 0 {
+        println!("    [Restore] Restored {} model files for {}", count, symbol);
+        Ok(count)
+    } else {
+        Err(format!("No backup files found for {}", symbol))
+    }
+}
+
+/// Check if backups exist for a symbol
+pub fn has_backup(symbol: &str) -> bool {
+    let sym_lower = symbol.to_lowercase();
+    if let Ok(entries) = fs::read_dir(BACKUP_DIR) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with(&sym_lower) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Clear all cached models (force retrain)
 pub fn clear_cache() -> usize {
     let mut count = 0;
@@ -590,32 +861,31 @@ pub fn clear_cache() -> usize {
 /// Print cache status summary
 pub fn print_cache_status(symbols: &[&str], n_features: usize) {
     println!("  ┌─────────────────────────────────────────────────────────────┐");
-    println!("  │  MODEL CACHE STATUS                                         │");
-    println!("  ├──────────┬──────┬───────┬───────┬───────┬──────────────────┤");
-    println!("  │ Symbol   │ LinR │ LogR  │  GBT  │ LSTM  │ Status           │");
-    println!("  ├──────────┼──────┼───────┼───────┼───────┼──────────────────┤");
+    println!("  │  MODEL CACHE STATUS (v6 Regression)                         │");
+    println!("  ├──────────┬───────┬───────┬───────┬──────────────────────────┤");
+    println!("  │ Symbol   │ Ridge │ LGBM  │  GRU  │ Status                   │");
+    println!("  ├──────────┼───────┼───────┼───────┼──────────────────────────┤");
 
     for symbol in symbols {
-        let lin_ok = is_model_valid(&model_path(symbol, "linreg"), n_features);
-        let log_ok = is_model_valid(&model_path(symbol, "logreg"), n_features);
-        let gbt_ok = is_model_valid(&model_path(symbol, "gbt"), n_features);
-        let lstm_ok = is_model_valid(&lstm_meta_path(symbol), n_features)
-            && Path::new(&lstm_path(symbol)).exists();
+        let ridge_ok = is_model_valid(&ridge_path(symbol), n_features);
+        let lgbm_ok = Path::new(&lgbm_regressor_path(symbol)).exists();
+        let gru_ok = Path::new(&gru_path(symbol)).exists()
+            && Path::new(&gru_meta_path(symbol)).exists();
 
-        let status = if lin_ok && log_ok && gbt_ok {
-            if lstm_ok { "✓ All cached" } else { "✓ 3/4 cached" }
-        } else if lin_ok || log_ok || gbt_ok {
-            "⚠ Partial"
+        let status = if ridge_ok && lgbm_ok && gru_ok {
+            "✓ All cached"
+        } else if ridge_ok {
+            if lgbm_ok || gru_ok { "⚠ Partial (2/3)" } else { "⚠ Ridge only" }
         } else {
             "✗ Need train"
         };
 
         let check = |ok: bool| if ok { " ✓ " } else { " ✗ " };
 
-        println!("  │ {:<8} │ {}  │ {}   │ {}   │ {}   │ {:<16} │",
-            symbol, check(lin_ok), check(log_ok), check(gbt_ok), check(lstm_ok), status);
+        println!("  │ {:<8} │ {}   │ {}   │ {}   │ {:<24} │",
+            symbol, check(ridge_ok), check(lgbm_ok), check(gru_ok), status);
     }
 
-    println!("  └──────────┴──────┴───────┴───────┴───────┴──────────────────┘");
+    println!("  └──────────┴───────┴───────┴───────┴──────────────────────────┘");
     println!("  Retrain policy: every {} days or on feature/version change", RETRAIN_DAYS);
 }

@@ -107,9 +107,13 @@ impl GRUModel {
         }
 
         let n_up = train_seqs.iter().filter(|s| s.label > 0.5).count();
-        println!("    [GRU] Training: {} seqs ({:.1}% up), {} val seqs (seq_len={})",
-            train_seqs.len(), n_up as f64 / train_seqs.len() as f64 * 100.0,
-            val_seqs.len(), seq_len);
+        let n_down = train_seqs.len() - n_up;
+        let n_total = train_seqs.len() as f64;
+        let w_pos = if n_up > 0 { n_total / (2.0 * n_up as f64) } else { 1.0 };
+        let w_neg = if n_down > 0 { n_total / (2.0 * n_down as f64) } else { 1.0 };
+        println!("    [GRU] Training: {} seqs ({:.1}% up), {} val seqs (seq_len={}, class w: pos={:.3}, neg={:.3})",
+            train_seqs.len(), n_up as f64 / n_total * 100.0,
+            val_seqs.len(), seq_len, w_pos, w_neg);
 
         let optim_config = candle_nn::ParamsAdamW {
             lr: self.config.learning_rate,
@@ -144,6 +148,11 @@ impl GRUModel {
                     labels_data.push(sanitise_f32(seq.label as f32));
                 }
 
+                // Build per-sample class weight tensor before labels_data is consumed
+                let weight_data: Vec<f32> = labels_data.iter().map(|&l| {
+                    if l > 0.5 { w_pos as f32 } else { w_neg as f32 }
+                }).collect();
+
                 let input = Tensor::from_vec(input_data, (batch_size, seq_len, n_features), get_device())?;
                 let labels = Tensor::from_vec(labels_data, (batch_size, 1), get_device())?;
 
@@ -154,7 +163,17 @@ impl GRUModel {
                     continue;
                 }
 
-                let loss = candle_nn::loss::binary_cross_entropy_with_logit(&logits, &labels)?;
+                // Class-weighted BCE with logits
+                let weights_t = Tensor::from_vec(weight_data, (batch_size, 1), get_device())?;
+                let logits_abs = logits.abs()?;
+                let relu_logits = logits.relu()?;
+                let xy = (&logits * &labels)?;
+                let exp_neg_abs = logits_abs.neg()?.exp()?;
+                let ones = Tensor::ones_like(&exp_neg_abs)?;
+                let log_term = (&ones + &exp_neg_abs)?.log()?;
+                let bce_per_sample = ((&relu_logits - &xy)? + &log_term)?;
+                let weighted_bce = (&bce_per_sample * &weights_t)?;
+                let loss = weighted_bce.mean_all()?;
                 let loss_val = loss.to_scalar::<f32>()? as f64;
 
                 if !loss_val.is_finite() { continue; }
@@ -294,6 +313,376 @@ impl GRUModel {
         let prob = candle_nn::ops::sigmoid(&logits)?;
         let val = prob.flatten_all()?.to_vec1::<f32>()?[0];
         Ok(sanitise_f32(val) as f64)
+    }
+
+    /// Predict raw return (no sigmoid) for regression mode
+    pub fn predict_return(&self, sequence: &[Vec<f64>]) -> Result<f64, candle_core::Error> {
+        let seq_len = sequence.len();
+        let n_features = self.config.input_size;
+
+        let mut input_data = Vec::with_capacity(seq_len * n_features);
+        for step in sequence {
+            input_data.extend(sanitise_vec(step));
+        }
+
+        let input = Tensor::from_vec(input_data, (1, seq_len, n_features), get_device())?;
+        let logits = self.forward_batch(&input)?;
+        let val = logits.flatten_all()?.to_vec1::<f32>()?[0];
+        Ok(sanitise_f32(val) as f64)
+    }
+
+    /// Predict raw returns for a batch of sequences (regression mode)
+    pub fn predict_returns_batch(&self, seqs: &[Sequence]) -> Result<Vec<f64>, candle_core::Error> {
+        if seqs.is_empty() { return Ok(vec![]); }
+
+        let n_features = self.config.input_size;
+        let seq_len = self.config.seq_length;
+        let batch_size = seqs.len();
+
+        let mut input_data = Vec::with_capacity(batch_size * seq_len * n_features);
+        for seq in seqs {
+            for step in &seq.features {
+                input_data.extend(sanitise_vec(step));
+            }
+        }
+
+        let input = Tensor::from_vec(input_data, (batch_size, seq_len, n_features), get_device())?;
+        let logits = self.forward_batch(&input)?;
+        let vals = logits.flatten_all()?.to_vec1::<f32>()?;
+        Ok(vals.iter().map(|&v| sanitise_f32(v) as f64).collect())
+    }
+
+    /// Save model weights to file (mirrors LSTM save pattern)
+    pub fn save(&self, path: &str) -> Result<(), candle_core::Error> {
+        self.varmap.save(path)?;
+        println!("    [GRU] Model saved to {}", path);
+        Ok(())
+    }
+
+    /// Load model weights from file (mirrors LSTM load pattern)
+    pub fn load(config: GRUModelConfig, path: &str) -> Result<Self, candle_core::Error> {
+        let mut model = Self::new(config)?;
+        model.varmap.load(path)?;
+        println!("    [GRU] Model loaded from {}", path);
+        Ok(model)
+    }
+}
+
+/// GRU regression training result
+pub struct GRURegressionTrainResult {
+    pub final_train_loss: f64,
+    pub final_val_loss: f64,
+    pub best_val_loss: f64,
+    pub epochs_trained: usize,
+    pub val_mae: f64,
+    pub val_dir_acc: f64,
+    pub train_losses: Vec<f64>,
+    pub val_losses: Vec<f64>,
+}
+
+/// GRU regression model configuration
+#[derive(Clone, Copy, Debug)]
+pub struct GRURegressionConfig {
+    pub input_size: usize,
+    pub hidden_size: usize,
+    pub seq_length: usize,
+    pub learning_rate: f64,
+    pub epochs: usize,
+    pub batch_size: usize,
+    pub weight_decay: f64,
+    pub patience: usize,
+}
+
+impl Default for GRURegressionConfig {
+    fn default() -> Self {
+        Self {
+            input_size: 30,
+            hidden_size: 96,
+            seq_length: 15,
+            learning_rate: 0.001,
+            epochs: 80,
+            batch_size: 64,
+            weight_decay: 0.03,
+            patience: 12,
+        }
+    }
+}
+
+/// Regression-mode GRU that predicts continuous returns
+pub struct GRURegressionModel {
+    gru: GRU,
+    fc: candle_nn::Linear,
+    varmap: VarMap,
+    pub config: GRURegressionConfig,
+}
+
+impl GRURegressionModel {
+    pub fn new(config: GRURegressionConfig) -> Result<Self, candle_core::Error> {
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, get_device());
+
+        let gru_config = GRUConfig::default();
+        let gru = candle_nn::rnn::gru(
+            config.input_size,
+            config.hidden_size,
+            gru_config,
+            vb.pp("gru"),
+        )?;
+
+        let fc = linear(config.hidden_size, 1, vb.pp("fc"))?;
+
+        Ok(Self { gru, fc, varmap, config })
+    }
+
+    /// Forward pass for a batch [batch_size, seq_len, n_features] → [batch_size, 1]
+    fn forward_batch(&self, input: &Tensor) -> Result<Tensor, candle_core::Error> {
+        let (batch_size, seq_len, _) = input.dims3()?;
+
+        let mut state: Option<GRUState> = None;
+
+        for t in 0..seq_len {
+            let step = input.narrow(1, t, 1)?.squeeze(1)?.contiguous()?;
+
+            if state.is_none() {
+                let h0 = Tensor::zeros((batch_size, self.config.hidden_size), DType::F32, get_device())?;
+                let s = GRUState { h: h0 };
+                state = Some(self.gru.step(&step, &s)?);
+            } else {
+                state = Some(self.gru.step(&step, state.as_ref().unwrap())?);
+            }
+        }
+
+        let h = state.unwrap().h.clone().contiguous()?;
+        let logits = self.fc.forward(&h)?;
+        Ok(logits)
+    }
+
+    /// Train regression GRU with MSE + directional penalty loss
+    pub fn train_regression(
+        &mut self,
+        samples: &[Sample],
+        val_samples: &[Sample],
+        feature_indices: Option<&[usize]>,
+    ) -> Result<GRURegressionTrainResult, candle_core::Error> {
+        let seq_len = self.config.seq_length;
+        let n_features = self.config.input_size;
+
+        let train_seqs = crate::lstm::build_sequences_regression(samples, seq_len, feature_indices);
+        let val_seqs = crate::lstm::build_sequences_regression(val_samples, seq_len, feature_indices);
+
+        if train_seqs.is_empty() || val_seqs.is_empty() {
+            println!("    [GRU-Reg] ERROR: empty sequences");
+            return Ok(GRURegressionTrainResult {
+                final_train_loss: f64::NAN, final_val_loss: f64::NAN,
+                best_val_loss: f64::NAN, epochs_trained: 0,
+                val_mae: f64::NAN, val_dir_acc: 0.0,
+                train_losses: vec![], val_losses: vec![],
+            });
+        }
+
+        println!("    [GRU-Reg] Training: {} seqs, {} val seqs (seq_len={})",
+            train_seqs.len(), val_seqs.len(), seq_len);
+
+        let optim_config = candle_nn::ParamsAdamW {
+            lr: self.config.learning_rate,
+            weight_decay: self.config.weight_decay,
+            ..Default::default()
+        };
+        let mut optimizer = candle_nn::AdamW::new(self.varmap.all_vars(), optim_config)?;
+
+        let mut best_val_loss = f64::MAX;
+        let mut patience = 0;
+        let mut final_train_loss = 0.0;
+        let mut final_val_loss = 0.0;
+        let mut epochs_trained = 0;
+        let mut train_losses = Vec::new();
+        let mut val_losses_vec = Vec::new();
+
+        for epoch in 0..self.config.epochs {
+            let mut epoch_loss = 0.0;
+            let mut n_batches = 0;
+
+            for batch_start in (0..train_seqs.len()).step_by(self.config.batch_size) {
+                let batch_end = (batch_start + self.config.batch_size).min(train_seqs.len());
+                let batch = &train_seqs[batch_start..batch_end];
+                let batch_size = batch.len();
+
+                let mut input_data = Vec::with_capacity(batch_size * seq_len * n_features);
+                let mut labels_data = Vec::with_capacity(batch_size);
+
+                for seq in batch {
+                    for step in &seq.features {
+                        input_data.extend(sanitise_vec(step));
+                    }
+                    labels_data.push(sanitise_f32(seq.label as f32));
+                }
+
+                let input = Tensor::from_vec(input_data, (batch_size, seq_len, n_features), get_device())?;
+                let labels = Tensor::from_vec(labels_data, (batch_size, 1), get_device())?;
+
+                let logits = self.forward_batch(&input)?;
+
+                let logits_vec = logits.flatten_all()?.to_vec1::<f32>()?;
+                if logits_vec.iter().any(|x| !x.is_finite()) {
+                    continue;
+                }
+
+                // MSE loss
+                let mse = candle_nn::loss::mse(&logits, &labels)?;
+
+                // Directional penalty: λ * mean(max(0, -predicted * actual) * |actual|)
+                let product = logits.mul(&labels)?;
+                let neg_product = product.neg()?;
+                let zeros = Tensor::zeros_like(&neg_product)?;
+                let relu_penalty = neg_product.maximum(&zeros)?;
+                let abs_labels = labels.abs()?;
+                let penalty = relu_penalty.mul(&abs_labels)?.mean_all()?;
+
+                // Combined loss: MSE + 3.0 * directional_penalty
+                let loss = (mse + (penalty * 3.0_f64)?)?;
+                let loss_val = loss.to_scalar::<f32>()? as f64;
+
+                if !loss_val.is_finite() { continue; }
+
+                optimizer.backward_step(&loss)?;
+                epoch_loss += loss_val;
+                n_batches += 1;
+            }
+
+            if n_batches == 0 { continue; }
+
+            final_train_loss = epoch_loss / n_batches as f64;
+            let val_loss = self.evaluate_regression_loss(&val_seqs)?;
+            final_val_loss = val_loss;
+
+            train_losses.push(final_train_loss);
+            val_losses_vec.push(val_loss);
+
+            if epoch == 0 || (epoch + 1) % 10 == 0 || epoch == self.config.epochs - 1 {
+                println!("    [GRU-Reg] Epoch {:>3}/{}: train_loss={:.4}, val_loss={:.4}",
+                    epoch + 1, self.config.epochs, final_train_loss, val_loss);
+            }
+
+            epochs_trained = epoch + 1;
+
+            if val_loss.is_finite() && val_loss < best_val_loss - 0.001 {
+                best_val_loss = val_loss;
+                patience = 0;
+            } else {
+                patience += 1;
+                if patience >= self.config.patience {
+                    println!("    [GRU-Reg] Early stopping at epoch {}", epoch + 1);
+                    break;
+                }
+            }
+        }
+
+        let (val_mae, val_dir_acc) = self.evaluate_regression_metrics(&val_seqs)?;
+        println!("    [GRU-Reg] Val MAE: {:.4}, Dir Acc: {:.1}%", val_mae, val_dir_acc * 100.0);
+
+        Ok(GRURegressionTrainResult {
+            final_train_loss,
+            final_val_loss,
+            best_val_loss,
+            epochs_trained,
+            val_mae,
+            val_dir_acc,
+            train_losses,
+            val_losses: val_losses_vec,
+        })
+    }
+
+    /// Evaluate regression loss on a set of sequences
+    fn evaluate_regression_loss(&self, seqs: &[Sequence]) -> Result<f64, candle_core::Error> {
+        if seqs.is_empty() { return Ok(f64::NAN); }
+
+        let n_features = self.config.input_size;
+        let seq_len = self.config.seq_length;
+        let batch_size = seqs.len();
+
+        let mut input_data = Vec::with_capacity(batch_size * seq_len * n_features);
+        let mut labels_data = Vec::with_capacity(batch_size);
+
+        for seq in seqs {
+            for step in &seq.features {
+                input_data.extend(sanitise_vec(step));
+            }
+            labels_data.push(sanitise_f32(seq.label as f32));
+        }
+
+        let input = Tensor::from_vec(input_data, (batch_size, seq_len, n_features), get_device())?;
+        let labels = Tensor::from_vec(labels_data, (batch_size, 1), get_device())?;
+
+        let logits = self.forward_batch(&input)?;
+        let loss = candle_nn::loss::mse(&logits, &labels)?;
+        Ok(loss.to_scalar::<f32>()? as f64)
+    }
+
+    /// Evaluate MAE and directional accuracy
+    fn evaluate_regression_metrics(&self, seqs: &[Sequence]) -> Result<(f64, f64), candle_core::Error> {
+        if seqs.is_empty() { return Ok((f64::NAN, 0.0)); }
+        let preds = self.predict_returns_batch(seqs)?;
+        let mut total_ae = 0.0;
+        let mut dir_correct = 0usize;
+        for (i, seq) in seqs.iter().enumerate() {
+            total_ae += (preds[i] - seq.label).abs();
+            if (preds[i] > 0.0) == (seq.label > 0.0) {
+                dir_correct += 1;
+            }
+        }
+        Ok((total_ae / seqs.len() as f64, dir_correct as f64 / seqs.len() as f64))
+    }
+
+    /// Predict raw returns for a batch of sequences
+    fn predict_returns_batch(&self, seqs: &[Sequence]) -> Result<Vec<f64>, candle_core::Error> {
+        if seqs.is_empty() { return Ok(vec![]); }
+
+        let n_features = self.config.input_size;
+        let seq_len = self.config.seq_length;
+        let batch_size = seqs.len();
+
+        let mut input_data = Vec::with_capacity(batch_size * seq_len * n_features);
+        for seq in seqs {
+            for step in &seq.features {
+                input_data.extend(sanitise_vec(step));
+            }
+        }
+
+        let input = Tensor::from_vec(input_data, (batch_size, seq_len, n_features), get_device())?;
+        let logits = self.forward_batch(&input)?;
+        let vals = logits.flatten_all()?.to_vec1::<f32>()?;
+        Ok(vals.iter().map(|&v| sanitise_f32(v) as f64).collect())
+    }
+
+    /// Predict raw return for a single sequence
+    pub fn predict_return(&self, sequence: &[Vec<f64>]) -> Result<f64, candle_core::Error> {
+        let seq_len = sequence.len();
+        let n_features = self.config.input_size;
+
+        let mut input_data = Vec::with_capacity(seq_len * n_features);
+        for step in sequence {
+            input_data.extend(sanitise_vec(step));
+        }
+
+        let input = Tensor::from_vec(input_data, (1, seq_len, n_features), get_device())?;
+        let logits = self.forward_batch(&input)?;
+        let val = logits.flatten_all()?.to_vec1::<f32>()?[0];
+        Ok(sanitise_f32(val) as f64)
+    }
+
+    /// Save model weights
+    pub fn save(&self, path: &str) -> Result<(), candle_core::Error> {
+        self.varmap.save(path)?;
+        println!("    [GRU-Reg] Model saved to {}", path);
+        Ok(())
+    }
+
+    /// Load model weights
+    pub fn load(config: GRURegressionConfig, path: &str) -> Result<Self, candle_core::Error> {
+        let mut model = Self::new(config)?;
+        model.varmap.load(path)?;
+        println!("    [GRU-Reg] Model loaded from {}", path);
+        Ok(model)
     }
 }
 

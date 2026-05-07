@@ -256,7 +256,45 @@ impl Database {
                 retrained_at    TEXT DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_retrain_log_asset
-                ON retrain_log(asset, retrained_at);"
+                ON retrain_log(asset, retrained_at);
+
+            CREATE TABLE IF NOT EXISTS agent_actions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_type     TEXT NOT NULL,
+                asset           TEXT,
+                trigger_reason  TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'proposed',
+                accuracy_before REAL,
+                accuracy_after  REAL,
+                details_json    TEXT,
+                created_at      TEXT DEFAULT (datetime('now')),
+                executed_at     TEXT,
+                evaluated_at    TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_actions_status
+                ON agent_actions(status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_agent_actions_asset
+                ON agent_actions(asset, created_at);
+
+            CREATE TABLE IF NOT EXISTS agent_metrics (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                asset           TEXT NOT NULL,
+                metric_type     TEXT NOT NULL,
+                value           REAL NOT NULL,
+                window_days     INTEGER,
+                details_json    TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_metrics_asset
+                ON agent_metrics(asset, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_agent_metrics_type
+                ON agent_metrics(metric_type, timestamp);
+
+            CREATE TABLE IF NOT EXISTS agent_config (
+                key             TEXT PRIMARY KEY,
+                value           TEXT NOT NULL,
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );"
         )?;
         Ok(())
     }
@@ -1262,6 +1300,38 @@ impl Database {
         Ok(rows)
     }
 
+    /// Get resolved-only signal history (for accurate track record stats)
+    pub fn get_resolved_signal_history(&self, limit: usize) -> Result<Vec<SignalHistoryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, asset, asset_class, signal_type, price_at_signal,
+                    confidence, linreg_prob, logreg_prob, gbt_prob,
+                    outcome_price, pct_change, was_correct, resolution_ts
+             FROM signal_history
+             WHERE resolution_ts IS NOT NULL
+             ORDER BY timestamp DESC
+             LIMIT ?1"
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(SignalHistoryRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                asset: row.get(2)?,
+                asset_class: row.get(3)?,
+                signal_type: row.get(4)?,
+                price_at_signal: row.get(5)?,
+                confidence: row.get(6)?,
+                linreg_prob: row.get(7)?,
+                logreg_prob: row.get(8)?,
+                gbt_prob: row.get(9)?,
+                outcome_price: row.get(10)?,
+                pct_change: row.get(11)?,
+                was_correct: row.get::<_, Option<i32>>(12)?.map(|v| v != 0),
+                resolution_ts: row.get(13)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
     /// Get signal history for the truth page with optional limit
     pub fn get_signal_history_all(&self, limit: usize) -> Result<Vec<SignalHistoryRow>> {
         let mut stmt = self.conn.prepare(
@@ -1355,6 +1425,309 @@ impl Database {
         for row in rows { results.push(row?); }
         Ok(results)
     }
+
+    // ══════════════════════════════════════════
+    // Agent tables — actions, metrics, config
+    // ══════════════════════════════════════════
+
+    pub fn insert_agent_action(
+        &self,
+        action_type: &str,
+        asset: Option<&str>,
+        trigger_reason: &str,
+        status: &str,
+        accuracy_before: Option<f64>,
+        details_json: Option<&str>,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO agent_actions
+                (action_type, asset, trigger_reason, status, accuracy_before, details_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![action_type, asset, trigger_reason, status, accuracy_before, details_json],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_agent_action_status(
+        &self,
+        id: i64,
+        status: &str,
+        accuracy_after: Option<f64>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        match status {
+            "executed" => {
+                self.conn.execute(
+                    "UPDATE agent_actions SET status = ?1, executed_at = ?2 WHERE id = ?3",
+                    params![status, now, id],
+                )?;
+            }
+            "evaluated" | "rolled_back" | "approved" | "rejected" => {
+                self.conn.execute(
+                    "UPDATE agent_actions SET status = ?1, accuracy_after = ?2, evaluated_at = ?3 WHERE id = ?4",
+                    params![status, accuracy_after, now, id],
+                )?;
+            }
+            _ => {
+                self.conn.execute(
+                    "UPDATE agent_actions SET status = ?1 WHERE id = ?2",
+                    params![status, id],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_agent_actions(&self, limit: usize, status_filter: Option<&str>) -> Result<Vec<AgentActionRow>> {
+        let sql = match status_filter {
+            Some(_) => "SELECT id, action_type, asset, trigger_reason, status, accuracy_before,
+                               accuracy_after, details_json, created_at, executed_at, evaluated_at
+                        FROM agent_actions WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
+            None => "SELECT id, action_type, asset, trigger_reason, status, accuracy_before,
+                            accuracy_after, details_json, created_at, executed_at, evaluated_at
+                     FROM agent_actions ORDER BY created_at DESC LIMIT ?1",
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = match status_filter {
+            Some(s) => stmt.query_map(params![s, limit as i64], Self::map_agent_action)?,
+            None => stmt.query_map(params![limit as i64], Self::map_agent_action)?,
+        };
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    fn map_agent_action(row: &rusqlite::Row) -> rusqlite::Result<AgentActionRow> {
+        Ok(AgentActionRow {
+            id: row.get(0)?,
+            action_type: row.get(1)?,
+            asset: row.get(2)?,
+            trigger_reason: row.get(3)?,
+            status: row.get(4)?,
+            accuracy_before: row.get(5)?,
+            accuracy_after: row.get(6)?,
+            details_json: row.get(7)?,
+            created_at: row.get(8)?,
+            executed_at: row.get(9)?,
+            evaluated_at: row.get(10)?,
+        })
+    }
+
+    pub fn get_agent_action_by_id(&self, id: i64) -> Result<Option<AgentActionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, action_type, asset, trigger_reason, status, accuracy_before,
+                    accuracy_after, details_json, created_at, executed_at, evaluated_at
+             FROM agent_actions WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![id], Self::map_agent_action)?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn insert_agent_metric(
+        &self,
+        timestamp: &str,
+        asset: &str,
+        metric_type: &str,
+        value: f64,
+        window_days: Option<i32>,
+        details_json: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO agent_metrics
+                (timestamp, asset, metric_type, value, window_days, details_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![timestamp, asset, metric_type, value, window_days, details_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_agent_metrics(
+        &self,
+        asset: Option<&str>,
+        metric_type: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AgentMetricRow>> {
+        let sql = match (asset, metric_type) {
+            (Some(_), Some(_)) =>
+                "SELECT id, timestamp, asset, metric_type, value, window_days, details_json
+                 FROM agent_metrics WHERE asset = ?1 AND metric_type = ?2
+                 ORDER BY timestamp DESC LIMIT ?3",
+            (Some(_), None) =>
+                "SELECT id, timestamp, asset, metric_type, value, window_days, details_json
+                 FROM agent_metrics WHERE asset = ?1
+                 ORDER BY timestamp DESC LIMIT ?2",
+            (None, Some(_)) =>
+                "SELECT id, timestamp, asset, metric_type, value, window_days, details_json
+                 FROM agent_metrics WHERE metric_type = ?1
+                 ORDER BY timestamp DESC LIMIT ?2",
+            (None, None) =>
+                "SELECT id, timestamp, asset, metric_type, value, window_days, details_json
+                 FROM agent_metrics ORDER BY timestamp DESC LIMIT ?1",
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows: Vec<AgentMetricRow> = match (asset, metric_type) {
+            (Some(a), Some(m)) => stmt.query_map(params![a, m, limit as i64], Self::map_agent_metric)?,
+            (Some(a), None) => stmt.query_map(params![a, limit as i64], Self::map_agent_metric)?,
+            (None, Some(m)) => stmt.query_map(params![m, limit as i64], Self::map_agent_metric)?,
+            (None, None) => stmt.query_map(params![limit as i64], Self::map_agent_metric)?,
+        }.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    fn map_agent_metric(row: &rusqlite::Row) -> rusqlite::Result<AgentMetricRow> {
+        Ok(AgentMetricRow {
+            id: row.get(0)?,
+            timestamp: row.get(1)?,
+            asset: row.get(2)?,
+            metric_type: row.get(3)?,
+            value: row.get(4)?,
+            window_days: row.get(5)?,
+            details_json: row.get(6)?,
+        })
+    }
+
+    pub fn get_agent_config(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT value FROM agent_config WHERE key = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![key], |row| row.get::<_, String>(0))?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    pub fn set_agent_config(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO agent_config (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_agent_config(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT key, value FROM agent_config ORDER BY key")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    /// Get per-asset accuracy from signal_history for the agent
+    pub fn get_asset_accuracy(&self, asset: &str, days: i32) -> Result<AssetAccuracy> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT signal_type, was_correct
+             FROM signal_history
+             WHERE asset = ?1 AND timestamp >= ?2 AND was_correct IS NOT NULL"
+        )?;
+        let rows: Vec<(String, i32)> = stmt.query_map(params![asset, cutoff], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+        })?.filter_map(|r| r.ok()).collect();
+
+        let total = rows.len();
+        let correct = rows.iter().filter(|(_, c)| *c == 1).count();
+        let buy_total = rows.iter().filter(|(s, _)| s == "BUY" || s == "STRONG_BUY").count();
+        let buy_correct = rows.iter().filter(|(s, c)| (s == "BUY" || s == "STRONG_BUY") && *c == 1).count();
+        let sell_total = rows.iter().filter(|(s, _)| s == "SELL" || s == "STRONG_SELL").count();
+        let sell_correct = rows.iter().filter(|(s, c)| (s == "SELL" || s == "STRONG_SELL") && *c == 1).count();
+
+        Ok(AssetAccuracy {
+            asset: asset.to_string(),
+            total_signals: total,
+            correct_signals: correct,
+            accuracy: if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 },
+            buy_accuracy: if buy_total > 0 { buy_correct as f64 / buy_total as f64 * 100.0 } else { 0.0 },
+            sell_accuracy: if sell_total > 0 { sell_correct as f64 / sell_total as f64 * 100.0 } else { 0.0 },
+            buy_count: buy_total,
+            sell_count: sell_total,
+        })
+    }
+
+    /// Get all assets with resolved signals in the last N days
+    pub fn get_active_assets(&self, days: i32) -> Result<Vec<String>> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT asset FROM signal_history
+             WHERE timestamp >= ?1 AND was_correct IS NOT NULL
+             ORDER BY asset"
+        )?;
+        let rows = stmt.query_map(params![cutoff], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    /// Get count of recent agent actions for cooldown checks
+    pub fn get_recent_action_count(&self, asset: &str, action_type: &str, hours: i32) -> Result<usize> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT COUNT(*) FROM agent_actions
+             WHERE asset = ?1 AND action_type = ?2 AND created_at >= ?3
+             AND status IN ('executed', 'approved')"
+        )?;
+        let count: i64 = stmt.query_row(params![asset, action_type, cutoff], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// Get daily retrain count for the agent (counts executed + approved, not just executed)
+    pub fn get_daily_retrain_count(&self) -> Result<usize> {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT COUNT(*) FROM agent_actions
+             WHERE action_type = 'retrain' AND status IN ('executed', 'approved')
+             AND created_at >= ?1"
+        )?;
+        let count: i64 = stmt.query_row(params![format!("{}T00:00:00", today)], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// Get pending evaluations (executed actions older than N hours)
+    pub fn get_pending_evaluations(&self, min_age_hours: i32) -> Result<Vec<AgentActionRow>> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(min_age_hours as i64)).to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, action_type, asset, trigger_reason, status, accuracy_before,
+                    accuracy_after, details_json, created_at, executed_at, evaluated_at
+             FROM agent_actions
+             WHERE status = 'executed' AND executed_at <= ?1
+             ORDER BY executed_at ASC"
+        )?;
+        let rows = stmt.query_map(params![cutoff], Self::map_agent_action)?
+            .filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentActionRow {
+    pub id: i64,
+    pub action_type: String,
+    pub asset: Option<String>,
+    pub trigger_reason: String,
+    pub status: String,
+    pub accuracy_before: Option<f64>,
+    pub accuracy_after: Option<f64>,
+    pub details_json: Option<String>,
+    pub created_at: Option<String>,
+    pub executed_at: Option<String>,
+    pub evaluated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentMetricRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub asset: String,
+    pub metric_type: String,
+    pub value: f64,
+    pub window_days: Option<i32>,
+    pub details_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AssetAccuracy {
+    pub asset: String,
+    pub total_signals: usize,
+    pub correct_signals: usize,
+    pub accuracy: f64,
+    pub buy_accuracy: f64,
+    pub sell_accuracy: f64,
+    pub buy_count: usize,
+    pub sell_count: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
