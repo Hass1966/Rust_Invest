@@ -47,12 +47,16 @@ pub enum Node {
 }
 
 impl Node {
-    /// Traverse the tree to predict for one sample
+    /// Traverse the tree to predict for one sample.
+    /// If a split references a feature index beyond the vector length
+    /// (stale model trained with more features), treat the missing feature
+    /// as 0.0 so we go left (≤ threshold) for positive thresholds.
     pub fn predict(&self, features: &[f64]) -> f64 {
         match self {
             Node::Leaf { value, .. } => *value,
             Node::Split { feature_idx, threshold, left, right, .. } => {
-                if features[*feature_idx] <= *threshold {
+                let val = features.get(*feature_idx).copied().unwrap_or(0.0);
+                if val <= *threshold {
                     left.predict(features)
                 } else {
                     right.predict(features)

@@ -1,7 +1,7 @@
 /// signal — Fast daily/twice-daily signal generation (INFERENCE ONLY)
 /// ==================================================================
 /// Loads saved models, fetches latest prices from DB, generates trading signals.
-/// Now includes Claude LLM sentiment analysis via Serper + NewsAPI + Reddit.
+/// Includes word-based sentiment analysis via Serper + NewsAPI + Reddit.
 /// NO training happens here — only forward-pass inference on saved weights.
 ///
 /// Writes to: PostgreSQL alpha_signal database (signals + predictions tables)
@@ -34,8 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("║       Writes: PostgreSQL alpha_signal                          ║");
     println!("╚══════════════════════════════════════════════════════════════════╝\n");
 
-    // Load .env for API keys
-    llm::load_provider(); // triggers dotenv loading
+    // Load .env for API keys (NEWSAPI_KEY, SERPER_API_KEY, etc.)
+    llm::load_provider();
 
     // Check that we have trained models
     let cached = model_store::list_cached_models();
@@ -87,16 +87,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let samples = features::build_rich_features(&prices, &volumes, &timestamps, Some(&market_context), "stock", features::sector_etf_for(stock.symbol), None, fg_ref);
         if samples.is_empty() { continue; }
 
-        if let Some(wf) = inference::infer_with_saved_models(stock.symbol, &samples) {
-            let result = analysis::analyse_coin(stock.symbol, &points);
-            let sma_7 = analysis::sma(&prices, 7);
-            let sma_30 = analysis::sma(&prices, 30);
-            let trend = match (sma_7.last(), sma_30.last()) {
-                (Some(s), Some(l)) if s > l => "BULLISH",
-                _ => "BEARISH",
-            };
-            signals.push(ensemble::ensemble_signal(stock.symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend));
-        }
+        // Try regression models first (v6: Ridge + LightGBM), fall back to classification (v5)
+        let reg = inference::infer_regression_models(stock.symbol, &samples);
+
+        let result = analysis::analyse_coin(stock.symbol, &points);
+        let sma_7 = analysis::sma(&prices, 7);
+        let sma_30 = analysis::sma(&prices, 30);
+        let trend = match (sma_7.last(), sma_30.last()) {
+            (Some(s), Some(l)) if s > l => "BULLISH",
+            _ => "BEARISH",
+        };
+
+        let signal = if let Some(ref reg_result) = reg {
+            let mut sig = ensemble::regression_signal(stock.symbol, reg_result, result.current_price, result.rsi_14.unwrap_or(50.0), trend, "stock");
+            // Multi-horizon confirmation: filter through 5d model agreement
+            let filtered = inference::apply_horizon_agreement(&sig.signal, stock.symbol, &samples, reg_result, "stock");
+            if filtered != sig.signal {
+                sig.signal = filtered;
+            }
+            sig
+        } else if let Some(wf) = inference::infer_with_saved_models(stock.symbol, &samples) {
+            ensemble::ensemble_signal(stock.symbol, &wf, result.current_price, result.rsi_14.unwrap_or(50.0), trend)
+        } else {
+            continue;
+        };
+        signals.push(signal);
     }
 
     // ── FX signals disabled (descoped — separate project) ──
@@ -104,9 +119,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // ── Crypto signals disabled (descoped — separate project) ──
     println!("━━━ CRYPTO SIGNALS SKIPPED (descoped) ━━━\n");
 
-    // ── LLM Sentiment Analysis (Claude) ──
-    // Fetch news + Reddit for each signal, analyse with Claude, adjust signals
-    println!("\n━━━ FETCHING NEWS & LLM SENTIMENT ANALYSIS ━━━\n");
+    // ── News Sentiment Analysis (word-based) ──
+    // Fetch news + Reddit for each signal, score with word-based method, adjust signals
+    println!("\n━━━ FETCHING NEWS & SENTIMENT ANALYSIS ━━━\n");
     let newsapi_key = std::env::var("NEWSAPI_KEY").unwrap_or_default();
     let has_newsapi = !newsapi_key.is_empty() && newsapi_key != "REPLACE_WHEN_YOU_HAVE_IT";
 
@@ -130,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 continue;
             }
 
-            // Fetch fresh sentiment (Serper + NewsAPI + Reddit → Claude analysis)
+            // Fetch fresh sentiment (Serper + NewsAPI + Reddit → word-based scoring)
             let newsapi = if has_newsapi { &newsapi_key } else { "" };
             match news_sentiment::fetch_and_store_sentiment(&client, &conn, &signal.symbol, newsapi).await {
                 Ok(data) => {

@@ -64,28 +64,13 @@ struct AnthropicError {
     message: String,
 }
 
-/// Load LLM provider configuration from environment / .env file
+/// Load LLM provider configuration from environment / .env file.
+/// LLM sentiment analysis is disabled — word-based scoring is used instead.
+/// This avoids hammering local resources (Ollama) or incurring API costs.
 pub fn load_provider() -> Option<LlmProvider> {
-    // Try to load .env file (ignore errors if not found)
+    // Load .env for non-LLM keys (NEWSAPI_KEY, SERPER_API_KEY, etc.)
     load_dotenv();
-
-    let provider = std::env::var("LLM_PROVIDER").unwrap_or_default();
-    match provider.to_lowercase().as_str() {
-        "ollama" => {
-            let base_url = std::env::var("LLM_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            let model = std::env::var("LLM_MODEL")
-                .unwrap_or_else(|_| "llama3.1:8b".to_string());
-            Some(LlmProvider::Ollama { base_url, model })
-        }
-        "anthropic" => {
-            let api_key = std::env::var("LLM_API_KEY").ok()?;
-            let model = std::env::var("LLM_MODEL")
-                .unwrap_or_else(|_| "claude-sonnet-4-5-20250929".to_string());
-            Some(LlmProvider::Anthropic { api_key, model })
-        }
-        _ => None,
-    }
+    None
 }
 
 /// Simple .env loader — reads KEY=VALUE lines from .env file

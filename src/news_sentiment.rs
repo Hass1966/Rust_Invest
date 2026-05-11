@@ -1,14 +1,11 @@
 /// News & Sentiment Module
 /// =======================
 /// Fetches news from Serper (Google Search API), NewsAPI.org, and Reddit.
-/// Uses Claude LLM for intelligent sentiment analysis that captures
-/// geopolitical events, wars, macro trends, and modern market influences.
-/// Falls back to word-based scoring when LLM is unavailable.
+/// Uses word-based sentiment scoring (no LLM dependency).
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use chrono::{Utc, Duration};
-use crate::llm;
 
 // ════════════════════════════════════════
 // Sentiment word lists (fallback)
@@ -271,107 +268,6 @@ pub async fn fetch_serper_news(
     Ok(results)
 }
 
-// ════════════════════════════════════════
-// Claude LLM Sentiment Analysis
-// ════════════════════════════════════════
-
-/// Use Claude to analyse news articles and return a sentiment score + reasoning.
-/// This captures geopolitical events, wars, macro influences, sector dynamics —
-/// things that word-counting completely misses.
-pub async fn analyse_sentiment_with_llm(
-    client: &reqwest::Client,
-    provider: &llm::LlmProvider,
-    symbol: &str,
-    headlines: &[(String, String)],
-    reddit_texts: &[String],
-) -> Result<(f64, String), String> {
-    if headlines.is_empty() && reddit_texts.is_empty() {
-        return Ok((0.0, "No news data available".to_string()));
-    }
-
-    let clean_sym = clean_symbol_for_search(symbol);
-
-    // Build the news digest for Claude
-    let mut news_digest = String::new();
-    news_digest.push_str("=== Recent News Headlines & Snippets ===\n");
-    for (i, (title, snippet)) in headlines.iter().take(15).enumerate() {
-        news_digest.push_str(&format!("{}. {} — {}\n", i + 1, title, snippet));
-    }
-
-    if !reddit_texts.is_empty() {
-        news_digest.push_str("\n=== Reddit Discussion Snippets ===\n");
-        for (i, text) in reddit_texts.iter().take(10).enumerate() {
-            // Truncate long reddit posts
-            let truncated = if text.len() > 300 { &text[..300] } else { text };
-            news_digest.push_str(&format!("{}. {}\n", i + 1, truncated));
-        }
-    }
-
-    let system_prompt = format!(
-        "You are a senior financial analyst specialising in market sentiment analysis. \
-         Your job is to analyse news and social media about {} ({}) and produce a precise \
-         sentiment score.\n\n\
-         IMPORTANT: Consider ALL of the following factors:\n\
-         - Geopolitical events (wars, sanctions, trade disputes, elections)\n\
-         - Macroeconomic indicators (inflation, interest rates, employment)\n\
-         - Sector-specific dynamics (regulation, competition, innovation)\n\
-         - Market momentum and technical sentiment\n\
-         - Social media buzz and retail investor sentiment\n\
-         - Supply chain disruptions or commodity price impacts\n\
-         - Central bank policy and monetary decisions\n\n\
-         RESPOND IN EXACTLY THIS FORMAT (no other text):\n\
-         SCORE: <number from -1.0 to 1.0>\n\
-         ANALYSIS: <2-3 sentence summary of key factors>\n\n\
-         Score guide:\n\
-         -1.0 = Extremely bearish (imminent crisis/collapse)\n\
-         -0.5 = Bearish (significant negative catalysts)\n\
-          0.0 = Neutral (mixed or no clear direction)\n\
-         +0.5 = Bullish (significant positive catalysts)\n\
-         +1.0 = Extremely bullish (strong positive momentum)",
-        clean_sym, symbol
-    );
-
-    let user_message = format!(
-        "Analyse the following news and social data for {} and provide your sentiment score:\n\n{}",
-        clean_sym, news_digest
-    );
-
-    let response = llm::chat(client, provider, &system_prompt, &user_message).await?;
-
-    // Parse the response
-    parse_llm_sentiment(&response)
-}
-
-/// Parse Claude's response into (score, analysis)
-fn parse_llm_sentiment(response: &str) -> Result<(f64, String), String> {
-    let mut score: Option<f64> = None;
-    let mut analysis = String::new();
-
-    for line in response.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("SCORE:") {
-            let score_str = trimmed.trim_start_matches("SCORE:").trim();
-            score = score_str.parse::<f64>().ok();
-        } else if trimmed.starts_with("ANALYSIS:") {
-            analysis = trimmed.trim_start_matches("ANALYSIS:").trim().to_string();
-        }
-    }
-
-    match score {
-        Some(s) => Ok((s.clamp(-1.0, 1.0), if analysis.is_empty() { response.to_string() } else { analysis })),
-        None => {
-            // Fallback: try to extract any number from the response
-            for word in response.split_whitespace() {
-                if let Ok(n) = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '-' && c != '.').parse::<f64>() {
-                    if (-1.0..=1.0).contains(&n) {
-                        return Ok((n, response.to_string()));
-                    }
-                }
-            }
-            Err(format!("Could not parse LLM sentiment from: {}", &response[..response.len().min(200)]))
-        }
-    }
-}
 
 // ════════════════════════════════════════
 // NewsAPI fetching
@@ -507,7 +403,6 @@ pub async fn fetch_and_store_sentiment(
 ) -> Result<SentimentData, String> {
     let today = Utc::now().format("%Y-%m-%d").to_string();
     let serper_key = std::env::var("SERPER_API_KEY").ok();
-    let llm_provider = llm::load_provider();
 
     // 1. Fetch news from Serper (Google Search) if key available
     let serper_headlines: Vec<(String, String)> = if let Some(ref key) = serper_key {
@@ -526,7 +421,7 @@ pub async fn fetch_and_store_sentiment(
     }).collect();
 
     // 3. Fetch from Reddit
-    let (reddit_mentions, reddit_word_score, reddit_texts) =
+    let (reddit_mentions, reddit_word_score, _reddit_texts) =
         fetch_reddit_posts(client, symbol).await.unwrap_or((0, 0.0, vec![]));
 
     // 3b. Fetch from Tiingo (supplementary)
@@ -552,26 +447,11 @@ pub async fn fetch_and_store_sentiment(
 
     let article_count = all_headlines.len() as i64;
 
-    // 4. Analyse with Claude LLM if available
-    let (news_score, llm_analysis) = if let Some(ref provider) = llm_provider {
-        match analyse_sentiment_with_llm(client, provider, symbol, &all_headlines, &reddit_texts).await {
-            Ok((score, analysis)) => {
-                println!("    LLM sentiment for {}: {:.2} — {}", symbol, score, &analysis[..analysis.len().min(80)]);
-                (score, Some(analysis))
-            }
-            Err(e) => {
-                eprintln!("    LLM analysis failed for {}: {}, falling back to word-based", symbol, e);
-                let word_score = score_headlines_word_based(&all_headlines);
-                (word_score, None)
-            }
-        }
-    } else {
-        // Fallback: word-based scoring
-        let word_score = score_headlines_word_based(&all_headlines);
-        (word_score, None)
-    };
+    // 4. Word-based sentiment scoring (LLM disabled to save resources)
+    let news_score = score_headlines_word_based(&all_headlines);
+    let llm_analysis: Option<String> = None;
 
-    // Combined score: LLM news score 60%, reddit word-based 40%
+    // Combined score: news word-based 60%, reddit word-based 40%
     let combined = if article_count > 0 && reddit_mentions > 0 {
         news_score * 0.6 + reddit_word_score * 0.4
     } else if article_count > 0 {
@@ -605,7 +485,6 @@ pub async fn fetch_and_store_sentiment_by_path(
 ) -> Result<SentimentData, String> {
     let today = Utc::now().format("%Y-%m-%d").to_string();
     let serper_key = std::env::var("SERPER_API_KEY").ok();
-    let llm_provider = llm::load_provider();
 
     let serper_headlines: Vec<(String, String)> = if let Some(ref key) = serper_key {
         fetch_serper_news(client, symbol, key).await.unwrap_or_default()
@@ -621,7 +500,7 @@ pub async fn fetch_and_store_sentiment_by_path(
         )
     }).collect();
 
-    let (reddit_mentions, reddit_word_score, reddit_texts) =
+    let (reddit_mentions, reddit_word_score, _reddit_texts) =
         fetch_reddit_posts(client, symbol).await.unwrap_or((0, 0.0, vec![]));
 
     // Fetch from Tiingo (supplementary)
@@ -646,22 +525,9 @@ pub async fn fetch_and_store_sentiment_by_path(
 
     let article_count = all_headlines.len() as i64;
 
-    let (news_score, llm_analysis) = if let Some(ref provider) = llm_provider {
-        match analyse_sentiment_with_llm(client, provider, symbol, &all_headlines, &reddit_texts).await {
-            Ok((score, analysis)) => {
-                println!("    LLM sentiment for {}: {:.2} — {}", symbol, score, &analysis[..analysis.len().min(80)]);
-                (score, Some(analysis))
-            }
-            Err(e) => {
-                eprintln!("    LLM analysis failed for {}: {}, falling back to word-based", symbol, e);
-                let word_score = score_headlines_word_based(&all_headlines);
-                (word_score, None)
-            }
-        }
-    } else {
-        let word_score = score_headlines_word_based(&all_headlines);
-        (word_score, None)
-    };
+    // Word-based sentiment scoring (LLM disabled to save resources)
+    let news_score = score_headlines_word_based(&all_headlines);
+    let llm_analysis: Option<String> = None;
 
     let combined = if article_count > 0 && reddit_mentions > 0 {
         news_score * 0.6 + reddit_word_score * 0.4
